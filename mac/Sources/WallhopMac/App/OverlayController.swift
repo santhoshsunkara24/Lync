@@ -84,7 +84,7 @@ final class OverlayController {
         hideWorkItem?.cancel()
         if card != nil, !model.panelOpen {
             position()
-            panel.ignoresMouseEvents = false
+            panel.ignoresMouseEvents = model.isDropHint(card)
             panel.orderFrontRegardless()
         } else {
             panel.ignoresMouseEvents = true
@@ -112,7 +112,7 @@ final class OverlayController {
         }
 
         // Notch mode, or menu bar mode when the icon is hidden behind the notch.
-        let screen = Self.notchScreen ?? NSScreen.main ?? NSScreen.screens[0]
+        guard let screen = Self.notchScreen ?? NSScreen.main ?? NSScreen.screens.first else { return }
         let notchHeight = screen.safeAreaInsets.top
         if notchHeight > 0 {
             placementState.placement = .notch(notchHeight: notchHeight)
@@ -141,6 +141,7 @@ private struct OverlayRoot: View {
     @ObservedObject var placement: PlacementState
     @EnvironmentObject var theme: ThemeStore
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var hovering = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -171,8 +172,11 @@ private struct OverlayRoot: View {
                     LinearGradient(stops: [.init(color: .black, location: 0), .init(color: .black, location: 0.45),
                                            .init(color: theme.theme.card, location: 1)], startPoint: .top, endPoint: .bottom)))
                 .contentShape(NotchShape(cornerRadius: 24))
-                .onTapGesture { dismissIfPassive(card) }
-                .onHover { model.setHovering($0) }
+                .onTapGesture { openPanel(from: card) }
+                .overlay(alignment: .topLeading) {
+                    closeButton(card).padding(.top, notchHeight + 1).padding(.leading, 4)
+                }
+                .onHover { hover($0) }
         case .pill, .menuBar:
             content
                 .padding(.horizontal, 18)
@@ -186,10 +190,11 @@ private struct OverlayRoot: View {
                     RoundedRectangle(cornerRadius: 24, style: .continuous)
                         .strokeBorder(Color.white.opacity(0.08), lineWidth: 1)
                 )
+                .overlay(alignment: .topLeading) { closeButton(card).offset(x: -6, y: -6) }
                 .padding(.top, 8)
                 .contentShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
-                .onTapGesture { dismissIfPassive(card) }
-                .onHover { model.setHovering($0) }
+                .onTapGesture { openPanel(from: card) }
+                .onHover { hover($0) }
         }
     }
 
@@ -206,11 +211,42 @@ private struct OverlayRoot: View {
         }
     }
 
-    private func dismissIfPassive(_ card: LiveCard) {
-        if case .pairing = card { return }
-        if case .notification = card { return } // Has its own buttons.
-        if case .call = card { return }
+    private func hover(_ inside: Bool) {
+        hovering = inside
+        model.setHovering(inside)
+    }
+
+    /// Cards with their own buttons (pairing, notifications, calls) don't react to clicks.
+    private func isPassive(_ card: LiveCard) -> Bool {
+        switch card {
+        case .pairing, .notification, .call: return false
+        default: return true
+        }
+    }
+
+    /// A click on a passive card opens the panel, where the same thing is in Recent.
+    private func openPanel(from card: LiveCard) {
+        guard isPassive(card) else { return }
         model.hideLive()
+        model.openPanel()
+    }
+
+    /// ✕ in the corner while the pointer is over a passive card.
+    @ViewBuilder private func closeButton(_ card: LiveCard) -> some View {
+        if hovering && isPassive(card) {
+            Button { model.hideLive() } label: {
+                Image(systemName: "xmark")
+                    .font(.wh(9, .bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 18, height: 18)
+                    .background(Circle().fill(Color(white: 0.25)))
+                    .overlay(Circle().strokeBorder(Color.white.opacity(0.15), lineWidth: 0.5))
+            }
+            .buttonStyle(.plain)
+            .help("Dismiss")
+            .accessibilityLabel("Dismiss")
+            .transition(.opacity)
+        }
     }
 
     /// Cards of the same kind update in place; a new kind animates in fresh.

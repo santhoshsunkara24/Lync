@@ -132,6 +132,20 @@ final class MessagesModel: ObservableObject {
         newRecipient = ""
     }
 
+    /// Esc while writing to a new number: back to the first conversation.
+    func cancelNewMessage() {
+        guard newRecipient != nil else { return }
+        newRecipient = nil
+        selectedThread = threads.first?.id
+    }
+
+    /// Sends a text that failed again.
+    func retry(_ message: SmsMessage) {
+        messages.removeAll { $0.id == message.id }
+        if case .failed = status { status = .idle }
+        send(message.body)
+    }
+
     func send(_ text: String) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
@@ -204,6 +218,7 @@ final class MessagesWindowController: NSObject, NSWindowDelegate {
     private let model: MessagesModel
     private let appModel: AppModel
     private var window: NSWindow?
+    private var titleObserver: AnyCancellable?
 
     init(server: LinkServer, appModel: AppModel) {
         model = MessagesModel(server: server)
@@ -218,7 +233,7 @@ final class MessagesWindowController: NSObject, NSWindowDelegate {
                 backing: .buffered,
                 defer: false
             )
-            window.title = "Messages"
+            window.title = "Lync Messages"
             window.titlebarAppearsTransparent = true
             // Same dark, phone-coloured style as the panel.
             window.appearance = NSAppearance(named: .darkAqua)
@@ -230,6 +245,11 @@ final class MessagesWindowController: NSObject, NSWindowDelegate {
             window.setFrameAutosaveName("WallhopMessages")
             window.delegate = self
             self.window = window
+            // "Lync — Anna" while a conversation is open.
+            titleObserver = model.$selectedThread.combineLatest(model.$threads).sink { [weak window] id, threads in
+                let name = threads.first { $0.id == id }?.title
+                window?.title = name.map { "Lync — \($0)" } ?? "Lync Messages"
+            }
         }
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
@@ -296,12 +316,25 @@ private struct ThreadList: View {
                 List(selection: $model.selectedThread) {
                     ForEach(model.filteredThreads) { thread in
                         ThreadRow(thread: thread).tag(thread.id)
+                            .contextMenu {
+                                Button("Copy number") { Clipboard.copy(thread.address) }
+                                if thread.name != nil { Button("Copy name") { Clipboard.copy(thread.title) } }
+                            }
                     }
                 }
                 .listStyle(.sidebar)
                 .overlay {
                     if model.status == .loading && model.threads.isEmpty {
                         ProgressView().controlSize(.small)
+                    } else if model.status != .loading && model.filteredThreads.isEmpty {
+                        let query = model.search.trimmingCharacters(in: .whitespaces)
+                        if query.isEmpty {
+                            MessagesEmptyState(symbol: "message", title: "No conversations yet",
+                                               text: "Texts on your phone show up here. Start one with the pencil above.")
+                        } else {
+                            MessagesEmptyState(symbol: "magnifyingglass", title: "No results",
+                                               text: "Nothing matches \u{201C}\(query)\u{201D}.")
+                        }
                     }
                 }
             }
@@ -312,6 +345,7 @@ private struct ThreadList: View {
 
 private struct ThreadRow: View {
     let thread: SmsThread
+    @EnvironmentObject var theme: ThemeStore
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
@@ -319,7 +353,7 @@ private struct ThreadRow: View {
             VStack(alignment: .leading, spacing: 2) {
                 HStack {
                     Text(thread.title)
-                        .font(.system(size: 13, weight: thread.unread > 0 ? .semibold : .medium))
+                        .font(.wh(13, thread.unread > 0 ? .semibold : .medium))
                         .lineLimit(1)
                     Spacer(minLength: 4)
                     Text(shortDate(thread.date))
@@ -333,7 +367,8 @@ private struct ThreadRow: View {
                         .lineLimit(2)
                     Spacer(minLength: 4)
                     if thread.unread > 0 {
-                        Circle().fill(Color.accentColor).frame(width: 8, height: 8).padding(.top, 4)
+                        Circle().fill(theme.theme.pale).frame(width: 8, height: 8).padding(.top, 4)
+                            .accessibilityLabel("Unread")
                     }
                 }
             }
@@ -363,8 +398,10 @@ private struct ConversationView: View {
                                     .foregroundStyle(.secondary)
                                     .padding(.vertical, 8)
                             }
-                            Bubble(message: message, showSim: model.sims.count > 1)
-                                .id(message.id)
+                            Bubble(message: message, showSim: model.sims.count > 1, connected: connected) {
+                                model.retry(message)
+                            }
+                            .id(message.id)
                         }
                     }
                     .padding(16)
@@ -373,7 +410,8 @@ private struct ConversationView: View {
                     if model.loadingThread && model.messages.isEmpty {
                         ProgressView().controlSize(.small)
                     } else if model.selectedThread == nil && model.newRecipient == nil {
-                        Text("Choose a conversation").foregroundStyle(.secondary)
+                        Text(model.threads.isEmpty ? "No conversation open" : "Choose a conversation")
+                            .font(.wh(13, .medium)).foregroundStyle(.secondary)
                     }
                 }
                 .onChange(of: model.messages.count) { _, _ in
@@ -386,8 +424,16 @@ private struct ConversationView: View {
             if case .failed(let error) = model.status {
                 Text(error)
                     .font(.wh(11, .medium))
-                    .foregroundStyle(.red)
+                    .foregroundStyle(WTheme.danger)
                     .padding(.top, 6)
+            }
+            if !connected {
+                Text("Connect your phone to send texts: open Lync on it, on the same Wi‑Fi as this Mac.")
+                    .font(.wh(11, .medium))
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.top, 8)
+                    .padding(.horizontal, 16)
             }
             composer
         }
@@ -403,6 +449,10 @@ private struct ConversationView: View {
                 ))
                 .textFieldStyle(.plain)
                 .font(.wh(14, .medium))
+                .onExitCommand { model.cancelNewMessage() }
+                Button("Cancel") { model.cancelNewMessage() }
+                    .buttonStyle(WPill(prominent: false, compact: true))
+                    .help("Cancel the new message (Esc)")
             } else if let thread = model.currentThread {
                 Avatar(name: thread.name, size: 30)
                 VStack(alignment: .leading, spacing: 0) {
@@ -439,6 +489,7 @@ private struct ConversationView: View {
                 .background(Capsule().fill(Color.white.opacity(0.1)))
                 .focused($composerFocused)
                 .onSubmit(send)
+                .onExitCommand { model.cancelNewMessage() }
             Button(action: send) {
                 Image(systemName: "arrow.up")
                     .font(.wh(13, .bold))
@@ -449,6 +500,7 @@ private struct ConversationView: View {
             .buttonStyle(.plain)
             .disabled(!canSend)
             .help("Send")
+            .accessibilityLabel("Send")
             .keyboardShortcut(.return, modifiers: .command)
         }
         .padding(12)
@@ -476,6 +528,8 @@ private struct ConversationView: View {
 private struct Bubble: View {
     let message: SmsMessage
     let showSim: Bool
+    let connected: Bool
+    let retry: () -> Void
     @EnvironmentObject var theme: ThemeStore
 
     var body: some View {
@@ -493,9 +547,17 @@ private struct Bubble: View {
                             .fill(message.outgoing ? theme.theme.pale : Color.white.opacity(0.1))
                     )
                     .opacity(message.pending ? 0.6 : 1)
+                    .contextMenu {
+                        if message.failed && message.outgoing {
+                            Button("Try again", action: retry).disabled(!connected)
+                        }
+                        Button("Copy") { Clipboard.copy(message.body) }
+                    }
                 HStack(spacing: 4) {
                     if message.failed {
-                        Label("Not sent", systemImage: "exclamationmark.circle").foregroundStyle(.red)
+                        Label("Not sent", systemImage: "exclamationmark.circle").foregroundStyle(WTheme.danger)
+                        Button("Try again", action: retry).buttonStyle(.plain).foregroundStyle(theme.theme.pale)
+                            .disabled(!connected)
                     } else if message.pending {
                         Text("Sending…")
                     } else {
@@ -514,14 +576,15 @@ private struct Bubble: View {
 private struct Avatar: View {
     let name: String?
     let size: CGFloat
+    @EnvironmentObject var theme: ThemeStore
 
     var body: some View {
         ZStack {
             Circle().fill(color.gradient)
             if let initials {
-                Text(initials).font(.system(size: size * 0.38, weight: .semibold)).foregroundStyle(.white)
+                Text(initials).font(.wh(size * 0.38, .semibold)).foregroundStyle(.white)
             } else {
-                Image(systemName: "person.fill").font(.system(size: size * 0.42)).foregroundStyle(.white)
+                Image(systemName: "person.fill").font(.wh(size * 0.42)).foregroundStyle(.white)
             }
         }
         .frame(width: size, height: size)
@@ -533,10 +596,29 @@ private struct Avatar: View {
         return letters.isEmpty ? nil : String(letters).uppercased()
     }
 
+    /// From the phone's palette, so avatars match the rest of the window.
     private var color: Color {
-        let palette: [Color] = [.blue, .indigo, .purple, .pink, .orange, .teal, .green, .gray]
+        let palette: [Color] = [theme.theme.top, theme.theme.peek, theme.theme.mid, theme.theme.card]
         let hash = (name ?? "").unicodeScalars.reduce(0) { $0 &+ Int($1.value) }
         return palette[abs(hash) % palette.count]
+    }
+}
+
+/// No conversations, or nothing matching the search.
+struct MessagesEmptyState: View {
+    let symbol: String
+    let title: String
+    let text: String
+
+    var body: some View {
+        VStack(spacing: 8) {
+            Image(systemName: symbol).font(.wh(22, .medium)).foregroundStyle(WTheme.secondary)
+                .frame(width: 52, height: 52).background(Circle().fill(WTheme.chip))
+            Text(title).font(.wh(13, .semibold))
+            Text(text).font(.wh(12, .medium)).foregroundStyle(WTheme.secondary).multilineTextAlignment(.center)
+        }
+        .padding(20)
+        .frame(maxWidth: .infinity)
     }
 }
 

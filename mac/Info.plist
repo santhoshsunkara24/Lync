@@ -27,12 +27,14 @@
     <key>LSApplicationCategoryType</key>
     <string>public.app-category.productivity</string>
     <key>NSLocalNetworkUsageDescription</key>
-    <string>Wallhop talks to your Android phone over your Wi-Fi to receive codes, texts and files.</string>
+    <string>Lync connects to your phone over your local network.</string>
     <key>NSBonjourServices</key>
     <array>
         <string>_wallhop._tcp</string>
     </array>
     <key>NSHumanReadableCopyright</key>
-    <string>Open source. Development build.</string>
+    <string>© 2026 Santhosh Sunkara. Free and open source.</string>
+    <key>LSFileQuarantineEnabled</key>
+    <true/>
 </dict>
 </plist>

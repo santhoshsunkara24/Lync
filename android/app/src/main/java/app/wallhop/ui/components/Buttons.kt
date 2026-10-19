@@ -87,7 +87,7 @@ fun WButton(
 
     Box(
         modifier = modifier
-            .alpha(if (enabled) 1f else 0.35f)
+            .alpha(if (enabled) 1f else DisabledAlpha)
             .then(surface)
             .tappable(source, enabled = enabled && !loading) {
                 if (style == ButtonStyle.Prominent) haptics.perform(Haptic.Light)
@@ -152,7 +152,7 @@ fun TextAction(text: String, onClick: () -> Unit, bold: Boolean = false, enabled
     Text(
         text,
         style = if (bold) Type.headline else Type.body,
-        color = (color ?: Wallhop.colors.tint).copy(alpha = if (!enabled) 0.35f else if (pressed > 0f) 0.5f else 1f),
+        color = (color ?: Wallhop.colors.tint).copy(alpha = if (!enabled) DisabledAlpha else if (pressed > 0f) 0.5f else 1f),
         modifier = Modifier
             .tappable(source, enabled = enabled, onClick = onClick)
             .height(44.dp)

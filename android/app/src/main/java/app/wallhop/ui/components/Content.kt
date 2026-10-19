@@ -47,6 +47,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
@@ -55,6 +56,9 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
@@ -75,7 +79,10 @@ import kotlin.math.abs
 /** False for screens that are kept alive but not shown (e.g. other tabs); ambient animations pause. */
 val LocalScreenActive = androidx.compose.runtime.compositionLocalOf { true }
 
-/** Text field (DESIGN.md §5.8): filled well, focus ring, clear button. */
+/**
+ * Text field (DESIGN.md §5.8): filled well, focus ring, clear button. [label] shows above the
+ * field and names it for TalkBack; [error] shows below in red and rings the field.
+ */
 @Composable
 fun WTextField(
     value: String,
@@ -86,44 +93,71 @@ fun WTextField(
     minLines: Int = 1,
     maxLines: Int = if (singleLine) 1 else 6,
     keyboardType: KeyboardType = KeyboardType.Text,
+    label: String? = null,
+    error: String? = null,
+    focusRequester: androidx.compose.ui.focus.FocusRequester? = null,
 ) {
     val colors = Wallhop.colors
     var focused by remember { mutableStateOf(false) }
-    val ring by animateFloatAsState(if (focused) 1f else 0f, tween(150), label = "ring")
+    val ring by animateFloatAsState(if (focused || error != null) 1f else 0f, tween(150), label = "ring")
+    val ringColor = if (error != null) colors.red else colors.tint
     val shape = rounded(20.dp)
-    BasicTextField(
-        value = value,
-        onValueChange = onValueChange,
-        singleLine = singleLine,
-        minLines = minLines,
-        maxLines = maxLines,
-        textStyle = Type.body.copy(color = colors.label),
-        cursorBrush = SolidColor(colors.tint),
-        keyboardOptions = KeyboardOptions(keyboardType = keyboardType),
-        modifier = modifier
-            .fillMaxWidth()
-            .onFocusChanged { focused = it.isFocused }
-            .clip(shape)
-            .background(Color.White.copy(alpha = 0.1f))
-            .border(2.dp, colors.tint.copy(alpha = ring), shape),
-        decorationBox = { inner ->
-            Row(Modifier.padding(horizontal = 18.dp, vertical = 15.dp), verticalAlignment = Alignment.CenterVertically) {
-                Box(Modifier.weight(1f)) {
-                    if (value.isEmpty()) Text(placeholder, style = Type.body, color = colors.labelTertiary)
-                    inner()
+    Column(modifier.fillMaxWidth()) {
+        if (label != null) {
+            Text(label, style = Type.footnote, color = colors.labelSecondary,
+                modifier = Modifier.padding(start = 4.dp, bottom = 6.dp).clearAndSetSemantics { })
+        }
+        BasicTextField(
+            value = value,
+            onValueChange = onValueChange,
+            singleLine = singleLine,
+            minLines = minLines,
+            maxLines = maxLines,
+            textStyle = Type.body.copy(color = colors.label),
+            cursorBrush = SolidColor(colors.tint),
+            keyboardOptions = KeyboardOptions(keyboardType = keyboardType),
+            modifier = Modifier
+                .fillMaxWidth()
+                .onFocusChanged { focused = it.isFocused }
+                .clip(shape)
+                .background(Color.White.copy(alpha = 0.1f))
+                .border(2.dp, ringColor.copy(alpha = ring), shape)
+                .then(if (label != null) Modifier.semantics { contentDescription = label } else Modifier)
+                .then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier),
+            decorationBox = { inner ->
+                val clear = value.isNotEmpty() && singleLine
+                // The clear button is a 44 dp target; the text's own padding keeps the field 52 dp tall.
+                Row(
+                    Modifier.padding(start = 18.dp, end = if (clear) 4.dp else 18.dp, top = 4.dp, bottom = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Box(Modifier.weight(1f).padding(vertical = 11.dp)) {
+                        if (value.isEmpty()) Text(placeholder, style = Type.body, color = colors.labelTertiary)
+                        inner()
+                    }
+                    if (clear) ClearButton { onValueChange("") }
                 }
-                if (value.isNotEmpty() && singleLine) {
-                    Icon(
-                        WIcons.XCircle, "Clear", tint = colors.labelTertiary,
-                        modifier = Modifier
-                            .size(18.dp)
-                            .clip(capsule())
-                            .clickable(interactionSource = null, indication = null) { onValueChange("") },
-                    )
-                }
-            }
-        },
-    )
+            },
+        )
+        if (error != null) {
+            Text(error, style = Type.footnote, color = colors.red, modifier = Modifier.padding(start = 4.dp, top = 6.dp))
+        }
+    }
+}
+
+/** The small (x) that empties a field, with a full 44 dp touch target. */
+@Composable
+private fun ClearButton(onClick: () -> Unit) {
+    Box(
+        Modifier
+            .size(44.dp)
+            .clip(capsule())
+            .clickable(interactionSource = null, indication = null, role = androidx.compose.ui.semantics.Role.Button, onClick = onClick)
+            .semantics { contentDescription = "Clear" },
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(WIcons.XCircle, null, tint = Wallhop.colors.labelTertiary, modifier = Modifier.size(18.dp))
+    }
 }
 
 /** Capsule search field. */
@@ -138,17 +172,14 @@ fun SearchField(value: String, onValueChange: (String) -> Unit, modifier: Modifi
         cursorBrush = SolidColor(colors.tint),
         modifier = modifier.fillMaxWidth().height(48.dp).clip(capsule()).background(colors.fill),
         decorationBox = { inner ->
-            Row(Modifier.padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Row(Modifier.padding(start = 12.dp, end = if (value.isNotEmpty()) 2.dp else 12.dp), verticalAlignment = Alignment.CenterVertically) {
                 Icon(WIcons.Search, null, tint = colors.labelSecondary, modifier = Modifier.size(18.dp))
                 Spacer(Modifier.width(6.dp))
                 Box(Modifier.weight(1f)) {
                     if (value.isEmpty()) Text(placeholder, style = Type.body, color = colors.labelSecondary)
                     inner()
                 }
-                if (value.isNotEmpty()) {
-                    Icon(WIcons.XCircle, "Clear", tint = colors.labelTertiary,
-                        modifier = Modifier.size(18.dp).clip(capsule()).clickable(interactionSource = null, indication = null) { onValueChange("") })
-                }
+                if (value.isNotEmpty()) ClearButton { onValueChange("") }
             }
         },
     )
@@ -298,6 +329,19 @@ fun formatBytes(bytes: Long): String = when {
     bytes < 1024 * 1024 -> "%.0f KB".format(bytes / 1024.0)
     bytes < 1024L * 1024 * 1024 -> "%.1f MB".format(bytes / (1024.0 * 1024))
     else -> "%.2f GB".format(bytes / (1024.0 * 1024 * 1024))
+}
+
+/**
+ * Copies a one-time code. Marked sensitive, so Android hides it in the clipboard preview and
+ * keyboards don't suggest it later.
+ */
+fun copyCode(context: android.content.Context, code: String) {
+    val clip = android.content.ClipData.newPlainText("Code", code)
+    clip.description.extras = android.os.PersistableBundle().apply {
+        // ClipDescription.EXTRA_IS_SENSITIVE (Android 13); older versions ignore it.
+        putBoolean("android.content.extra.IS_SENSITIVE", true)
+    }
+    context.getSystemService(android.content.ClipboardManager::class.java).setPrimaryClip(clip)
 }
 
 /** "482913" → "482 913". */

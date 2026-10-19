@@ -23,11 +23,14 @@ class IncomingFiles(private val context: Context) {
 
     private val files = HashMap<String, Incoming>()
     private val saved = HashMap<String, MutableList<Uri>>()
+    /** Files that couldn't be saved, with why; their chunks are skipped and `file_end` reports it. */
+    private val failed = HashMap<String, String>()
 
     fun batchStart(message: Message) {
         message.string("batch")?.let { saved[it] = mutableListOf() }
     }
 
+    /** One bad file (storage full, a provider error) fails only that file, never the link. */
     fun fileStart(message: Message) {
         val id = message.string("id") ?: return
         val name = sanitize(message.string("name") ?: "File")
@@ -38,32 +41,62 @@ class IncomingFiles(private val context: Context) {
             put(MediaStore.MediaColumns.IS_PENDING, 1)
         }
         val resolver = context.contentResolver
-        val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values) ?: return
-        val stream = resolver.openOutputStream(uri) ?: run {
-            resolver.delete(uri, null, null)
+        val uri = runCatching { resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values) }.getOrNull()
+        if (uri == null) {
+            failed[id] = "couldn't save"
+            return
+        }
+        val stream = runCatching { resolver.openOutputStream(uri) }.getOrNull()
+        if (stream == null) {
+            runCatching { resolver.delete(uri, null, null) }
+            failed[id] = "couldn't save"
             return
         }
         files[id] = Incoming(message.string("batch") ?: id, name, uri, stream)
     }
 
     fun fileChunk(message: Message) {
-        val file = message.string("id")?.let { files[it] } ?: return
-        file.stream.write(message.body)
-        file.digest.update(message.body)
+        val id = message.string("id") ?: return
+        val file = files[id] ?: return
+        try {
+            file.stream.write(message.body)
+            file.digest.update(message.body)
+        } catch (_: Exception) {
+            discard(id, file, "couldn't save")
+        }
     }
 
     /** Returns an error message, or null when the file was saved. */
     fun fileEnd(message: Message): String? {
-        val file = message.string("id")?.let { files.remove(it) } ?: return "unknown file"
-        runCatching { file.stream.close() }
+        val id = message.string("id") ?: return "unknown file"
+        failed.remove(id)?.let { return it }
+        val file = files.remove(id) ?: return "unknown file"
         val resolver = context.contentResolver
+        if (runCatching { file.stream.close() }.isFailure) {
+            runCatching { resolver.delete(file.uri, null, null) }
+            return "couldn't save"
+        }
         if (file.digest.digest().toHex() != message.string("sha256")?.lowercase()) {
-            resolver.delete(file.uri, null, null)
+            runCatching { resolver.delete(file.uri, null, null) }
             return "checksum mismatch"
         }
-        resolver.update(file.uri, ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING, 0) }, null, null)
+        val published = runCatching {
+            resolver.update(file.uri, ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING, 0) }, null, null)
+        }.isSuccess
+        if (!published) {
+            runCatching { resolver.delete(file.uri, null, null) }
+            return "couldn't save"
+        }
         saved.getOrPut(file.batch) { mutableListOf() } += file.uri
         return null
+    }
+
+    /** Drops a half-written file, removing its pending Downloads entry. */
+    private fun discard(id: String, file: Incoming, reason: String) {
+        files.remove(id)
+        runCatching { file.stream.close() }
+        runCatching { context.contentResolver.delete(file.uri, null, null) }
+        failed[id] = reason
     }
 
     /** Returns a summary like "2 files from your Mac", and shows a notification. */
@@ -83,6 +116,7 @@ class IncomingFiles(private val context: Context) {
         }
         files.clear()
         saved.clear()
+        failed.clear()
     }
 
     private fun sanitize(name: String): String =

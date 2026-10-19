@@ -56,16 +56,25 @@ import kotlin.math.roundToInt
 
 // Switch, segmented control, activity indicator, progress. See docs/DESIGN.md §5.6, §5.7, §5.13.
 
+/** One opacity for every disabled or unavailable control. */
+const val DisabledAlpha = 0.38f
+
 /**
  * Material 3 switch, 52 × 32 dp: pale track and a dark thumb when on; an outlined
- * track and a small thumb when off. The thumb grows while pressed.
+ * track and a small thumb when off. The thumb grows while pressed. In a list, pass the
+ * switch to [ListRow] instead (whole row toggles); with a null [onCheckedChange] it's only
+ * drawn, and [interactionSource] lets the row's press grow the thumb.
  */
 @Composable
-fun WSwitch(checked: Boolean, onCheckedChange: (Boolean) -> Unit, enabled: Boolean = true) {
-    val colors = Wallhop.colors
+fun WSwitch(
+    checked: Boolean,
+    onCheckedChange: ((Boolean) -> Unit)?,
+    enabled: Boolean = true,
+    interactionSource: MutableInteractionSource? = null,
+) {
     val home = Wallhop.home
     val haptics = rememberHaptics()
-    val source = remember { MutableInteractionSource() }
+    val source = interactionSource ?: remember { MutableInteractionSource() }
     val pressed by source.collectIsPressedAsState()
     val track by animateColorAsState(if (checked) home.pale else Color.Transparent, Springs.snappy(), label = "track")
     val outline by animateColorAsState(if (checked) home.pale else Color.White.copy(alpha = 0.45f), Springs.snappy(), label = "outline")
@@ -82,20 +91,22 @@ fun WSwitch(checked: Boolean, onCheckedChange: (Boolean) -> Unit, enabled: Boole
     Box(
         Modifier
             .size(52.dp, 32.dp)
-            .alpha(if (enabled) 1f else 0.4f)
+            .alpha(if (enabled) 1f else DisabledAlpha)
             .clip(capsule())
             .background(track)
             .border(2.dp, outline, capsule())
-            .toggleable(
-                value = checked,
-                interactionSource = source,
-                indication = null,
-                enabled = enabled,
-                role = Role.Switch,
-            ) {
-                haptics.perform(Haptic.Selection)
-                onCheckedChange(it)
-            },
+            .then(
+                if (onCheckedChange == null) Modifier else Modifier.toggleable(
+                    value = checked,
+                    interactionSource = source,
+                    indication = null,
+                    enabled = enabled,
+                    role = Role.Switch,
+                ) {
+                    haptics.perform(Haptic.Selection)
+                    onCheckedChange(it)
+                },
+            ),
         contentAlignment = Alignment.CenterStart,
     ) {
         // Thumb centre runs from 16 dp to 36 dp.

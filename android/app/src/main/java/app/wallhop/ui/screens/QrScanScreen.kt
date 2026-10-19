@@ -1,8 +1,10 @@
 package app.wallhop.ui.screens
 
+import androidx.core.net.toUri
 import android.Manifest
 import android.content.pm.PackageManager
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.LocalActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.core.CameraSelector
@@ -50,6 +52,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import app.wallhop.link.QrInvite
 import app.wallhop.ui.components.ButtonStyle
@@ -75,22 +78,33 @@ import java.util.concurrent.Executors
 @Composable
 fun QrScanScreen(onScanned: (QrInvite) -> Unit, onClose: () -> Unit) {
     val context = LocalContext.current
+    val activity = LocalActivity.current
     val haptics = rememberHaptics()
-    var allowed by remember {
-        mutableStateOf(ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED)
-    }
+    fun granted() = ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
+    var allowed by remember { mutableStateOf(granted()) }
     var asked by remember { mutableStateOf(false) }
+    // Android won't show the prompt again: the button goes to Lync's page in Settings instead.
+    var blocked by remember { mutableStateOf(false) }
     val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
         allowed = it
         asked = true
+        blocked = !it && activity != null &&
+            !androidx.core.app.ActivityCompat.shouldShowRequestPermissionRationale(activity, Manifest.permission.CAMERA)
     }
     LaunchedEffect(Unit) { if (!allowed) permission.launch(Manifest.permission.CAMERA) }
+    // Back from Settings with the camera allowed: start scanning.
+    LifecycleResumeEffect(Unit) {
+        if (!allowed && granted()) allowed = true
+        onPauseOrDispose { }
+    }
     BackHandler(onBack = onClose)
     var notWallhop by remember { mutableStateOf(false) }
+    var cameraFailed by remember { mutableStateOf(false) }
 
     Box(Modifier.fillMaxSize().background(Color.Black)) {
-        if (allowed) {
+        if (allowed && !cameraFailed) {
             CameraPreview(
+                onFailure = { cameraFailed = true },
                 onCode = { text ->
                     val invite = QrInvite.parse(text)
                     if (invite != null) {
@@ -115,32 +129,62 @@ fun QrScanScreen(onScanned: (QrInvite) -> Unit, onClose: () -> Unit) {
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             when {
+                allowed && cameraFailed -> {
+                    Text("Couldn't start the camera", style = Type.title3, color = Color.White, textAlign = TextAlign.Center)
+                    Text("Another app may be using it. You can pick your Mac from the list instead.",
+                        style = Type.subheadline, color = Color.White.copy(alpha = 0.75f), textAlign = TextAlign.Center)
+                    Spacer(Modifier.height(8.dp))
+                    WButton("Pick from list", onClose, style = ButtonStyle.Filled)
+                }
                 allowed -> {
                     Text("Scan the code on your Mac", style = Type.title3, color = Color.White, textAlign = TextAlign.Center)
                     Text(
-                        if (notWallhop) "That's not a Lync code. On your Mac: menu bar icon › Settings › Add a phone."
-                        else "On your Mac, click the Lync icon in the menu bar. The code is in the panel.",
+                        if (notWallhop) "That's not a Lync code. On your Mac, open Lync › Settings › Add a phone › Show code."
+                        else "On your Mac, open Lync › Settings › Add a phone › Show code.",
                         style = Type.subheadline, color = Color.White.copy(alpha = 0.75f), textAlign = TextAlign.Center,
                     )
                 }
                 asked -> {
                     Text("Camera is off for Lync", style = Type.title3, color = Color.White, textAlign = TextAlign.Center)
-                    Text("Allow the camera to scan the code, or go back and pick your Mac from the list.",
-                        style = Type.subheadline, color = Color.White.copy(alpha = 0.75f), textAlign = TextAlign.Center)
+                    Text(
+                        if (blocked) "Allow the camera in Settings to scan the code, or go back and pick your Mac from the list."
+                        else "Allow the camera to scan the code, or go back and pick your Mac from the list.",
+                        style = Type.subheadline, color = Color.White.copy(alpha = 0.75f), textAlign = TextAlign.Center,
+                    )
                     Spacer(Modifier.height(8.dp))
-                    WButton("Allow camera", { permission.launch(Manifest.permission.CAMERA) }, style = ButtonStyle.Filled)
+                    if (blocked) {
+                        WButton("Open Settings", { openAppDetails(context) }, style = ButtonStyle.Filled)
+                    } else {
+                        WButton("Allow camera", { permission.launch(Manifest.permission.CAMERA) }, style = ButtonStyle.Filled)
+                    }
                 }
             }
         }
     }
 }
 
-/** CameraX preview plus a ZXing QR decoder on the frames. [onCode] returns true to stop. */
+/** Lync's page in Android's settings, where its permissions can be turned on. */
+internal fun openAppDetails(context: android.content.Context) {
+    runCatching {
+        context.startActivity(
+            android.content.Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS, "package:${context.packageName}".toUri())
+                .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK),
+        )
+    }
+}
+
+/**
+ * CameraX preview plus a ZXing QR decoder on the frames. [onCode] returns true to stop.
+ * [onFailure] when the camera can't be started.
+ */
 @Composable
-private fun CameraPreview(onCode: (String) -> Boolean) {
+private fun CameraPreview(onCode: (String) -> Boolean, onFailure: () -> Unit) {
     val context = LocalContext.current
     val lifecycle = LocalLifecycleOwner.current
     val executor = remember { Executors.newSingleThreadExecutor() }
+    // Set when the preview leaves the screen. The camera provider can arrive after that, and
+    // must not bind the camera then.
+    val disposed = remember { java.util.concurrent.atomic.AtomicBoolean(false) }
     val reader = remember {
         MultiFormatReader().apply {
             setHints(mapOf(DecodeHintType.POSSIBLE_FORMATS to listOf(BarcodeFormat.QR_CODE), DecodeHintType.TRY_HARDER to true))
@@ -150,7 +194,7 @@ private fun CameraPreview(onCode: (String) -> Boolean) {
     var done by remember { mutableStateOf(false) }
     var lastText by remember { mutableStateOf<String?>(null) }
 
-    DisposableEffect(Unit) { onDispose { executor.shutdown() } }
+    DisposableEffect(Unit) { onDispose { disposed.set(true) } }
 
     AndroidView(
         modifier = Modifier.fillMaxSize(),
@@ -158,7 +202,11 @@ private fun CameraPreview(onCode: (String) -> Boolean) {
             val view = PreviewView(ctx).apply { scaleType = PreviewView.ScaleType.FILL_CENTER }
             val providerFuture = ProcessCameraProvider.getInstance(ctx)
             providerFuture.addListener({
-                val provider = providerFuture.get()
+                if (disposed.get()) return@addListener
+                val provider = runCatching { providerFuture.get() }.getOrElse {
+                    onFailure()
+                    return@addListener
+                }
                 val preview = Preview.Builder().build().also { it.surfaceProvider = view.surfaceProvider }
                 val analysis = ImageAnalysis.Builder()
                     .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
@@ -170,7 +218,7 @@ private fun CameraPreview(onCode: (String) -> Boolean) {
                     if (text != null && !done && text != lastText) {
                         main.execute {
                             lastText = text
-                            if (!done && onCode(text)) {
+                            if (!done && !disposed.get() && onCode(text)) {
                                 done = true
                                 provider.unbindAll()
                             }
@@ -180,11 +228,19 @@ private fun CameraPreview(onCode: (String) -> Boolean) {
                 runCatching {
                     provider.unbindAll()
                     provider.bindToLifecycle(lifecycle, CameraSelector.DEFAULT_BACK_CAMERA, preview, analysis)
-                }
+                }.onFailure { onFailure() }
             }, main)
             view
         },
-        onRelease = { ProcessCameraProvider.getInstance(it.context).get().unbindAll() },
+        onRelease = {
+            disposed.set(true)
+            // Without blocking the main thread: unbind once the provider is ready, then stop the analyser.
+            val providerFuture = ProcessCameraProvider.getInstance(it.context)
+            providerFuture.addListener({
+                runCatching { providerFuture.get().unbindAll() }
+                executor.shutdown()
+            }, main)
+        },
     )
 }
 

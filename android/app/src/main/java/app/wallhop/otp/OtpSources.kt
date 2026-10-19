@@ -71,12 +71,16 @@ class OtpNotificationListener : NotificationListenerService() {
         val (title, text) = content(notification)
         if (text.isBlank()) return
 
-        if (!sbn.isOngoing && app.wallhop.core.Features.on(this, app.wallhop.core.Features.Key.Codes)) {
+        // Apps re-post old notifications (an update, a reboot): a code older than five minutes is no use.
+        val fresh = System.currentTimeMillis() - sbn.postTime < CODE_MAX_AGE_MS
+        if (!sbn.isOngoing && fresh && app.wallhop.core.Features.on(this, app.wallhop.core.Features.Key.Codes)) {
             val code = OtpExtractor.extract("$title $text")
             if (BuildConfig.DEBUG) Log.d(TAG, "notification from ${sbn.packageName}: code found=${code != null}")
             if (code != null) {
                 LinkManager.get(this).sendOtp(code, title.ifBlank { appLabel(sbn.packageName) }, sbn.packageName)
-                return
+                // The SMS app's own notification for a text the SMS receiver already handled
+                // isn't mirrored as well; any other app's notification still is.
+                if (sbn.packageName == Telephony.Sms.getDefaultSmsPackage(this)) return
             }
         }
 
@@ -135,6 +139,7 @@ class OtpNotificationListener : NotificationListenerService() {
 
     companion object {
         private const val TAG = "WallhopNotify"
+        private const val CODE_MAX_AGE_MS = 5 * 60_000L
 
         @Volatile private var active: OtpNotificationListener? = null
 
@@ -163,20 +168,30 @@ class OtpNotificationListener : NotificationListenerService() {
         )
 
         /**
-         * Declines a ringing call or hangs up an active one by pressing the button on the phone
-         * app's own call notification. Newer Android versions ignore the old end-call API for
-         * apps like this one, but the notification button always works.
+         * Declines a ringing call or hangs up an active one. Uses Android's end-call API when the
+         * "answer calls" permission is granted, and otherwise presses the hang-up button on the
+         * phone app's own call notification. Only the default phone app's notifications are
+         * touched, and only a button that says decline or hang up: never a guess.
          */
-        fun endCallFromNotification(context: Context): Boolean {
+        @android.annotation.SuppressLint("MissingPermission")
+        fun endCall(context: Context): Boolean {
+            val telecom = context.getSystemService(android.telecom.TelecomManager::class.java)
+            val canEnd = androidx.core.content.ContextCompat.checkSelfPermission(context, android.Manifest.permission.ANSWER_PHONE_CALLS) ==
+                android.content.pm.PackageManager.PERMISSION_GRANTED
+            if (telecom != null && canEnd && runCatching { @Suppress("DEPRECATION") telecom.endCall() }.getOrDefault(false)) return true
+            return endCallFromNotification(context, telecom?.defaultDialerPackage)
+        }
+
+        private fun endCallFromNotification(context: Context, dialerPackage: String?): Boolean {
             val listener = active ?: return false
+            if (dialerPackage == null) return false
             val calls = runCatching { listener.activeNotifications }.getOrNull().orEmpty()
-                .filter { it.notification.category == Notification.CATEGORY_CALL && it.notification.actions?.isNotEmpty() == true }
+                .filter { it.packageName == dialerPackage && it.notification.category == Notification.CATEGORY_CALL }
             for (sbn in calls) {
-                val actions = sbn.notification.actions
-                val action = actions.firstOrNull { action ->
+                val action = sbn.notification.actions.orEmpty().firstOrNull { action ->
                     val title = action.title?.toString()?.lowercase().orEmpty()
                     hangUpWords.any { title.contains(it) }
-                } ?: actions.first() // Call notifications put decline / hang up first.
+                } ?: continue
                 if (runCatching { action.actionIntent.send(context, 0, Intent()) }.isSuccess) return true
             }
             return false

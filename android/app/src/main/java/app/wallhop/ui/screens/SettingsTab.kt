@@ -37,7 +37,6 @@ import app.wallhop.ui.components.insetSectionItems
 import app.wallhop.ui.components.InsetSection
 import app.wallhop.ui.components.ListRow
 import app.wallhop.ui.components.SearchField
-import app.wallhop.ui.components.WSwitch
 import app.wallhop.ui.design.Wallhop
 import app.wallhop.ui.design.rounded
 import kotlinx.coroutines.Dispatchers
@@ -68,11 +67,21 @@ class SettingsActions(
     val setFeature: (Features.Key, Boolean) -> Unit,
     val forgetMac: () -> Unit,
     val sendTestCode: () -> Unit,
+    val macDetails: () -> Unit,
+    val openLicences: () -> Unit,
+    val openPrivacy: () -> Unit,
 )
 
 /** Permissions and preferences as an inset grouped list (DESIGN.md §6.6). */
 @Composable
-fun SettingsTab(setup: Setup, macName: String?, mirroredCount: Int, actions: SettingsActions, openApps: () -> Unit) {
+fun SettingsTab(
+    setup: Setup,
+    macName: String?,
+    macStatus: String?,
+    mirroredCount: Int,
+    actions: SettingsActions,
+    openApps: () -> Unit,
+) {
     val colors = Wallhop.colors
     // On: Wallhop's switch goes on, and Android's permission popup appears if it's still needed.
     // Off: Wallhop stops using the feature; the permission stays, so no trip to Android's settings.
@@ -97,21 +106,24 @@ fun SettingsTab(setup: Setup, macName: String?, mirroredCount: Int, actions: Set
                     ListRow(
                         title = "Codes from messages",
                         leading = { IconTile(WIcons.Lock, colors.green) },
-                        trailing = { WSwitch(setup.sms, toggle(Features.Key.Codes, actions.allowSms)) },
+                        checked = setup.sms,
+                        onCheckedChange = toggle(Features.Key.Codes, actions.allowSms),
                     )
                 }
                 row {
                     ListRow(
                         title = "Calls",
                         leading = { IconTile(WIcons.Call, colors.green) },
-                        trailing = { WSwitch(setup.calls, toggle(Features.Key.Calls, actions.allowCalls)) },
+                        checked = setup.calls,
+                        onCheckedChange = toggle(Features.Key.Calls, actions.allowCalls),
                     )
                 }
                 row {
                     ListRow(
                         title = "Texts",
                         leading = { IconTile(WIcons.Chats, colors.green) },
-                        trailing = { WSwitch(setup.texts, toggle(Features.Key.Texts, actions.allowTexts)) },
+                        checked = setup.texts,
+                        onCheckedChange = toggle(Features.Key.Texts, actions.allowTexts),
                     )
                 }
             }
@@ -134,7 +146,8 @@ fun SettingsTab(setup: Setup, macName: String?, mirroredCount: Int, actions: Set
                         title = "Run in background",
                         leading = { IconTile(WIcons.BatteryCharging, colors.orange) },
                         subtitle = "Stay connected when Lync is closed",
-                        trailing = { WSwitch(setup.background, toggle(Features.Key.Background, actions.allowBackground)) },
+                        checked = setup.background,
+                        onCheckedChange = toggle(Features.Key.Background, actions.allowBackground),
                     )
                 }
                 app.wallhop.core.KeepAlive.brand?.let { brand ->
@@ -153,7 +166,8 @@ fun SettingsTab(setup: Setup, macName: String?, mirroredCount: Int, actions: Set
                     ListRow(
                         title = "Notifications",
                         leading = { IconTile(WIcons.Bell, colors.red) },
-                        trailing = { WSwitch(setup.notifications, toggle(Features.Key.Notifications, actions.allowNotifications)) },
+                        checked = setup.notifications,
+                        onCheckedChange = toggle(Features.Key.Notifications, actions.allowNotifications),
                     )
                 }
                 row {
@@ -161,9 +175,8 @@ fun SettingsTab(setup: Setup, macName: String?, mirroredCount: Int, actions: Set
                         title = "Notification access",
                         subtitle = "Codes in other apps, and app notifications",
                         leading = { IconTile(WIcons.Shield, colors.indigo) },
-                        trailing = {
-                            WSwitch(setup.notificationAccess, toggle(Features.Key.AppNotifications, actions.openNotificationAccess))
-                        },
+                        checked = setup.notificationAccess,
+                        onCheckedChange = toggle(Features.Key.AppNotifications, actions.openNotificationAccess),
                     )
                 }
             }
@@ -176,8 +189,23 @@ fun SettingsTab(setup: Setup, macName: String?, mirroredCount: Int, actions: Set
             item(key = "pairedMac") {
                 SectionHeader("Mac")
                 InsetSection(dividerInset = 57.dp) {
-                    row { ListRow(title = macName, leading = { IconTile(WIcons.Laptop, colors.gray) }) }
-                    row { ListRow(title = "Forget this Mac", destructive = true, onClick = actions.forgetMac) }
+                    row {
+                        ListRow(
+                            title = macName,
+                            subtitle = macStatus,
+                            leading = { IconTile(WIcons.Laptop, colors.gray) },
+                            chevron = true,
+                            onClick = actions.macDetails,
+                        )
+                    }
+                    row {
+                        ListRow(
+                            title = "Forget this Mac",
+                            leading = { IconTile(WIcons.LinkBreak, colors.red) },
+                            destructive = true,
+                            onClick = actions.forgetMac,
+                        )
+                    }
                 }
                 Spacer(Modifier.height(32.dp))
             }
@@ -195,6 +223,22 @@ fun SettingsTab(setup: Setup, macName: String?, mirroredCount: Int, actions: Set
                         value = BuildConfig.VERSION_NAME,
                     )
                 }
+                row {
+                    ListRow(
+                        title = "Open-source licences",
+                        leading = { IconTile(WIcons.Scroll, colors.gray) },
+                        chevron = true,
+                        onClick = actions.openLicences,
+                    )
+                }
+                row {
+                    ListRow(
+                        title = "Privacy policy",
+                        leading = { IconTile(WIcons.Shield, colors.gray) },
+                        chevron = true,
+                        onClick = actions.openPrivacy,
+                    )
+                }
                 if (BuildConfig.STRESS_HOOKS) {
                     row { ListRow(title = "Send a test code", onClick = actions.sendTestCode) }
                 }
@@ -207,7 +251,13 @@ private data class AppEntry(val packageName: String, val label: String)
 
 /** Pick which apps' notifications show on the Mac (DESIGN.md §6.7). */
 @Composable
-fun AppsScreen(hasNotificationAccess: Boolean, onOpenAccess: () -> Unit, onBack: () -> Unit) {
+fun AppsScreen(
+    hasNotificationAccess: Boolean,
+    switchedOn: Boolean,
+    onOpenAccess: () -> Unit,
+    onSwitchOn: () -> Unit,
+    onBack: () -> Unit,
+) {
     BackHandler(onBack = onBack)
     val context = LocalContext.current
     val colors = Wallhop.colors
@@ -222,6 +272,22 @@ fun AppsScreen(hasNotificationAccess: Boolean, onOpenAccess: () -> Unit, onBack:
         subtitle = "Pick the apps that show on your Mac. Where an app supports quick reply, you can answer from the Mac.",
         leading = { CircleButton(WIcons.ChevronLeft, "Back", onClick = { onBack() }) },
     ) {
+        // Android's access is there but Lync's own switch is off: turn it on here, no trip to Settings.
+        if (hasNotificationAccess && !switchedOn) {
+            item(key = "access") {
+                InsetSection(footer = "Notification access is turned off in Lync, so no notifications go to your Mac.") {
+                    row {
+                        ListRow(
+                            title = "Turn on notification access",
+                            leading = { IconTile(WIcons.Shield, colors.indigo) },
+                            checked = false,
+                            onCheckedChange = { if (it) onSwitchOn() },
+                        )
+                    }
+                }
+                Spacer(Modifier.height(24.dp))
+            }
+        }
         if (!hasNotificationAccess) {
             item(key = "access") {
                 InsetSection(footer = "Lync needs notification access to see notifications.") {
@@ -263,9 +329,8 @@ fun AppsScreen(hasNotificationAccess: Boolean, onOpenAccess: () -> Unit, onBack:
                     ListRow(
                         title = app.label,
                         leading = { AppIcon(app.packageName) },
-                        trailing = {
-                            WSwitch(app.packageName in enabled, { mirrored.setEnabled(app.packageName, it) })
-                        },
+                        checked = app.packageName in enabled,
+                        onCheckedChange = { mirrored.setEnabled(app.packageName, it) },
                     )
                 }
                 item(key = "gap-$header") { Spacer(Modifier.height(28.dp)) }
@@ -320,6 +385,7 @@ private fun launchableApps(context: Context): List<AppEntry> {
 @Composable
 private fun GlyphSection(hardware: app.wallhop.glyph.Glyphs.Hardware) {
     val context = LocalContext.current
+    val overlays = app.wallhop.ui.components.LocalOverlays.current
     val colors = Wallhop.colors
     var ring by remember { mutableStateOf(Features.on(context, Features.Key.GlyphRing)) }
     var connect by remember { mutableStateOf(Features.on(context, Features.Key.GlyphConnect)) }
@@ -333,25 +399,26 @@ private fun GlyphSection(hardware: app.wallhop.glyph.Glyphs.Hardware) {
             ListRow(
                 title = "When your Mac rings this phone",
                 leading = { IconTile(WIcons.BellRinging, colors.orange) },
-                trailing = {
-                    WSwitch(ring, { on -> ring = on; Features.set(context, Features.Key.GlyphRing, on) })
-                },
+                checked = ring,
+                onCheckedChange = { on -> ring = on; Features.set(context, Features.Key.GlyphRing, on) },
             )
         }
         row {
             ListRow(
                 title = "When your Mac connects",
                 leading = { IconTile(WIcons.Link, colors.indigo) },
-                trailing = {
-                    WSwitch(connect, { on -> connect = on; Features.set(context, Features.Key.GlyphConnect, on) })
-                },
+                checked = connect,
+                onCheckedChange = { on -> connect = on; Features.set(context, Features.Key.GlyphConnect, on) },
             )
         }
         row {
             ListRow(
                 title = "Try it",
                 leading = { IconTile(WIcons.Lightning, colors.gray) },
-                onClick = { app.wallhop.glyph.Glyphs.preview(context) },
+                onClick = {
+                    app.wallhop.glyph.Glyphs.preview(context)
+                    overlays?.toast("Look at the back of your phone")
+                },
             )
         }
     }

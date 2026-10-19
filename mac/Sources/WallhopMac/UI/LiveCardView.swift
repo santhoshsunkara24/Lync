@@ -3,6 +3,7 @@ import SwiftUI
 /// The content of a live moment. Always drawn on black so it blends with the notch.
 struct LiveCardView: View {
     @ObservedObject var model: AppModel
+    @EnvironmentObject var theme: ThemeStore
     let card: LiveCard
 
     var body: some View {
@@ -43,7 +44,7 @@ struct LiveCardView: View {
 
     private func otp(code: String, sender: String) -> some View {
         HStack(spacing: 14) {
-            iconTile("lock.fill", tint: .green)
+            iconTile("lock.fill", tint: WTheme.success)
             VStack(alignment: .leading, spacing: 2) {
                 Text(spaced(code))
                     .font(.wh(26, .semibold).monospacedDigit())
@@ -64,7 +65,7 @@ struct LiveCardView: View {
             if let files = batch?.files, !files.isEmpty {
                 ThumbnailStack(urls: files)
             } else {
-                iconTile("arrow.down", tint: .blue)
+                iconTile("arrow.down", tint: theme.theme.pale)
             }
             VStack(alignment: .leading, spacing: 2) {
                 Text("Receiving \(batch?.summary ?? "files")")
@@ -83,25 +84,33 @@ struct LiveCardView: View {
     private func added(_ id: String) -> some View {
         let batch = model.batch(id)
         let files = batch?.files ?? []
+        let interrupted = batch?.interrupted == true
         return HStack(spacing: 14) {
             if files.isEmpty {
-                iconTile("exclamationmark.triangle.fill", tint: .orange)
+                iconTile("exclamationmark.triangle.fill", tint: WTheme.danger)
             } else {
                 ThumbnailStack(urls: files)
             }
             VStack(alignment: .leading, spacing: 2) {
-                Text(files.isEmpty ? "Transfer failed" : "Copied to clipboard")
+                Text(interrupted ? "Transfer interrupted" : files.isEmpty ? "Transfer failed" : "Copied to clipboard")
                     .font(.wh(14, .semibold))
-                Text(files.isEmpty ? "Nothing arrived" : "\(batch?.summary ?? "") · paste anywhere")
+                    .lineLimit(1)
+                Text(files.isEmpty ? "Nothing arrived"
+                     : interrupted ? "\(batch?.summary ?? "") arrived · copied"
+                     : "\(batch?.summary ?? "") · paste anywhere")
                     .font(.wh(12, .medium))
                     .foregroundStyle(.white.opacity(0.65))
                     .lineLimit(1)
             }
             Spacer(minLength: 8)
             if !files.isEmpty {
-                CopyButton(style: PillButtonStyle(prominent: false)) { model.copyFiles(id) }
+                if interrupted {
+                    CopyButton(iconOnly: true, style: WRound(size: 30)) { model.copyFiles(id) }
+                } else {
+                    CopyButton(style: WPill(prominent: false, compact: true)) { model.copyFiles(id) }
+                }
                 Button("Save") { model.saveFiles(id) }
-                    .buttonStyle(PillButtonStyle())
+                    .buttonStyle(WPill(compact: true))
                     .help("Save to Downloads › From Phone")
             }
         }
@@ -117,7 +126,7 @@ struct LiveCardView: View {
                     .foregroundStyle(.white.opacity(0.65)).lineLimit(1)
             }
             Spacer(minLength: 8)
-            Button("Show") { model.revealFiles(id) }.buttonStyle(PillButtonStyle())
+            Button("Show") { model.revealFiles(id) }.buttonStyle(WPill(compact: true)).help("Show in Finder")
         }
     }
 
@@ -140,9 +149,9 @@ struct LiveCardView: View {
                     .tracking(2)
                 Spacer()
                 Button("Decline") { model.decidePairing(false) }
-                    .buttonStyle(PillButtonStyle(prominent: false))
+                    .buttonStyle(WPill(prominent: false, compact: true))
                 Button("Pair") { model.decidePairing(true) }
-                    .buttonStyle(PillButtonStyle())
+                    .buttonStyle(WPill(compact: true))
                     .keyboardShortcut(.defaultAction)
             }
         }
@@ -185,11 +194,6 @@ struct LiveCardView: View {
             .padding(.vertical, 5)
             .background(Capsule().fill(Color.white.opacity(0.12)))
     }
-
-    private func spaced(_ code: String) -> String {
-        guard code.count == 6, code.allSatisfy(\.isNumber) else { return code }
-        return code.prefix(3) + " " + code.suffix(3)
-    }
 }
 
 struct ProgressRing: View {
@@ -205,21 +209,6 @@ struct ProgressRing: View {
                 .animation(.easeOut(duration: 0.2), value: progress)
         }
         .frame(width: 22, height: 22)
-    }
-}
-
-struct PillButtonStyle: ButtonStyle {
-    var prominent = true
-
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.wh(12, .semibold))
-            .foregroundStyle(prominent ? Color.black : Color.white)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
-            .background(Capsule().fill(prominent ? Color.white : Color.white.opacity(0.14)))
-            .opacity(configuration.isPressed ? 0.7 : 1)
-            .contentShape(Capsule())
     }
 }
 
@@ -261,12 +250,13 @@ private struct NotificationCard: View {
                     model.dismissNotification(notification.key)
                 } label: {
                     Image(systemName: "xmark")
-                        .font(.system(size: 10, weight: .bold))
+                        .font(.wh(10, .bold))
                         .frame(width: 22, height: 22)
                         .background(Circle().fill(Color.white.opacity(0.12)))
                 }
                 .buttonStyle(.plain)
                 .help("Clear on phone")
+                .accessibilityLabel("Clear on phone")
             }
 
             if replying {
@@ -281,7 +271,7 @@ private struct NotificationCard: View {
                         .onSubmit(send)
                         .onExitCommand { model.cancelReply() }
                     Button("Send", action: send)
-                        .buttonStyle(PillButtonStyle())
+                        .buttonStyle(WPill(compact: true))
                         .disabled(draft.trimmingCharacters(in: .whitespaces).isEmpty)
                 }
                 .onAppear { DispatchQueue.main.async { focused = true } }
@@ -290,12 +280,12 @@ private struct NotificationCard: View {
                     Spacer()
                     ForEach(otherActions.prefix(2)) { action in
                         Button(action.title) { model.performAction(action, on: notification) }
-                            .buttonStyle(PillButtonStyle(prominent: false))
+                            .buttonStyle(WPill(prominent: false, compact: true))
                             .lineLimit(1)
                     }
                     if notification.canReply {
                         Button("Reply") { model.startReply(notification.key) }
-                            .buttonStyle(PillButtonStyle())
+                            .buttonStyle(WPill(compact: true))
                     }
                 }
             }
@@ -318,7 +308,7 @@ struct AppIcon: View {
                 Image(nsImage: image).resizable().interpolation(.high)
             } else {
                 Image(systemName: "app.badge")
-                    .font(.system(size: size * 0.45))
+                    .font(.wh(size * 0.45))
                     .frame(width: size, height: size)
                     .background(RoundedRectangle(cornerRadius: size * 0.24).fill(Color.white.opacity(0.12)))
             }
@@ -361,14 +351,14 @@ private struct CallCard: View {
             }
             Spacer(minLength: 8)
             if call.state == .ringing {
-                CircleButton(symbol: "phone.down.fill", tint: Color(red: 1, green: 0.27, blue: 0.23), help: "Decline") {
+                CircleButton(symbol: "phone.down.fill", tint: WTheme.danger, help: "Decline") {
                     model.declineCall()
                 }
-                CircleButton(symbol: "phone.fill", tint: Color(red: 0.2, green: 0.78, blue: 0.35), help: "Answer on phone") {
+                CircleButton(symbol: "phone.fill", tint: WTheme.success, help: "Answer on phone") {
                     model.answerCall()
                 }
             } else if call.state == .active {
-                CircleButton(symbol: "phone.down.fill", tint: Color(red: 1, green: 0.27, blue: 0.23), help: "End call") {
+                CircleButton(symbol: "phone.down.fill", tint: WTheme.danger, help: "End call") {
                     model.endCall()
                 }
             }
@@ -407,5 +397,6 @@ private struct CircleButton: View {
         }
         .buttonStyle(.plain)
         .help(help)
+        .accessibilityLabel(help)
     }
 }

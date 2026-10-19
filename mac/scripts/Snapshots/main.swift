@@ -39,7 +39,7 @@ CTFontManagerRegisterFontsForURL(URL(fileURLWithPath: "Resources/Figtree.ttf") a
             CopyButton(style: PeekPill(), startCopied: true) {}
             CopyButton(iconOnly: true, style: WRound(size: 30)) {}
             CopyButton(iconOnly: true, style: WRound(size: 30), startCopied: true) {}
-            CopyButton(style: PillButtonStyle(prominent: false), startCopied: true) {}
+            CopyButton(style: WPill(prominent: false, compact: true), startCopied: true) {}
         }
         .padding(20).background(store.theme.card).environmentObject(store)
         render("copy_states", row)
@@ -80,12 +80,38 @@ CTFontManagerRegisterFontsForURL(URL(fileURLWithPath: "Resources/Figtree.ttf") a
     render("3_home_menubar", PanelView(model: model, theme: model.themeStore, fromNotch: false).fixedSize())
     model.panelPage = .settings
     render("4_settings", PanelView(model: model, theme: model.themeStore, fromNotch: false).fixedSize())
+    model.confirmingForget = phone.id
+    render("4b_settings_forget", PanelView(model: model, theme: model.themeStore, fromNotch: false).fixedSize())
+    model.confirmingForget = nil
     model.panelPage = .home
+
+    // Feedback while the panel is open: a toast at the bottom (one with Undo).
+    model.panelOpen = true
+    model.feedback("Clipboard sent to your phone")
+    render("8_toast", PanelView(model: model, theme: model.themeStore, fromNotch: false).fixedSize())
+    model.showToast(Toast(symbol: "bell.slash", message: "Cleared 1 notification", actionTitle: "Undo") {})
+    render("8b_toast_undo", PanelView(model: model, theme: model.themeStore, fromNotch: false).fixedSize())
+    model.panelOpen = false
+
+    // Messages with nothing in it, and with a search that finds nothing.
+    let empty = VStack(spacing: 0) {
+        MessagesEmptyState(symbol: "message", title: "No conversations yet",
+                           text: "Texts on your phone show up here. Start one with the pencil above.")
+        MessagesEmptyState(symbol: "magnifyingglass", title: "No results", text: "Nothing matches \u{201C}Anna\u{201D}.")
+    }
+    .frame(width: 280).padding(.vertical, 20).background(WTheme.ink).foregroundStyle(.white).environmentObject(model.themeStore)
+    render("9_messages_empty", empty)
+
+    // A transfer cut off by a disconnect.
+    send(.batchStarted(id: "b2", count: 3, bytes: 3000))
+    send(.fileSaved(batch: "b2", url: photo))
+    send(.batchInterrupted(id: "b2"))
 
     // Live moments, drawn the way the notch shows them.
     for (name, card) in [("5_live_code", LiveCard.otp(code: "731942", sender: "HDFC Bank")),
                          ("6_live_files", LiveCard.added(batchId: "b1")),
-                         ("7_live_text", LiveCard.text("Meeting moved to 4:30"))] {
+                         ("7_live_text", LiveCard.text("Meeting moved to 4:30")),
+                         ("7b_live_interrupted", LiveCard.added(batchId: "b2"))] {
         let content = LiveCardView(model: model, card: card)
             .frame(width: 364, alignment: .leading)
             .padding(.top, 42).padding(.horizontal, 18).padding(.bottom, 16)

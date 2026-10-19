@@ -1,5 +1,7 @@
 package app.wallhop.ui
 
+import androidx.core.content.edit
+import androidx.core.net.toUri
 import app.wallhop.core.Features
 import app.wallhop.ui.design.WIcons
 import android.Manifest
@@ -12,6 +14,8 @@ import android.net.Uri
 import android.os.Build
 import android.os.PowerManager
 import android.provider.Settings
+import androidx.activity.compose.BackHandler
+import androidx.activity.compose.LocalActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -25,6 +29,20 @@ import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.material3.Text
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.ui.focus.FocusRequester
+import androidx.core.app.ActivityCompat
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateListOf
@@ -65,6 +83,17 @@ import app.wallhop.notify.MirroredApps
 import app.wallhop.sms.SmsStore
 import app.wallhop.ui.components.ActionSheetSpec
 import app.wallhop.ui.components.AlertAction
+import app.wallhop.ui.components.AlertSpec
+import app.wallhop.ui.components.ButtonStyle
+import app.wallhop.ui.components.LocalOverlays
+import app.wallhop.ui.components.ToastAction
+import app.wallhop.ui.components.WButton
+import app.wallhop.ui.design.Type
+import app.wallhop.ui.screens.LicencesScreen
+import app.wallhop.ui.screens.MacDetails
+import app.wallhop.ui.screens.openAppDetails
+import app.wallhop.ui.screens.openLink
+import app.wallhop.ui.screens.showEntryActions
 import app.wallhop.ui.components.FloatingTabBar
 import app.wallhop.ui.components.GlassStage
 import app.wallhop.ui.components.MenuItem
@@ -118,12 +147,29 @@ fun WallhopRoot(link: LinkManager, demo: Boolean = false) {
 
     var tab by rememberSaveable { mutableIntStateOf(0) }
     var showApps by rememberSaveable { mutableStateOf(false) }
+    var showLicences by rememberSaveable { mutableStateOf(false) }
     var minimized by remember { mutableStateOf(false) }
     var scanning by rememberSaveable { mutableStateOf(false) }
+    // The last pairing attempt, for "Try again" when it fails.
+    var retryPair by remember { mutableStateOf<(() -> Unit)?>(null) }
     val screen = when (state) {
-        is LinkState.NotPaired, is LinkState.PairingFailed, is LinkState.Forgotten -> 0
+        is LinkState.NotPaired, is LinkState.PairingFailed -> 0
         is LinkState.Pairing -> 1
         else -> 2
+    }
+    // The Mac says it no longer knows this phone. The pairing is kept (and retried) until the
+    // user chooses to pair again.
+    LaunchedEffect(state is LinkState.Forgotten) {
+        if (state is LinkState.Forgotten) {
+            overlays.showAlert(AlertSpec(
+                title = "Your Mac forgot this phone",
+                message = "${state.macName} no longer recognises this phone. Pair again to keep codes and files going across.",
+                actions = listOf(
+                    AlertAction("Pair again", default = true) { link.dismissPairingProblem() },
+                    AlertAction("Not now"),
+                ),
+            ))
+        }
     }
     // Scrolling down tucks the tab bar away; scrolling up brings it back (DESIGN.md §5.2).
     val minimizer = remember {
@@ -137,6 +183,7 @@ fun WallhopRoot(link: LinkManager, demo: Boolean = false) {
     }
 
     // One recorded content layer for the whole app; the tab bar and overlays float above it.
+    CompositionLocalProvider(LocalOverlays provides overlays) {
     GlassStage(
         modifier = Modifier.fillMaxSize(),
         background = colors.background,
@@ -150,25 +197,34 @@ fun WallhopRoot(link: LinkManager, demo: Boolean = false) {
                 when (screen) {
                     0 -> if (scanning) {
                         app.wallhop.ui.screens.QrScanScreen(
-                            onScanned = { invite -> scanning = false; link.pair(invite) },
+                            onScanned = { invite ->
+                                scanning = false
+                                retryPair = { scanning = true } // A QR code is used once: scan the new one.
+                                link.pair(invite)
+                            },
                             onClose = { scanning = false },
                         )
                     } else {
                         ConnectScreen(
                             macs = macs,
-                            problem = state.takeIf { it is LinkState.PairingFailed || it is LinkState.Forgotten },
+                            problem = state.takeIf { it is LinkState.PairingFailed },
                             overlays = overlays,
-                            onPair = { host, port, name -> link.pair(host, port, name) },
+                            onPair = { host, port, name ->
+                                retryPair = { link.pair(host, port, name) }
+                                link.pair(host, port, name)
+                            },
                             onDismissProblem = { link.dismissPairingProblem() },
                             onScan = { scanning = true },
+                            onRetry = retryPair,
                         )
                     }
                     1 -> (state as? LinkState.Pairing)?.let { PairingScreen(it) { link.cancelPairing() } }
                     else -> Tabs(
                         link, state, setup, overlays, demo,
-                        tab = tab, showApps = showApps,
-                        onTab = { tab = it; showApps = false; minimized = false },
+                        tab = tab, showApps = showApps, showLicences = showLicences,
+                        onTab = { tab = it; showApps = false; showLicences = false; minimized = false },
                         onShowApps = { showApps = it },
+                        onShowLicences = { showLicences = it },
                         onPermissionChange = { resumes++ },
                     )
                 }
@@ -188,15 +244,17 @@ fun WallhopRoot(link: LinkManager, demo: Boolean = false) {
                         TabItem("Settings", WIcons.Settings, badge = !setup.essentialsDone),
                     ),
                     selected = tab,
-                    onSelect = { tab = it; showApps = false; minimized = false },
+                    onSelect = { tab = it; showApps = false; showLicences = false; minimized = false },
                     modifier = Modifier
                         .navigationBarsPadding()
+                        .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal))
                         .padding(bottom = 12.dp),
                 )
             }
             OverlayHost(overlays)
         },
     )
+    }
 }
 
 @Composable
@@ -208,152 +266,319 @@ private fun Tabs(
     demo: Boolean,
     tab: Int,
     showApps: Boolean,
+    showLicences: Boolean,
     onTab: (Int) -> Unit,
     onShowApps: (Boolean) -> Unit,
+    onShowLicences: (Boolean) -> Unit,
     onPermissionChange: () -> Unit,
 ) {
     val context = LocalContext.current
+    val activityHost = LocalActivity.current
     val colors = Wallhop.colors
     val haptics = rememberHaptics()
     val scope = rememberCoroutineScope()
-    val transfer by link.transfer.collectAsStateWithLifecycle()
     val realActivity by link.activity.collectAsStateWithLifecycle()
-    val macInfo by link.macInfo.collectAsStateWithLifecycle()
-    val latency by link.latencyMs.collectAsStateWithLifecycle()
-    val connectedSince by link.connectedSince.collectAsStateWithLifecycle()
-    val activity = if (demo) remember { demoActivity() } else realActivity
-    val card = if (demo) {
-        app.wallhop.ui.screens.MacCardData(
-            macInfo.copy(battery = 82, charging = true, laptop = true), latencyMs = 9,
-            connectedSince = remember { System.currentTimeMillis() - 134 * 60_000L }, latest = activity.firstOrNull(), transfer = transfer,
-            recent = activity.take(4),
-        )
-    } else {
-        app.wallhop.ui.screens.MacCardData(macInfo, latency, connectedSince, activity.firstOrNull(), transfer, activity.take(4))
-    }
+    // Deleted entries wait here while the Undo toast is up; then they're removed for good.
+    val deleting = remember { mutableStateListOf<String>() }
+    val activity = (if (demo) remember { demoActivity() } else realActivity).filterNot { it.id in deleting }
     val mirrored by remember { MirroredApps.get(context) }.enabled.collectAsStateWithLifecycle()
 
-    val draft = remember { mutableStateOf("") }
+    // Kept across rotation, and the sheet reopens with it.
+    val draft = rememberSaveable { mutableStateOf("") }
+    val textSheetOpen = rememberSaveable { mutableStateOf(false) }
+    val sendingText = remember { mutableStateOf(false) }
 
     val macName = when (state) {
         is LinkState.Connected -> state.macName
         is LinkState.Searching -> state.macName
         else -> link.pairedMac?.name ?: "Your Mac"
     }
+    // The actions below are made once, so a tab doesn't recompose for nothing; they read
+    // whatever changes through these.
+    val currentMacName by rememberUpdatedState(macName)
+    val currentColors by rememberUpdatedState(colors)
+    val currentOnTab by rememberUpdatedState(onTab)
+    val currentOnShowApps by rememberUpdatedState(onShowApps)
+    val currentOnShowLicences by rememberUpdatedState(onShowLicences)
+    val currentOnPermissionChange by rememberUpdatedState(onPermissionChange)
+    val currentSetup by rememberUpdatedState(setup)
 
-    // Permission requests.
-    val single = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { onPermissionChange() }
-    val multiple = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { onPermissionChange() }
+    // Permission requests. [asking] is the feature waiting for Android's answer.
+    val asking = rememberSaveable { mutableStateOf<String?>(null) }
+    val askingFor = rememberSaveable { mutableStateOf("") }
+    fun answered(granted: Boolean) {
+        val key = asking.value?.let { runCatching { Features.Key.valueOf(it) }.getOrNull() }
+        val permissions = askingFor.value.split(',').filter { it.isNotEmpty() }
+        asking.value = null
+        if (!granted && key != null) {
+            // Denied: the switch goes off, so the setup badge doesn't nag about it.
+            Features.set(context, key, false)
+            val asked = context.getSharedPreferences("permissions", Context.MODE_PRIVATE)
+            val blocked = activityHost != null && permissions.any { permission ->
+                asked.getBoolean(permission, false) &&
+                    ContextCompat.checkSelfPermission(context, permission) != PackageManager.PERMISSION_GRANTED &&
+                    !ActivityCompat.shouldShowRequestPermissionRationale(activityHost, permission)
+            }
+            if (blocked) showBlockedAlert(overlays, context, key)
+        }
+        context.getSharedPreferences("permissions", Context.MODE_PRIVATE).edit {
+            permissions.forEach { putBoolean(it, true) }
+        }
+        currentOnPermissionChange()
+    }
+    val single = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { answered(it) }
+    val multiple = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
+        answered(result.isNotEmpty() && result.values.all { it })
+    }
+    fun request(key: Features.Key, vararg permissions: String) {
+        asking.value = key.name
+        askingFor.value = permissions.joinToString(",")
+        if (permissions.size == 1) single.launch(permissions[0]) else multiple.launch(arrayOf(*permissions))
+    }
     // Android's "allow in background?" dialog. Some phones close it at once without showing it;
     // then the app's battery page is the way, so a tap never does nothing.
     var batteryAskedAt by remember { mutableStateOf(0L) }
     val battery = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
-        onPermissionChange()
+        currentOnPermissionChange()
         val instant = android.os.SystemClock.elapsedRealtime() - batteryAskedAt < 800
         if (instant && !isBackgroundAllowed(context)) openAppBatterySettings(context)
     }
+    // The last picker used, so a failed transfer with nothing to resend can reopen it.
+    var lastPicker by remember { mutableIntStateOf(0) }
     val pickPhotos = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(50)) { uris ->
+        Pickers.open = false
         if (uris.isNotEmpty()) LinkService.sendFiles(context, uris)
     }
     val pickFiles = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+        Pickers.open = false
         if (uris.isNotEmpty()) LinkService.sendFiles(context, uris)
+    }
+    fun launchPicker(which: Int) {
+        lastPicker = which
+        Pickers.open = true
+        runCatching {
+            if (which == 0) pickPhotos.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo))
+            else pickFiles.launch(arrayOf("*/*"))
+        }.onFailure { Pickers.open = false }
     }
 
     fun report(ok: Boolean, what: String) {
         if (ok) {
             haptics.perform(Haptic.Success)
-            overlays.toast("$what sent to your Mac", WIcons.CheckCircle, colors.green)
+            overlays.toast("$what sent to your Mac", WIcons.CheckCircle, currentColors.green)
         } else {
-            overlays.toast("Couldn't reach your Mac", WIcons.Warning, colors.red)
+            overlays.toast("Couldn't reach your Mac", WIcons.Warning, currentColors.red)
         }
     }
 
     fun confirmForget() {
+        val name = currentMacName
         overlays.showActionSheet(ActionSheetSpec(
-            message = "Codes and files stop going to $macName until you pair again.",
-            actions = listOf(AlertAction("Forget $macName", destructive = true) { link.forgetMac() }),
+            message = "Codes and files stop going to $name until you pair again.",
+            actions = listOf(AlertAction("Forget $name", destructive = true) { link.forgetMac() }),
         ))
     }
 
-    LaunchedEffect(transfer?.phase) {
-        when (transfer?.phase) {
-            TransferPhase.Done -> {
-                haptics.perform(Haptic.Success)
-                delay(4_000)
-                link.clearFinishedTransfer()
-            }
-            TransferPhase.Failed -> haptics.perform(Haptic.Failure)
-            else -> Unit
+    fun showMacDetails() {
+        overlays.showSheet(title = currentMacName) {
+            val liveState by link.state.collectAsStateWithLifecycle()
+            val info by link.macInfo.collectAsStateWithLifecycle()
+            val latency by link.latencyMs.collectAsStateWithLifecycle()
+            val since by link.connectedSince.collectAsStateWithLifecycle()
+            MacDetails(if (demo) state else liveState, info, latency, since, onForget = {
+                overlays.dismissSheet(cancelled = false)
+                confirmForget()
+            })
         }
     }
 
-    val macActions = MacActions(
-        sendPhotos = { pickPhotos.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo)) },
-        sendFiles = { pickFiles.launch(arrayOf("*/*")) },
-        sendText = {
-            overlays.showSheet(
-                title = "Send text",
-                leading = { TextAction("Cancel", onClick = { overlays.dismissSheet() }) },
-                trailing = {
-                    TextAction("Send", bold = true, enabled = draft.value.isNotBlank(), onClick = {
-                        val text = draft.value
-                        overlays.dismissSheet()
-                        draft.value = ""
-                        scope.launch { report(link.sendText(text), "Text") }
-                    })
-                },
-            ) {
-                WTextField(draft.value, { draft.value = it }, "It lands on your Mac's clipboard", singleLine = false, minLines = 5)
+    fun deleteEntry(id: String) {
+        deleting += id
+        overlays.toast("Deleted", action = ToastAction("Undo") { deleting -= id })
+        scope.launch {
+            delay(5_500) // A little longer than the toast, so Undo is always in time.
+            if (id in deleting) {
+                link.removeActivity(id)
+                deleting -= id
             }
-        },
-        sendClipboard = {
-            val text = context.getSystemService(ClipboardManager::class.java).primaryClip
-                ?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.coerceToText(context)?.toString()
-            if (text.isNullOrBlank()) {
-                overlays.toast("Your clipboard is empty")
-            } else {
-                scope.launch {
-                    val isLink = app.wallhop.extras.isSingleUrl(text)
-                    report(if (isLink) link.openOnMac(text.trim()) else link.sendText(text), if (isLink) "Link" else "Clipboard")
-                }
-            }
-        },
-        cancelTransfer = { link.cancelTransfer() },
-        dismissTransfer = { link.clearFinishedTransfer() },
-        openSettings = { onTab(2) },
-        openActivity = { onTab(1) },
-        more = { anchor ->
-            overlays.showMenu(anchor, listOf(
-                MenuItem("Settings", WIcons.Settings) { onTab(2) },
-                MenuItem("Forget this Mac", WIcons.LinkBreak, destructive = true) { confirmForget() },
-            ))
-        },
-    )
+        }
+    }
 
-    val settingsActions = SettingsActions(
-        allowSms = { single.launch(Manifest.permission.RECEIVE_SMS) },
-        allowCalls = { multiple.launch(CallControl.permissions) },
-        allowTexts = { multiple.launch(SmsStore.permissions) },
-        allowNotifications = {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) single.launch(Manifest.permission.POST_NOTIFICATIONS)
-        },
-        openNotificationAccess = { context.startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)) },
-        allowBackground = {
-            if (!isBackgroundAllowed(context)) {
-                batteryAskedAt = android.os.SystemClock.elapsedRealtime()
-                runCatching {
-                    battery.launch(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:${context.packageName}")))
-                }.onFailure { openAppBatterySettings(context) }
+    fun showTextSheet() {
+        textSheetOpen.value = true
+        overlays.showSheet(
+            title = "Send text",
+            leading = { TextAction("Cancel", onClick = { overlays.dismissSheet() }) },
+            trailing = {
+                TextAction(
+                    if (sendingText.value) "Sending…" else "Send",
+                    bold = true,
+                    enabled = draft.value.isNotBlank() && !sendingText.value,
+                    onClick = {
+                        val text = draft.value
+                        sendingText.value = true
+                        scope.launch {
+                            val ok = link.sendText(text)
+                            sendingText.value = false
+                            // Only a sent text is cleared; after a failure it's still there to try again.
+                            if (ok) {
+                                draft.value = ""
+                                if (textSheetOpen.value) {
+                                    textSheetOpen.value = false
+                                    overlays.dismissSheet(cancelled = false)
+                                }
+                            }
+                            report(ok, "Text")
+                        }
+                    },
+                )
+            },
+            onDismiss = { textSheetOpen.value = false },
+        ) {
+            val focus = remember { FocusRequester() }
+            LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
+            WTextField(
+                draft.value, { draft.value = it }, "It lands on your Mac's clipboard",
+                singleLine = false, minLines = 5, label = "Text for your Mac", focusRequester = focus,
+            )
+        }
+    }
+    // Rotated with the sheet open: open it again, draft and all.
+    LaunchedEffect(Unit) { if (textSheetOpen.value) showTextSheet() }
+
+    // Before Android's own prompt: what Lync does with this, in a sentence (Play's prominent disclosure).
+    fun disclose(
+        key: Features.Key,
+        title: String,
+        message: String,
+        extra: (@Composable () -> Unit)? = null,
+        onContinue: () -> Unit,
+    ) {
+        overlays.showSheet(
+            title = title,
+            onDismiss = {
+                Features.set(context, key, false)
+                currentOnPermissionChange()
+            },
+        ) {
+            Text(message, style = Type.body, color = Wallhop.colors.labelSecondary)
+            extra?.invoke()
+            Spacer(Modifier.height(20.dp))
+            WButton("Continue", {
+                overlays.dismissSheet(cancelled = false)
+                onContinue()
+            }, style = ButtonStyle.Filled, modifier = Modifier.fillMaxWidth())
+            Spacer(Modifier.height(8.dp))
+            WButton("Not now", { overlays.dismissSheet() }, style = ButtonStyle.Glass, modifier = Modifier.fillMaxWidth())
+        }
+    }
+
+    fun requestNotificationAccess() = disclose(
+        Features.Key.AppNotifications,
+        "Notification access",
+        "Lync reads notifications from the apps you choose and shows them only on your paired Mac. They never go anywhere else, and you can turn this off at any time.",
+        extra = if (!app.wallhop.core.KeepAlive.restrictedSettingsLikely(context)) null else {
+            {
+                // Installed from an APK on Android 13+: Android greys out the switch until this is allowed.
+                Spacer(Modifier.height(12.dp))
+                Text(
+                    "If Lync's switch there is greyed out: open App info › ⋮ (top right) › Allow restricted settings, then come back.",
+                    style = Type.footnote, color = Wallhop.colors.labelSecondary,
+                )
+                Spacer(Modifier.height(12.dp))
+                WButton("Open App info", { app.wallhop.core.KeepAlive.openAppInfo(context) },
+                    style = ButtonStyle.Glass, modifier = Modifier.fillMaxWidth())
             }
         },
-        setFeature = { key, on ->
-            app.wallhop.core.Features.set(context, key, on)
-            if (key == app.wallhop.core.Features.Key.Background && on) LinkService.start(context)
-            onPermissionChange()
-        },
-        forgetMac = { confirmForget() },
-        sendTestCode = { link.sendOtp((100000..999999).random().toString(), "Lync test", "debug") },
-    )
+    ) { openNotificationAccess(context, overlays, currentColors.red) }
+
+    val macActions = remember {
+        MacActions(
+            sendPhotos = { launchPicker(0) },
+            sendFiles = { launchPicker(1) },
+            sendText = { showTextSheet() },
+            sendClipboard = {
+                val text = context.getSystemService(ClipboardManager::class.java).primaryClip
+                    ?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.coerceToText(context)?.toString()
+                if (text.isNullOrBlank()) {
+                    overlays.toast("Your clipboard is empty")
+                } else {
+                    scope.launch {
+                        val isLink = app.wallhop.extras.isSingleUrl(text)
+                        report(if (isLink) link.openOnMac(text.trim()) else link.sendText(text), if (isLink) "Link" else "Clipboard")
+                    }
+                }
+            },
+            cancelTransfer = {
+                link.cancelTransfer()
+                overlays.toast("Cancelled")
+            },
+            dismissTransfer = { link.clearFinishedTransfer() },
+            retryTransfer = { transfer ->
+                link.clearFinishedTransfer()
+                if (transfer.items.isNotEmpty()) LinkService.sendFiles(context, transfer.items.map { it.uri }) else launchPicker(lastPicker)
+            },
+            openSettings = { currentOnTab(2) },
+            openActivity = { currentOnTab(1) },
+            macDetails = { showMacDetails() },
+            entryActions = { entry -> showEntryActions(overlays, context, entry) { deleteEntry(it) } },
+            more = { anchor ->
+                overlays.showMenu(anchor, listOf(
+                    MenuItem("Mac details", WIcons.Laptop) { showMacDetails() },
+                    MenuItem("Forget this Mac", WIcons.LinkBreak, destructive = true) { confirmForget() },
+                ))
+            },
+        )
+    }
+
+    val settingsActions = remember {
+        SettingsActions(
+            allowSms = {
+                disclose(Features.Key.Codes, "Codes from messages",
+                    "Lync reads incoming texts only to find one-time codes, and sends just the code to your paired Mac.",
+                ) { request(Features.Key.Codes, Manifest.permission.RECEIVE_SMS) }
+            },
+            allowCalls = {
+                disclose(Features.Key.Calls, "Calls",
+                    "Lync shows who's calling on your paired Mac, so you can answer there; call details only go to your Mac.",
+                ) { request(Features.Key.Calls, *CallControl.permissions) }
+            },
+            allowTexts = {
+                disclose(Features.Key.Texts, "Texts",
+                    "Lync reads and sends your text messages so you can use them on your paired Mac; they only go to your Mac.",
+                ) { request(Features.Key.Texts, *SmsStore.permissions) }
+            },
+            allowNotifications = {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    request(Features.Key.Notifications, Manifest.permission.POST_NOTIFICATIONS)
+                }
+            },
+            openNotificationAccess = { requestNotificationAccess() },
+            allowBackground = {
+                if (!isBackgroundAllowed(context)) {
+                    batteryAskedAt = android.os.SystemClock.elapsedRealtime()
+                    runCatching {
+                        battery.launch(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, "package:${context.packageName}".toUri()))
+                    }.onFailure { openAppBatterySettings(context) }
+                }
+            },
+            setFeature = { key, on ->
+                Features.set(context, key, on)
+                if (key == Features.Key.Background && on) LinkService.start(context)
+                currentOnPermissionChange()
+            },
+            forgetMac = { confirmForget() },
+            sendTestCode = { link.sendOtp((100000..999999).random().toString(), "Lync test", "debug") },
+            macDetails = { showMacDetails() },
+            openLicences = { currentOnShowLicences(true) },
+            openPrivacy = { openLink(context, PRIVACY_URL) },
+        )
+    }
+
+    TransferEffects(link)
+
+    // Back on Activity or Settings goes to Home first, then leaves the app.
+    BackHandler(enabled = tab != 0 && !showApps && !showLicences) { onTab(0) }
 
     // All three tabs stay alive: switching is instant and each keeps its scroll position, like iOS.
     // Hidden tabs aren't drawn and their animations pause.
@@ -363,11 +588,22 @@ private fun Tabs(
         for (index in 0..2) {
             if (index !in visited) continue
             key(index) {
-                TabSlot(visible = index == tab && !showApps) {
+                TabSlot(visible = index == tab && !showApps && !showLicences) {
                     when (index) {
-                        0 -> MacTab(state, macName, transfer, needsSetup = !setup.essentialsDone, actions = macActions, card = card)
-                        1 -> ActivityTab(activity, overlays, onDelete = { link.removeActivity(it) })
-                        else -> SettingsTab(setup, link.pairedMac?.name, mirrored.size, settingsActions, openApps = { onShowApps(true) })
+                        0 -> HomeSlot(link, state, macName, !setup.essentialsDone, macActions, activity, demo)
+                        1 -> ActivityTab(activity, overlays, onDelete = { deleteEntry(it) })
+                        else -> SettingsTab(
+                            setup, link.pairedMac?.name,
+                            macStatus = when (state) {
+                                is LinkState.Connected -> "Connected"
+                                is LinkState.Searching -> "Looking for your Mac…"
+                                is LinkState.Forgotten -> "Your Mac no longer recognises this phone"
+                                else -> null
+                            },
+                            mirroredCount = mirrored.size,
+                            actions = settingsActions,
+                            openApps = { currentOnShowApps(true) },
+                        )
                     }
                 }
             }
@@ -379,12 +615,100 @@ private fun Tabs(
             exit = slideOutHorizontally(Springs.smooth()) { it },
         ) {
             AppsScreen(
-                hasNotificationAccess = setup.notificationAccess,
-                onOpenAccess = settingsActions.openNotificationAccess,
+                // Android's access, whatever Lync's own switch says: no trip to Settings when it's already on.
+                hasNotificationAccess = Features.Key.AppNotifications in currentSetup.granted,
+                switchedOn = currentSetup.notificationAccess,
+                onOpenAccess = { requestNotificationAccess() },
+                onSwitchOn = { settingsActions.setFeature(Features.Key.AppNotifications, true) },
                 onBack = { onShowApps(false) },
             )
         }
+        androidx.compose.animation.AnimatedVisibility(
+            visible = showLicences,
+            modifier = Modifier.zIndex(2f),
+            enter = slideInHorizontally(Springs.smooth()) { it },
+            exit = slideOutHorizontally(Springs.smooth()) { it },
+        ) {
+            LicencesScreen(overlays, onBack = { onShowLicences(false) })
+        }
     }
+}
+
+/** Home, with the things that change often (transfer progress, the Mac's battery) read here only. */
+@Composable
+private fun HomeSlot(
+    link: LinkManager,
+    state: LinkState,
+    macName: String,
+    needsSetup: Boolean,
+    actions: MacActions,
+    activity: List<app.wallhop.link.ActivityEntry>,
+    demo: Boolean,
+) {
+    val transfer by link.transfer.collectAsStateWithLifecycle()
+    val macInfo by link.macInfo.collectAsStateWithLifecycle()
+    val latency by link.latencyMs.collectAsStateWithLifecycle()
+    val connectedSince by link.connectedSince.collectAsStateWithLifecycle()
+    val card = if (demo) {
+        app.wallhop.ui.screens.MacCardData(
+            macInfo.copy(battery = 82, charging = true, laptop = true), latencyMs = 9,
+            connectedSince = remember { System.currentTimeMillis() - 134 * 60_000L }, latest = activity.firstOrNull(), transfer = transfer,
+            recent = activity.take(4),
+        )
+    } else {
+        app.wallhop.ui.screens.MacCardData(macInfo, latency, connectedSince, activity.firstOrNull(), transfer, activity.take(4))
+    }
+    MacTab(state, macName, transfer, needsSetup, actions = actions, card = card)
+}
+
+/** Haptics when a transfer ends; a finished one clears itself after a moment. */
+@Composable
+private fun TransferEffects(link: LinkManager) {
+    val haptics = rememberHaptics()
+    // Only the phase: this doesn't recompose for every progress update.
+    val phase by remember(link) { link.transfer.map { it?.phase }.distinctUntilChanged() }
+        .collectAsStateWithLifecycle(null)
+    LaunchedEffect(phase) {
+        when (phase) {
+            TransferPhase.Done -> {
+                haptics.perform(Haptic.Success)
+                delay(4_000)
+                link.clearFinishedTransfer()
+            }
+            TransferPhase.Failed -> haptics.perform(Haptic.Failure)
+            else -> Unit
+        }
+    }
+}
+
+private const val PRIVACY_URL = "https://github.com/santhoshsunkara24/Lync/blob/main/docs/PRIVACY.md"
+
+/** Android said no and won't ask again: explain, and offer Lync's page in Settings. */
+private fun showBlockedAlert(overlays: Overlays, context: Context, key: Features.Key) {
+    val (permission, feature) = when (key) {
+        Features.Key.Codes -> "SMS" to "codes from messages"
+        Features.Key.Calls -> "Phone" to "calls"
+        Features.Key.Texts -> "SMS" to "texts"
+        Features.Key.Notifications -> "Notifications" to "Lync's notifications"
+        else -> return
+    }
+    overlays.showAlert(AlertSpec(
+        title = "Allow $permission in Settings",
+        message = "Android won't ask again. To use $feature, open Lync's settings, tap Permissions and allow $permission.",
+        actions = listOf(
+            AlertAction("Open Settings", default = true) { openAppDetails(context) },
+            AlertAction("Not now"),
+        ),
+    ))
+}
+
+/** Android's notification access page; Lync's app page if a phone doesn't have it. */
+private fun openNotificationAccess(context: Context, overlays: Overlays, red: androidx.compose.ui.graphics.Color) {
+    runCatching { context.startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)) }
+        .recoverCatching {
+            context.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, "package:${context.packageName}".toUri()))
+        }
+        .onFailure { overlays.toast("Couldn't open Settings. Allow Lync under Notification access.", WIcons.Warning, red) }
 }
 
 /** A kept-alive tab: fades and drifts in when selected; when hidden it isn't drawn or announced. */
@@ -462,6 +786,6 @@ private fun isBackgroundAllowed(context: Context): Boolean =
 /** Wallhop's page in Android's settings, where App battery usage › Unrestricted lives. */
 private fun openAppBatterySettings(context: Context) {
     runCatching {
-        context.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${context.packageName}")))
-    }.onFailure { context.startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)) }
+        context.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, "package:${context.packageName}".toUri()))
+    }.recoverCatching { context.startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)) }
 }

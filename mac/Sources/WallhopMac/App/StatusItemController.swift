@@ -11,7 +11,7 @@ final class StatusItemController: NSObject {
     /// Opens or closes the panel. Set by the app delegate.
     var onToggle: () -> Void = {}
 
-    init(model: AppModel) {
+    init(model: AppModel, menu: @escaping () -> NSMenu) {
         self.model = model
         super.init()
 
@@ -19,9 +19,8 @@ final class StatusItemController: NSObject {
             button.target = self
             button.action = #selector(togglePopover)
             button.imagePosition = .imageOnly
-            let drop = DropTargetView(frame: button.bounds) { [weak self] urls in
-                self?.model.sendFilesToPhone(urls)
-            } onClick: { [weak self] in
+            button.setAccessibilityLabel("Lync")
+            let drop = DropTargetView(frame: button.bounds, drop: FileDropHandler(model: model), menu: menu) { [weak self] in
                 self?.togglePopover()
             }
             drop.autoresizingMask = [.width, .height]
@@ -85,13 +84,15 @@ final class StatusItemController: NSObject {
     }
 }
 
-/// Sits on top of the status item button to accept dropped files.
+/// Sits on top of the status item button to accept dropped files and show the right-click menu.
 private final class DropTargetView: NSView {
-    private let onDrop: ([URL]) -> Void
+    private let drop: FileDropHandler
+    private let makeMenu: () -> NSMenu
     private let onClick: () -> Void
 
-    init(frame: NSRect, onDrop: @escaping ([URL]) -> Void, onClick: @escaping () -> Void) {
-        self.onDrop = onDrop
+    init(frame: NSRect, drop: FileDropHandler, menu: @escaping () -> NSMenu, onClick: @escaping () -> Void) {
+        self.drop = drop
+        self.makeMenu = menu
         self.onClick = onClick
         super.init(frame: frame)
         registerForDraggedTypes([.fileURL])
@@ -99,22 +100,54 @@ private final class DropTargetView: NSView {
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
 
-    override func mouseDown(with event: NSEvent) { onClick() }
-
-    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
-        fileURLs(from: sender).isEmpty ? [] : .copy
+    override func mouseDown(with event: NSEvent) {
+        if event.modifierFlags.contains(.control) { rightMouseDown(with: event) } else { onClick() }
     }
 
-    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
-        let urls = fileURLs(from: sender)
-        guard !urls.isEmpty else { return false }
-        onDrop(urls)
+    override func rightMouseDown(with event: NSEvent) {
+        let menu = makeMenu()
+        // Under the icon, like a menu bar menu.
+        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: bounds.minY - 4), in: self)
+    }
+
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation { drop.entered(sender) }
+    override func draggingExited(_ sender: NSDraggingInfo?) { drop.exited() }
+    override func draggingEnded(_ sender: NSDraggingInfo) { drop.exited() }
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool { drop.perform(sender) }
+}
+
+/// Files dragged onto the notch or the menu bar icon. Only accepted while a phone is connected;
+/// folders are left out (and the user told so).
+final class FileDropHandler {
+    private let model: AppModel
+
+    init(model: AppModel) {
+        self.model = model
+    }
+
+    func entered(_ info: NSDraggingInfo) -> NSDragOperation {
+        let (files, folders) = Self.read(info)
+        guard !files.isEmpty || folders > 0 else { return [] }
+        model.dropHover(true)
+        return model.connectedPhone != nil && !files.isEmpty ? .copy : []
+    }
+
+    func exited() {
+        model.dropHover(false)
+    }
+
+    func perform(_ info: NSDraggingInfo) -> Bool {
+        model.dropHover(false)
+        let (files, folders) = Self.read(info)
+        guard model.connectedPhone != nil, !files.isEmpty else { return false }
+        model.sendFilesToPhone(files, skippedFolders: folders)
         return true
     }
 
-    private func fileURLs(from info: NSDraggingInfo) -> [URL] {
+    private static func read(_ info: NSDraggingInfo) -> (files: [URL], folders: Int) {
         let options: [NSPasteboard.ReadingOptionKey: Any] = [.urlReadingFileURLsOnly: true]
         let urls = info.draggingPasteboard.readObjects(forClasses: [NSURL.self], options: options) as? [URL] ?? []
-        return urls.filter { !$0.hasDirectoryPath }
+        let files = urls.filter { !$0.hasDirectoryPath }
+        return (files, urls.count - files.count)
     }
 }

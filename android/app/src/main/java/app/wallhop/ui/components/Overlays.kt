@@ -28,6 +28,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
@@ -58,6 +59,9 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.IntOffset
@@ -88,10 +92,13 @@ class SheetSpec(
     val trailing: (@Composable () -> Unit)?,
     /** Tall sheets attach to the screen edges and become opaque, like iOS at the large detent. */
     val large: Boolean,
+    /** Called when the sheet is closed without its main action: Cancel, a swipe, a tap outside, back. */
+    val onDismiss: (() -> Unit)?,
     val content: @Composable ColumnScope.() -> Unit,
 )
 
-class AlertSpec(val title: String, val message: String?, val actions: List<AlertAction>)
+/** [onBack] runs when back closes the alert; by default back just closes it. */
+class AlertSpec(val title: String, val message: String?, val actions: List<AlertAction>, val onBack: (() -> Unit)? = null)
 
 data class AlertAction(val label: String, val destructive: Boolean = false, val default: Boolean = false, val onClick: () -> Unit = {})
 
@@ -102,7 +109,16 @@ data class MenuItem(val label: String, val icon: ImageVector? = null, val destru
 /** A menu that grows out of the button at [anchor] (root coordinates). */
 class MenuSpec(val anchor: Rect, val items: List<MenuItem>)
 
-data class ToastSpec(val text: String, val icon: ImageVector?, val tint: Color? = null, val id: Long = System.nanoTime())
+/** One button on a toast, e.g. "Undo". */
+class ToastAction(val label: String, val onClick: () -> Unit)
+
+data class ToastSpec(
+    val text: String,
+    val icon: ImageVector?,
+    val tint: Color? = null,
+    val action: ToastAction? = null,
+    val id: Long = System.nanoTime(),
+)
 
 /** Everything that floats above the app. One instance at the app root. */
 @Stable
@@ -118,19 +134,27 @@ class Overlays {
         large: Boolean = false,
         leading: (@Composable () -> Unit)? = null,
         trailing: (@Composable () -> Unit)? = null,
+        onDismiss: (() -> Unit)? = null,
         content: @Composable ColumnScope.() -> Unit,
     ) {
-        sheet = SheetSpec(title, leading, trailing, large, content)
+        sheet = SheetSpec(title, leading, trailing, large, onDismiss, content)
     }
 
-    fun dismissSheet() { sheet = null }
+    /** Closes the sheet. [cancelled] false when its main action closed it, so onDismiss doesn't run. */
+    fun dismissSheet(cancelled: Boolean = true) {
+        val closing = sheet
+        sheet = null
+        if (cancelled) closing?.onDismiss?.invoke()
+    }
     fun showAlert(spec: AlertSpec) { alert = spec }
     fun dismissAlert() { alert = null }
     fun showActionSheet(spec: ActionSheetSpec) { actionSheet = spec }
     fun dismissActionSheet() { actionSheet = null }
     fun showMenu(anchor: Rect, items: List<MenuItem>) { menu = MenuSpec(anchor, items) }
     fun dismissMenu() { menu = null }
-    fun toast(text: String, icon: ImageVector? = null, tint: Color? = null) { toast = ToastSpec(text, icon, tint) }
+    fun toast(text: String, icon: ImageVector? = null, tint: Color? = null, action: ToastAction? = null) {
+        toast = ToastSpec(text, icon, tint, action)
+    }
     internal fun clearToast(id: Long) { if (toast?.id == id) toast = null }
 }
 
@@ -237,7 +261,7 @@ private fun BoxScope.SheetLayer(overlays: Overlays) {
                 Box(Modifier.fillMaxWidth().height(52.dp).padding(horizontal = 16.dp)) {
                     Box(Modifier.align(Alignment.CenterStart)) { spec.leading?.invoke() }
                     if (spec.title != null) {
-                        Text(spec.title, style = Type.headline, color = colors.label, modifier = Modifier.align(Alignment.Center))
+                        Text(spec.title, style = Type.title3, color = colors.label, modifier = Modifier.align(Alignment.Center))
                     }
                     Box(Modifier.align(Alignment.CenterEnd)) { spec.trailing?.invoke() }
                 }
@@ -282,8 +306,12 @@ private fun BoxScope.MenuLayer(overlays: Overlays) {
             androidx.compose.ui.geometry.Rect(spec.anchor.left.toDp().value, spec.anchor.top.toDp().value, spec.anchor.right.toDp().value, spec.anchor.bottom.toDp().value)
         }
         val menuWidth = 250.dp
-        val rowHeight = 48.dp
-        val menuHeight = rowHeight * spec.items.size + 12.dp
+        // Rows grow with the font size, so large text never clips.
+        val rowHeight = 48.dp * density.fontScale.coerceAtLeast(1f)
+        // A thin line sets a destructive item (e.g. "Forget this Mac") apart from the rest.
+        val separatorAt = spec.items.indexOfFirst { it.destructive }.takeIf { it > 0 }
+        val separator = if (separatorAt != null) 9.dp else 0.dp
+        val menuHeight = rowHeight * spec.items.size + 12.dp + separator
         val width = lerp(anchor.width.dp, menuWidth, p)
         val height = lerp(anchor.height.dp, menuHeight, p)
         val radius = lerp((anchor.height / 2).dp, Radius.l, p.coerceIn(0f, 1f))
@@ -299,7 +327,10 @@ private fun BoxScope.MenuLayer(overlays: Overlays) {
                 .padding(vertical = 6.dp)
                 .alpha(((p - 0.4f) / 0.6f).coerceIn(0f, 1f)),
         ) {
-            spec.items.forEach { item ->
+            spec.items.forEachIndexed { index, item ->
+                if (index == separatorAt) {
+                    Box(Modifier.padding(vertical = 4.dp).fillMaxWidth().height(1.dp).background(colors.separator))
+                }
                 val source = remember { MutableInteractionSource() }
                 Row(
                     Modifier
@@ -330,6 +361,11 @@ private fun BoxScope.AlertLayer(overlays: Overlays) {
     val colors = Wallhop.colors
     var shown by remember { mutableStateOf<AlertSpec?>(null) }
     if (overlays.alert != null) shown = overlays.alert
+    BackHandler(enabled = overlays.alert != null) {
+        val spec = overlays.alert
+        overlays.dismissAlert()
+        spec?.onBack?.invoke()
+    }
     AnimatedVisibility(
         overlays.alert != null,
         modifier = Modifier.align(Alignment.Center),
@@ -343,7 +379,7 @@ private fun BoxScope.AlertLayer(overlays: Overlays) {
         Column(
             Modifier
                 .graphicsLayer { val s = 1.08f - 0.08f * appear; scaleX = s; scaleY = s }
-                .width(290.dp)
+                .width(270.dp)
                 .glass(rounded(Radius.xl), GlassVariant.Regular, appear = { appear })
                 .padding(20.dp)
                 .alpha(((appear - 0.3f) / 0.7f).coerceIn(0f, 1f)),
@@ -453,7 +489,8 @@ private fun BoxScope.ToastLayer(overlays: Overlays) {
     LaunchedEffect(current?.id) {
         if (current != null) {
             if (current.tint == colors.red) haptics.perform(Haptic.Failure)
-            delay(2_500)
+            // Longer when there's a button to reach, e.g. Undo.
+            delay(if (current.action != null) 5_000 else 2_500)
             overlays.clearToast(current.id)
         }
     }
@@ -471,17 +508,42 @@ private fun BoxScope.ToastLayer(overlays: Overlays) {
             Modifier
                 .statusBarsPadding()
                 .padding(top = 8.dp)
+                .padding(horizontal = 16.dp)
                 .widthIn(max = 360.dp)
                 .alpha(appear.coerceIn(0f, 1f))
                 .clip(capsule())
                 .background(Wallhop.home.pale)
-                .padding(horizontal = 18.dp, vertical = 12.dp),
+                // TalkBack reads it out without moving focus.
+                .semantics { liveRegion = LiveRegionMode.Polite }
+                .padding(start = 18.dp, end = if (spec.action != null) 6.dp else 18.dp, top = 12.dp, bottom = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            // Pale pill, dark text (like the reference's buttons); errors keep their red icon.
-            if (spec.icon != null) Icon(spec.icon, null, tint = if (spec.tint == colors.red) colors.red else Wallhop.home.onPale, modifier = Modifier.size(20.dp))
-            Text(spec.text, style = Type.subheadline.copy(fontWeight = FontWeight.SemiBold), color = Wallhop.home.onPale)
+            // Pale pill, dark text (like the reference's buttons). Icons keep their colour
+            // (red for errors, green for success), darkened enough to read on the pale pill.
+            if (spec.icon != null) {
+                val tint = spec.tint?.let { androidx.compose.ui.graphics.lerp(it, Wallhop.home.onPale, 0.3f) } ?: Wallhop.home.onPale
+                Icon(spec.icon, null, tint = tint, modifier = Modifier.size(20.dp))
+            }
+            Text(spec.text, style = Type.subheadline.copy(fontWeight = FontWeight.SemiBold), color = Wallhop.home.onPale,
+                modifier = Modifier.weight(1f, fill = false))
+            spec.action?.let { action ->
+                val source = remember { MutableInteractionSource() }
+                Box(
+                    Modifier
+                        .heightIn(min = 44.dp)
+                        .clip(capsule())
+                        .background(Wallhop.home.onPale.copy(alpha = 0.1f))
+                        .tappable(source) {
+                            overlays.clearToast(spec.id)
+                            action.onClick()
+                        }
+                        .padding(horizontal = 14.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(action.label, style = Type.subheadline.copy(fontWeight = FontWeight.Bold), color = Wallhop.home.onPale)
+                }
+            }
         }
     }
 }

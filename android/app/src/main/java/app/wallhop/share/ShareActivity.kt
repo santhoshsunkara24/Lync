@@ -1,6 +1,7 @@
 package app.wallhop.share
 
 import app.wallhop.ui.design.WIcons
+import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
@@ -40,7 +41,15 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
+import java.util.UUID
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -100,19 +109,48 @@ class ShareActivity : ComponentActivity() {
 
         val link = LinkManager.get(this)
         val shared = parse(intent)
-        if (savedInstanceState == null && link.pairedMac != null) {
-            when (shared) {
-                is Shared.Files -> LinkService.sendFiles(this, shared.uris)
-                else -> LinkService.start(this)
-            }
-        }
+        // Each send has its own id, so the sheet follows its own transfer, never an earlier one.
+        // Kept across rotation, which must not send again.
+        requestId.value = savedInstanceState?.getString(KEY_REQUEST) ?: UUID.randomUUID().toString()
+        if (savedInstanceState == null && link.pairedMac != null) send(link, shared)
         setContent {
             WallhopTheme {
-                ShareSheet(link, shared, frosted = blurs, onClose = { finish() }, onRetry = {
-                    if (shared is Shared.Files) LinkService.sendFiles(this, shared.uris)
+                ShareSheet(link, shared, requestId.value, frosted = blurs, onClose = { finish() }, onRetry = {
+                    requestId.value = UUID.randomUUID().toString()
+                    send(link, shared)
                 })
             }
         }
+    }
+
+    private val requestId = mutableStateOf("")
+
+    private fun send(link: LinkManager, shared: Shared) {
+        when (shared) {
+            is Shared.Files -> LinkService.sendFiles(this, shared.uris, requestId.value)
+            is Shared.Text -> {
+                LinkService.start(this)
+                ShareSends.send(this, link, requestId.value, shared.text)
+            }
+            Shared.Nothing -> Unit
+        }
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        outState.putString(KEY_REQUEST, requestId.value)
+    }
+
+    override fun onStart() {
+        super.onStart()
+        LinkService.screensOpen++
+    }
+
+    override fun onStop() {
+        super.onStop()
+        LinkService.screensOpen = (LinkService.screensOpen - 1).coerceAtLeast(0)
+        // "Run in background" off: the service stays only while a transfer is still going.
+        if (!isChangingConfigurations) LinkService.stopIfIdle(this)
     }
 
     private fun parse(intent: Intent): Shared {
@@ -128,6 +166,30 @@ class ShareActivity : ComponentActivity() {
         val text = intent.getCharSequenceExtra(Intent.EXTRA_TEXT)?.toString()
         return if (!text.isNullOrBlank()) Shared.Text(text) else Shared.Nothing
     }
+
+    private companion object {
+        const val KEY_REQUEST = "request"
+    }
+}
+
+/**
+ * Shared text and links are sent here, outside the sheet: closing the sheet or rotating doesn't
+ * cancel a send, and a send isn't repeated. Results by request id; null while sending.
+ */
+private object ShareSends {
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+    val results = MutableStateFlow<Map<String, Boolean?>>(emptyMap())
+
+    fun send(context: Context, link: LinkManager, id: String, text: String) {
+        if (id in results.value) return
+        val app = context.applicationContext
+        results.update { it + (id to null) }
+        scope.launch {
+            val ok = if (isSingleUrl(text)) link.openOnMac(text.trim()) else link.sendText(text)
+            results.update { it + (id to ok) }
+            LinkService.stopIfIdle(app)
+        }
+    }
 }
 
 private enum class Outcome { Working, Done, Failed }
@@ -136,6 +198,7 @@ private enum class Outcome { Working, Done, Failed }
 private fun ShareSheet(
     link: LinkManager,
     shared: ShareActivity.Shared,
+    requestId: String,
     frosted: Boolean,
     onClose: () -> Unit,
     onRetry: () -> Unit,
@@ -143,21 +206,19 @@ private fun ShareSheet(
     val colors = Wallhop.colors
     val haptics = rememberHaptics()
     val state by link.state.collectAsStateWithLifecycle()
-    val transfer by link.transfer.collectAsStateWithLifecycle()
+    val anyTransfer by link.transfer.collectAsStateWithLifecycle()
+    // Only this share's own transfer; another one (an earlier share, a send from the app) is ignored.
+    val transfer = anyTransfer?.takeIf { it.id == requestId }
+    // Where it got to, in case the app clears the finished transfer while the sheet is still up.
+    var lastPhase by rememberSaveable(requestId) { mutableStateOf<TransferPhase?>(null) }
+    LaunchedEffect(transfer?.phase) { transfer?.phase?.let { lastPhase = it } }
+    val results by ShareSends.results.collectAsStateWithLifecycle()
+    val textResult = results[requestId]
     val macName = link.pairedMac?.name
     val isLink = shared is ShareActivity.Shared.Text && isSingleUrl(shared.text)
 
-    var textResult by remember { mutableStateOf<Boolean?>(null) }
-    var attempt by remember { mutableIntStateOf(0) }
-    LaunchedEffect(shared, attempt) {
-        if (shared is ShareActivity.Shared.Text && macName != null) {
-            textResult = null
-            textResult = if (isLink) link.openOnMac(shared.text.trim()) else link.sendText(shared.text)
-        }
-    }
-
     val outcome = when (shared) {
-        is ShareActivity.Shared.Files -> when (transfer?.phase) {
+        is ShareActivity.Shared.Files -> when (transfer?.phase ?: lastPhase) {
             TransferPhase.Done -> Outcome.Done
             TransferPhase.Failed -> Outcome.Failed
             else -> Outcome.Working
@@ -179,11 +240,13 @@ private fun ShareSheet(
     LaunchedEffect(visible.currentState, visible.isIdle) {
         if (closing && visible.isIdle && !visible.currentState) onClose()
     }
+    // Some files sent, some unreadable: Done, with a note worth reading before the sheet goes.
+    val partial = (shared as? ShareActivity.Shared.Files)?.let { transfer?.message }
     LaunchedEffect(outcome) {
         when (outcome) {
             Outcome.Done -> {
                 haptics.perform(Haptic.Success)
-                delay(1_300)
+                delay(if (partial != null) 4_000 else 1_300)
                 close()
             }
             Outcome.Failed -> haptics.perform(Haptic.Failure)
@@ -212,20 +275,23 @@ private fun ShareSheet(
                     .padding(horizontal = 20.dp)
                     .padding(bottom = 20.dp),
             ) {
-                Box(
-                    Modifier.padding(top = 6.dp).align(Alignment.CenterHorizontally).size(36.dp, 5.dp)
-                        .clip(capsule()).background(colors.labelTertiary),
-                )
-                Box(Modifier.fillMaxWidth().height(48.dp)) {
+                // No grab handle: this sheet doesn't drag. Cancel, Hide, back or a tap outside close it.
+                Box(Modifier.fillMaxWidth().padding(top = 8.dp).height(48.dp)) {
+                    val sendingText = shared is ShareActivity.Shared.Text && outcome == Outcome.Working
                     Box(Modifier.align(Alignment.CenterStart)) {
-                        if (outcome != Outcome.Done) TextAction("Cancel", onClick = {
+                        // A text that's on its way can't be called back, so it just carries on.
+                        if (outcome != Outcome.Done && !sendingText) TextAction("Cancel", onClick = {
                             if (shared is ShareActivity.Shared.Files && outcome == Outcome.Working) link.cancelTransfer()
                             close()
                         })
                     }
-                    Text("Send to Mac", style = Type.headline, color = colors.label, modifier = Modifier.align(Alignment.Center))
+                    Text(
+                        macName ?: "Send to Mac", style = Type.headline, color = colors.label,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.align(Alignment.Center).padding(horizontal = 76.dp),
+                    )
                     Box(Modifier.align(Alignment.CenterEnd)) {
-                        if (outcome == Outcome.Working && shared is ShareActivity.Shared.Files) {
+                        if (outcome == Outcome.Working && shared !is ShareActivity.Shared.Nothing) {
                             TextAction("Hide", bold = true, onClick = { close() })
                         }
                     }
@@ -258,8 +324,9 @@ private fun ShareSheet(
                     Column(Modifier.weight(1f)) {
                         Text(
                             when (shared) {
-                                is ShareActivity.Shared.Files -> transfer?.let { LinkManager.summary(it.items) } ?: "${shared.uris.size} items"
-                                is ShareActivity.Shared.Text -> if (isLink) shared.text.trim() else "Text"
+                                is ShareActivity.Shared.Files -> transfer?.takeIf { it.items.isNotEmpty() }?.let { LinkManager.summary(it.items) }
+                                    ?: if (shared.uris.size == 1) "1 item" else "${shared.uris.size} items"
+                                is ShareActivity.Shared.Text -> if (isLink) "Link" else "Text"
                                 ShareActivity.Shared.Nothing -> "Nothing to send"
                             },
                             style = Type.headline,
@@ -267,9 +334,14 @@ private fun ShareSheet(
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                         )
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(WIcons.Laptop, null, tint = colors.labelSecondary, modifier = Modifier.size(15.dp))
-                            Text(" $macName", style = Type.subheadline, color = colors.labelSecondary, maxLines = 1)
+                        // What's going across: the text itself (first two lines), or the files' size.
+                        val detail = when (shared) {
+                            is ShareActivity.Shared.Text -> shared.text.trim()
+                            is ShareActivity.Shared.Files -> transfer?.takeIf { it.totalBytes > 0 }?.let { formatBytes(it.totalBytes) }
+                            ShareActivity.Shared.Nothing -> null
+                        }
+                        if (detail != null) {
+                            Text(detail, style = Type.subheadline, color = colors.labelSecondary, maxLines = 2, overflow = TextOverflow.Ellipsis)
                         }
                     }
                 }
@@ -281,29 +353,34 @@ private fun ShareSheet(
                     label = "outcome",
                 ) { result ->
                     when (result) {
-                        Outcome.Done -> Row(
-                            Modifier.fillMaxWidth().height(50.dp).clip(capsule()).background(colors.green),
-                            horizontalArrangement = Arrangement.Center,
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Icon(WIcons.CheckCircle, null, tint = Color.White, modifier = Modifier.size(20.dp))
-                            Spacer(Modifier.size(8.dp))
-                            Text(if (isLink) "Opened on your Mac" else "Copied to your Mac", style = Type.headline, color = Color.White)
+                        Outcome.Done -> Column {
+                            Row(
+                                Modifier.fillMaxWidth().height(50.dp).clip(capsule()).background(colors.green),
+                                horizontalArrangement = Arrangement.Center,
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Icon(WIcons.CheckCircle, null, tint = Color.White, modifier = Modifier.size(20.dp))
+                                Spacer(Modifier.size(8.dp))
+                                Text(if (isLink) "Opened on your Mac" else "Copied to your Mac", style = Type.headline, color = Color.White)
+                            }
+                            if (partial != null) {
+                                Text(partial, style = Type.footnote, color = colors.orange, modifier = Modifier.padding(top = 10.dp))
+                            }
                         }
                         Outcome.Failed -> Column {
                             Text(
-                                transfer?.message ?: when {
-                                    shared == ShareActivity.Shared.Nothing -> "There's nothing here Lync can send."
-                                    else -> "Couldn't reach your Mac. Check it's awake and on the same Wi-Fi."
+                                when (shared) {
+                                    ShareActivity.Shared.Nothing -> "There's nothing here Lync can send."
+                                    is ShareActivity.Shared.Files -> transfer?.message
+                                        ?: "Couldn't reach your Mac. Check it's awake and on the same Wi-Fi."
+                                    is ShareActivity.Shared.Text -> "Couldn't reach your Mac. Check it's awake and on the same Wi-Fi."
                                 },
                                 style = Type.footnote,
                                 color = colors.red,
                             )
                             if (shared != ShareActivity.Shared.Nothing) {
                                 Spacer(Modifier.height(12.dp))
-                                WButton("Try again", onClick = {
-                                    if (shared is ShareActivity.Shared.Text) attempt++ else onRetry()
-                                }, style = ButtonStyle.Filled, modifier = Modifier.fillMaxWidth())
+                                WButton("Try again", onClick = onRetry, style = ButtonStyle.Filled, modifier = Modifier.fillMaxWidth())
                             }
                         }
                         Outcome.Working -> Column {

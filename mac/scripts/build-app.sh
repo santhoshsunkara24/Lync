@@ -5,7 +5,9 @@
 #   scripts/build-app.sh release    # release build → build/Lync.app
 #   scripts/build-app.sh release dmg   # also build/Lync.dmg
 #
-# Signs ad-hoc ("-") unless SIGN_IDENTITY is set to a Developer ID.
+# A universal binary (Apple silicon and Intel). Signs ad-hoc ("-") unless SIGN_IDENTITY is set
+# to a Developer ID. Not notarized. OUT_DIR puts the app and DMG somewhere other than build/.
+# Never launches anything.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -13,10 +15,13 @@ CONFIG="${1:-debug}"
 MAKE_DMG="${2:-}"
 export DEVELOPER_DIR="${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer}"
 
-swift build -c "$CONFIG"
-BIN_DIR="$(swift build -c "$CONFIG" --show-bin-path)"
+ARCHS=(--arch arm64 --arch x86_64)
+swift build -c "$CONFIG" "${ARCHS[@]}"
+BIN_DIR="$(swift build -c "$CONFIG" "${ARCHS[@]}" --show-bin-path)"
 
-APP="build/Lync.app"
+OUT_DIR="${OUT_DIR:-build}"
+mkdir -p "$OUT_DIR"
+APP="$OUT_DIR/Lync.app"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN_DIR/WallhopMac" "$APP/Contents/MacOS/Lync"
@@ -37,8 +42,8 @@ if [ "$MAKE_DMG" = "dmg" ]; then
   STAGE="$(mktemp -d)"
   cp -R "$APP" "$STAGE/"
   ln -s /Applications "$STAGE/Applications"
-  rm -f build/Lync.dmg
-  hdiutil create -volname "Lync" -srcfolder "$STAGE" -ov -format UDZO build/Lync.dmg >/dev/null
+  rm -f "$OUT_DIR/Lync.dmg"
+  hdiutil create -volname "Lync" -srcfolder "$STAGE" -ov -format UDZO "$OUT_DIR/Lync.dmg" >/dev/null
   rm -rf "$STAGE"
-  echo "Built build/Lync.dmg"
+  echo "Built $OUT_DIR/Lync.dmg"
 fi

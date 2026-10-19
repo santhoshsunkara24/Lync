@@ -1,8 +1,12 @@
-# Wallhop link protocol, v1
+# Wallhop link protocol, v2
 
 How the phone app and the Mac app talk. Both implementations must match this file exactly:
 Mac in `mac/Sources/WallhopMac/Core`, Android in `android/app/src/main/java/app/wallhop/core`.
 
+> v2 (October 2026) changes only pairing: the 6-digit code now comes from a commit-then-reveal
+> exchange of nonces (below), and `pair` must carry `"v":2`. The session handshake, sealed frames
+> and messages are unchanged from v1.
+>
 > Status: development. The handshake below is a small custom design built from standard parts
 > (X25519, HKDF-SHA256, ChaCha20-Poly1305). Before a public release, replace it with an audited
 > Noise protocol implementation and get it reviewed.
@@ -12,11 +16,20 @@ Mac in `mac/Sources/WallhopMac/Core`, Android in `android/app/src/main/java/app/
 - TCP. The Mac listens on port **47474** (falls back to a random port if taken) and advertises
   Bonjour service **`_wallhop._tcp`**. The phone always opens the connection.
 - One long-lived connection per phone. Either side may close it; the phone reconnects.
+  A new connection from the same phone (same public key) replaces its old one. Several paired
+  phones may be connected at once; the Mac shows one of them and the others take over when it
+  leaves.
+- A connection must get from connecting to `ready` within **15 s**, or the Mac closes it.
+  While a pairing request waits for the user the clock stops, but that wait is capped at
+  **120 s** (then the connection closes as if declined); after `pair_ok` the 15 s start again.
 
 ## Framing
 
 Every frame is a 4-byte big-endian length followed by that many bytes of payload.
-Maximum payload: 1 MiB.
+Maximum payload: 1 MiB (1 048 576 bytes); a receiver closes the connection on anything larger.
+Senders keep every frame at or under 1 MiB − 64 bytes and never send a bigger one: a message
+that wouldn't fit is refused locally. Text longer than that (e.g. a huge clipboard) is sent as
+a `.txt` file with the file messages instead.
 
 ## Keys
 
@@ -27,36 +40,78 @@ except as a public key. A device id is the first 8 bytes of SHA-256(public key),
 
 All handshake payloads are UTF-8 JSON objects with a `"t"` field. Binary values are base64.
 
-### Pairing (first time only)
+### Pairing (first time only), v2
 
-1. Phone → Mac `{"t":"pair","v":1,"name":"Nothing Phone (3)","pub":"<phone static>"}`
-2. Mac → Phone `{"t":"pair_wait","name":"MacBook Air","pub":"<mac static>"}`
-3. Both show a 6-digit code: SHA-256("wallhop-pair-v1" ‖ phonePub ‖ macPub), first 4 bytes as a
-   big-endian unsigned integer, modulo 1 000 000, zero-padded. The user checks they match and
-   accepts on the Mac.
-4. Mac → Phone `{"t":"pair_ok"}` or `{"t":"pair_no"}`. On `pair_ok` both sides store the other's
+Why v2: in v1 the code was SHA-256 of the two public keys only. Someone in the middle could
+generate key pairs until one gave the same 6 digits as the real phone's key (about a million
+tries, seconds of work) and the user would accept the attacker's key. In v2 the code also
+depends on a random nonce from each side, and the phone commits to its nonce before it sees
+the Mac's. Whoever is in the middle has to fix their own key and nonce before learning the
+other side's nonce, so they get one guess: a 1 in 1 000 000 chance, not a search.
+
+1. Phone → Mac `{"t":"pair","v":2,"name":"Nothing Phone (3)","pub":"<phone static>","commit":"<c>"}`
+   where `nonceP` is 16 random bytes and
+   `c = SHA-256("lync-pair-commit-v2" ‖ phonePub ‖ nonceP)` (32 bytes, base64).
+2. Mac → Phone `{"t":"pair_wait","name":"MacBook Air","pub":"<mac static>","nonce":"<nonceM>"}`
+   where `nonceM` is 16 random bytes (base64).
+3. Phone → Mac `{"t":"pair_nonce","nonce":"<nonceP>"}`. The Mac recomputes `c` and compares it
+   with the commitment from step 1 in constant time. If it doesn't match (or `nonce` is
+   missing or not 16 bytes) the Mac closes the connection without showing anything.
+4. Both show a 6-digit code: `SHA-256("lync-pair-v2" ‖ phonePub ‖ macPub ‖ nonceP ‖ nonceM)`,
+   first 4 bytes as a big-endian unsigned integer, modulo 1 000 000, zero-padded to 6 digits.
+   The Mac shows it only after step 3 checks out. The user checks the codes match and accepts
+   on the Mac.
+5. Mac → Phone `{"t":"pair_ok"}` or `{"t":"pair_no"}`. On `pair_ok` both sides store the other's
    public key and name. The phone then continues with a session handshake on the same connection.
+
+`‖` is byte concatenation; the ASCII labels have no terminator. Public keys are the raw 32-byte
+X25519 keys. All binary values in the JSON are standard base64 with padding.
+
+`pair_no` may carry `"err"`: `"version"` (the `pair` frame wasn't `"v":2`; the phone should ask
+the user to update), `"busy"` (another phone's pairing request is already on screen; try
+again shortly), or `"rate"` (more than 5 pairing attempts from this address in the last
+minute). Without `err` the user declined. The Mac closes the connection after any `pair_no`.
+
+The phone must not send `pair_nonce` before it has `pair_wait`, and must not reuse a nonce.
+
+**Test vector.** phonePub = 32 × `0x01`, macPub = 32 × `0x02`, nonceP = 16 × `0x03`,
+nonceM = 16 × `0x04`:
+
+- commit = `6d60c260fc54cb7820ca62a0395b94dd3b4aaef9a65e4df4cd282ae0fd2a20e6`
+- code hash = `5e67237b65edbf8088b03f36b877fc0544d1a306149e2a9c31fe7fac70b640f1`
+  (first 4 bytes `0x5e67237b` = 1 583 817 595)
+- code = **`817595`**
 
 ### QR pairing (no code to compare)
 
 The Mac's panel shows a QR with a link:
 `wallhop://pair?v=1&n=<mac name>&h=<ipv4,ipv4,…>&p=<port>&k=<mac static pub>&t=<secret>`
 (`k` and `t` are URL-safe base64 without padding; `t` is 16 random bytes). One QR is live at a
-time, works once, and expires after two minutes; the panel refreshes it.
+time, works once, and expires after two minutes; the panel refreshes it. The link format is
+unchanged (still `v=1`).
 
 `h` lists every IPv4 address the Mac has, Wi‑Fi and Ethernet first. The phone tries them all
-at once and uses the first that accepts a connection. It connects to that address and port and sends the usual `pair` frame plus
+at once and uses the first that accepts a connection. It connects to that address and port and
+sends the usual v2 `pair` frame (`v`, `name`, `pub`, `commit`) plus
 `"qr":"<base64 HMAC-SHA256(key = t, "wallhop-qr-v1" ‖ phonePub ‖ macPub)>"`. The secret never
 crosses the network, so someone watching the Wi‑Fi can't reuse it, and swapping in another
 phone key breaks the HMAC.
 
-The Mac answers `pair_wait`, then `pair_ok` straight away if the proof matches the live QR
-(using it up), or `pair_no` if it doesn't. The phone checks that `pair_wait`'s `pub` equals `k`
-before trusting the Mac. After `pair_ok` everything continues as in normal pairing.
+The Mac answers `pair_wait` (with a `nonce`, as in normal pairing), then `pair_ok` straight away
+if the proof matches the live QR (using it up), or `pair_no` if it doesn't. The phone checks
+that `pair_wait`'s `pub` equals `k` before trusting the Mac. No code is shown or compared: the
+QR's secret already authenticates both keys (the phone's through the HMAC, the Mac's through
+`k`, which the phone read off the screen), so the commit-then-reveal step isn't needed here.
+The phone may still send `pair_nonce` after `pair_wait`; the Mac ignores it (and ignores
+`commit`) on this path, so one phone code path serves both kinds of pairing. After `pair_ok`
+everything continues as in normal pairing. QR attempts count towards the same 5-per-minute
+limit.
 
 ### Session (every connection)
 
-1. Phone → Mac `{"t":"hello","v":1,"name":"…","pub":"<phone static>","eph":"<phone ephemeral>"}`
+1. Phone → Mac `{"t":"hello","v":2,"name":"…","pub":"<phone static>","eph":"<phone ephemeral>"}`
+   (the Mac doesn't check `v` here; the session is the same as v1). A changed `name` is only
+   saved once the phone's `ready` has decrypted, which proves it holds its key.
 2. If the phone's public key isn't paired: Mac → Phone `{"t":"unpaired","pub":"<mac static>"}` and closes.
    The phone only drops its pairing if `pub` is the Mac it paired with; any other Mac is skipped.
    Otherwise Mac → Phone `{"t":"hello_ok","name":"…","pub":"<mac static>","eph":"<mac ephemeral>"}`.
@@ -112,7 +167,12 @@ Notifications are only sent for apps the user switched on in the phone app.
 Files from the phone land in the Mac's private inbox (`~/Library/Application Support/Wallhop/Inbox`)
 and go straight to the clipboard, so they can be pasted anywhere. They are moved to
 Downloads › From Phone only when the user clicks Save; unsaved files are removed after a day.
-The `ack` for `file_end` is sent once a file is safely in the inbox.
+The `ack` for `file_end` is sent once a file is safely in the inbox. Received files are
+quarantined (`com.apple.quarantine`, agent "Lync"), so Gatekeeper checks them before they open.
+A `file_start` with an id that's already in progress replaces it; chunks beyond the announced
+`size` fail the file. A sender reports a batch as sent only after an `ack` for every
+`file_end` (it gives up 30 s after the last chunk). If the connection drops mid-batch, the
+receiver discards partial files and treats the batch as interrupted.
 
 Codes reach the Mac's clipboard from three phone sources: the SMS broadcast, a check of the
 SMS inbox whenever it changes (catches anything the broadcast missed), and notifications from

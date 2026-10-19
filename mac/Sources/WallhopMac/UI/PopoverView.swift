@@ -25,6 +25,15 @@ struct PanelView: View {
         }
         .frame(width: 380)
         .background(background)
+        .overlay(alignment: .bottom) {
+            if let toast = model.toast {
+                ToastView(model: model, toast: toast)
+                    .padding(.bottom, 16)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                    .id(toast.id)
+            }
+        }
+        .animation(.spring(response: 0.3, dampingFraction: 0.85), value: model.toast)
         .environmentObject(theme)
         .foregroundStyle(.white)
         .font(.wh(13))
@@ -52,6 +61,35 @@ struct PanelView: View {
                 HomePage(model: model)
             }
         }
+    }
+}
+
+/// A small capsule at the bottom of the panel: how an action went, sometimes with Undo.
+struct ToastView: View {
+    @ObservedObject var model: AppModel
+    @EnvironmentObject var theme: ThemeStore
+    let toast: Toast
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: toast.symbol).font(.wh(12, .semibold))
+            Text(toast.message).font(.wh(12, .semibold)).lineLimit(1)
+            if let title = toast.actionTitle {
+                Button(title) { model.runToastAction() }
+                    .buttonStyle(.plain)
+                    .font(.wh(12, .semibold))
+                    .foregroundStyle(theme.theme.pale)
+                    .padding(.leading, 4)
+                    .keyboardShortcut("z", modifiers: .command)
+            }
+        }
+        .foregroundStyle(.white)
+        .padding(.horizontal, 16)
+        .frame(height: 36)
+        .background(Capsule().fill(theme.theme.card))
+        .overlay(Capsule().strokeBorder(Color.white.opacity(0.12), lineWidth: 1))
+        .shadow(color: .black.opacity(0.35), radius: 10, y: 4)
+        .accessibilityElement(children: .combine)
     }
 }
 
@@ -91,7 +129,7 @@ private struct HomePage: View {
                             }
                         }
                     }
-                    .background(RoundedRectangle(cornerRadius: 20, style: .continuous).fill(WTheme.surface))
+                    .background(RoundedRectangle(cornerRadius: WRadius.group, style: .continuous).fill(WTheme.surface))
                     .padding(.top, 10)
                 }
                 SectionTitle("Recent", action: model.activity.isEmpty ? nil : ("Clear", { model.clearActivity() })).padding(.top, 22)
@@ -110,7 +148,12 @@ private struct HomePage: View {
                     .font(.wh(12, .semibold)).tracking(0.1).foregroundStyle(WTheme.secondary)
                 Text(model.connectedPhone?.name ?? model.pairedPhones.first?.name ?? "Your phone")
                     .font(.wh(24, .medium)).lineLimit(1)
-                Text(statusLine).font(.wh(13, .medium)).foregroundStyle(WTheme.secondary).lineLimit(1)
+                Text(statusLine).font(.wh(13, .medium)).foregroundStyle(WTheme.secondary)
+                    .lineLimit(model.listening ? 1 : 2).fixedSize(horizontal: false, vertical: true)
+                if model.listenFailed && model.connectedPhone == nil {
+                    Button("Try again") { model.retryListening() }
+                        .buttonStyle(WPill(compact: true)).padding(.top, 6)
+                }
             }
             Spacer(minLength: 4)
             if model.connectedPhone != nil {
@@ -119,10 +162,12 @@ private struct HomePage: View {
                 }
                 .buttonStyle(WRound(size: 34))
                 .help(model.ringing ? "Stop ringing" : "Ring your phone to find it")
+                .accessibilityLabel(model.ringing ? "Stop ringing" : "Ring phone")
             }
             Button { model.panelPage = .settings } label: { Image(systemName: "gearshape") }
                 .buttonStyle(WRound(size: 34))
                 .help("Settings")
+                .accessibilityLabel("Settings")
         }
     }
 
@@ -141,21 +186,12 @@ private struct HomePage: View {
         return HStack(spacing: 8) {
             Button { model.sendClipboardToPhone() } label: { Label("Send clipboard", systemImage: "doc.on.clipboard") }
                 .buttonStyle(WPill()).disabled(!connected).opacity(connected ? 1 : 0.45)
-            Button { pickFiles() } label: { Label("Files", systemImage: "paperplane") }
+            Button { model.chooseFilesToSend() } label: { Label("Files", systemImage: "paperplane") }
                 .buttonStyle(WPill(prominent: false)).disabled(!connected).opacity(connected ? 1 : 0.45)
             Button { model.openMessages() } label: { Label("Texts", systemImage: "message") }
                 .buttonStyle(WPill(prominent: false))
         }
         .labelStyle(.titleAndIcon)
-    }
-
-    private func pickFiles() {
-        let panel = NSOpenPanel()
-        panel.allowsMultipleSelection = true
-        panel.canChooseDirectories = false
-        panel.prompt = "Send to Phone"
-        NSApp.activate(ignoringOtherApps: true)
-        if panel.runModal() == .OK { model.sendFilesToPhone(panel.urls) }
     }
 }
 
@@ -198,7 +234,7 @@ private struct LatestCodeCard: View {
             CopyButton(style: PeekPill()) { model.copy(code.item) }
         }
         .padding(16)
-        .background(RoundedRectangle(cornerRadius: 24, style: .continuous).fill(theme.theme.peek))
+        .background(RoundedRectangle(cornerRadius: WRadius.card, style: .continuous).fill(theme.theme.peek))
     }
 }
 
@@ -227,12 +263,12 @@ private struct NowPlayingCard: View {
                 if let art = model.artwork {
                     Image(nsImage: art).resizable().aspectRatio(contentMode: .fill)
                 } else {
-                    Image(systemName: "music.note").font(.system(size: 18)).frame(maxWidth: .infinity, maxHeight: .infinity)
+                    Image(systemName: "music.note").font(.wh(18)).frame(maxWidth: .infinity, maxHeight: .infinity)
                         .background(WTheme.chip)
                 }
             }
             .frame(width: 52, height: 52)
-            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .clipShape(RoundedRectangle(cornerRadius: WRadius.field, style: .continuous))
             VStack(alignment: .leading, spacing: 2) {
                 Text(playing.title.isEmpty ? "Unknown title" : playing.title).font(.wh(14, .semibold)).lineLimit(1)
                 Text([playing.artist, playing.app].filter { !$0.isEmpty }.joined(separator: " · "))
@@ -240,16 +276,20 @@ private struct NowPlayingCard: View {
             }
             Spacer(minLength: 4)
             Button { model.media("previous") } label: { Image(systemName: "backward.fill") }.buttonStyle(WRound(size: 32))
+                .help("Previous").accessibilityLabel("Previous")
             Button { model.media("toggle") } label: {
                 Image(systemName: playing.playing ? "pause.fill" : "play.fill")
-                    .font(.system(size: 15, weight: .semibold)).foregroundStyle(theme.theme.onPale)
-                    .frame(width: 42, height: 42).background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(theme.theme.pale))
+                    .font(.wh(15, .semibold)).foregroundStyle(theme.theme.onPale)
+                    .frame(width: 42, height: 42).background(Circle().fill(theme.theme.pale))
             }
             .buttonStyle(.plain)
+            .help(playing.playing ? "Pause" : "Play")
+            .accessibilityLabel(playing.playing ? "Pause" : "Play")
             Button { model.media("next") } label: { Image(systemName: "forward.fill") }.buttonStyle(WRound(size: 32))
+                .help("Next").accessibilityLabel("Next")
         }
         .padding(12)
-        .background(RoundedRectangle(cornerRadius: 24, style: .continuous).fill(theme.theme.card))
+        .background(RoundedRectangle(cornerRadius: WRadius.card, style: .continuous).fill(theme.theme.card))
         .contextMenu {
             Button("Volume up") { model.media("volume_up") }
             Button("Volume down") { model.media("volume_down") }
@@ -261,6 +301,7 @@ private struct NotificationRow: View {
     @ObservedObject var model: AppModel
     let notification: PhoneNotification
     @State private var hovering = false
+    @FocusState private var focused: Bool
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
@@ -273,7 +314,7 @@ private struct NotificationRow: View {
                 }
                 Text(model.hideNotificationText ? "New notification" : notification.text)
                     .font(.wh(12, .medium)).foregroundStyle(WTheme.secondary).lineLimit(2)
-                if hovering {
+                if hovering || focused {
                     HStack(spacing: 6) {
                         if notification.canReply {
                             Button("Reply") { model.startReply(notification.key) }.buttonStyle(WPill(compact: true))
@@ -287,6 +328,19 @@ private struct NotificationRow: View {
         .padding(12)
         .contentShape(Rectangle())
         .onHover { hovering = $0 }
+        // Keyboard: Tab to the row shows its buttons; Return replies.
+        .focusable()
+        .focused($focused)
+        .onKeyPress(.return) {
+            guard notification.canReply else { return .ignored }
+            model.startReply(notification.key)
+            return .handled
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityActions {
+            if notification.canReply { Button("Reply") { model.startReply(notification.key) } }
+            Button("Dismiss") { model.dismissNotification(notification.key) }
+        }
         .contextMenu {
             if notification.canReply { Button("Reply") { model.startReply(notification.key) } }
             Button("Clear on phone") { model.dismissNotification(notification.key) }
@@ -302,13 +356,13 @@ private struct RecentList: View {
     var body: some View {
         if model.activity.isEmpty {
             VStack(spacing: 10) {
-                Image(systemName: "tray").font(.system(size: 22)).foregroundStyle(WTheme.secondary)
+                Image(systemName: "tray").font(.wh(22)).foregroundStyle(WTheme.secondary)
                     .frame(width: 56, height: 56).background(Circle().fill(WTheme.chip))
                 Text("Codes, texts and files from your phone show up here, already on your clipboard.")
                     .font(.wh(12, .medium)).foregroundStyle(WTheme.secondary).multilineTextAlignment(.center)
             }
             .frame(maxWidth: .infinity).padding(.vertical, 22).padding(.horizontal, 20)
-            .background(RoundedRectangle(cornerRadius: 20, style: .continuous).fill(WTheme.surface))
+            .background(RoundedRectangle(cornerRadius: WRadius.group, style: .continuous).fill(WTheme.surface))
         } else {
             VStack(spacing: 0) {
                 ForEach(Array(model.activity.prefix(12).enumerated()), id: \.element.id) { index, item in
@@ -316,14 +370,17 @@ private struct RecentList: View {
                     RecentRow(model: model, item: item)
                 }
             }
-            .background(RoundedRectangle(cornerRadius: 20, style: .continuous).fill(WTheme.surface))
+            .background(RoundedRectangle(cornerRadius: WRadius.group, style: .continuous).fill(WTheme.surface))
         }
     }
 }
 
 private struct RecentRow: View {
     @ObservedObject var model: AppModel
+    @EnvironmentObject var theme: ThemeStore
     let item: ActivityItem
+    /// Bumped by a click on a code or text row: its Copy button copies and says "Copied".
+    @State private var copyTrigger = 0
 
     var body: some View {
         HStack(spacing: 12) {
@@ -337,16 +394,52 @@ private struct RecentRow: View {
         }
         .padding(12)
         .contentShape(Rectangle())
-        .contextMenu { Button("Remove") { model.remove(item) } }
+        .onTapGesture { if copyable { copyTrigger += 1 } }
+        .modifier(FileDrag(url: files.first))
+        .contextMenu {
+            if copyable {
+                Button(isCode ? "Copy code" : "Copy") { model.copy(item) }
+            }
+            if !files.isEmpty {
+                Button("Copy") { model.copyFiles(item.id) }
+                Button(files.count == 1 ? "Open" : "Open \(files.count) files") { files.forEach(model.openFile) }
+                Button("Show in Finder") { model.revealFiles(item.id) }
+                if case .files(let batch) = item.payload, !batch.saved {
+                    Button("Save to Downloads") { model.saveFiles(item.id) }
+                }
+            }
+            Divider()
+            Button("Remove") { model.remove(item) }
+        }
+    }
+
+    private var isCode: Bool {
+        if case .otp = item.payload { return true }
+        return false
+    }
+
+    /// An unexpired code or a text: clicking the row copies it.
+    private var copyable: Bool {
+        switch item.payload {
+        case .otp(_, _, let expiresAt): return expiresAt > Date()
+        case .text: return true
+        default: return false
+        }
+    }
+
+    /// Received files that arrived, for the menu and dragging.
+    private var files: [URL] {
+        if case .files(let batch) = item.payload, batch.finished { return batch.files }
+        return []
     }
 
     @ViewBuilder private var leading: some View {
         switch item.payload {
-        case .otp: icon("lock.fill", .green)
-        case .text: icon("text.bubble.fill", .blue)
+        case .otp: icon("lock.fill", WTheme.success)
+        case .text: icon("text.bubble.fill", theme.theme.pale)
         case .files(let batch):
-            if batch.files.isEmpty { icon("arrow.down", .orange) } else { ThumbnailStack(urls: batch.files, size: 28) }
-        case .missedCall: icon("phone.arrow.down.left", .red)
+            if batch.files.isEmpty { icon("arrow.down", batch.finished ? WTheme.danger : theme.theme.pale) } else { ThumbnailStack(urls: batch.files, size: 28) }
+        case .missedCall: icon("phone.arrow.down.left", WTheme.danger)
         }
     }
 
@@ -372,6 +465,7 @@ private struct RecentRow: View {
             return expiresAt > Date() ? "\(name) · \(time)" : "\(name) · expired"
         case .text: return "Text · \(time)"
         case .files(let batch):
+            if batch.interrupted { return "Transfer interrupted · \(time)" }
             if batch.failed > 0 { return "\(batch.failed) failed · \(time)" }
             if !batch.finished { return "\(Int(batch.progress * 100))%" }
             return batch.saved ? "Saved to Downloads · \(time)" : "On your clipboard · \(time)"
@@ -382,30 +476,44 @@ private struct RecentRow: View {
     @ViewBuilder private var trailing: some View {
         switch item.payload {
         case .otp(_, _, let expiresAt) where expiresAt > Date():
-            CopyButton(iconOnly: true, style: WRound(size: 30)) { model.copy(item) }
+            CopyButton(iconOnly: true, style: WRound(size: 30), trigger: copyTrigger) { model.copy(item) }
         case .text:
-            CopyButton(iconOnly: true, style: WRound(size: 30)) { model.copy(item) }
+            CopyButton(iconOnly: true, style: WRound(size: 30), trigger: copyTrigger) { model.copy(item) }
         case .files(let batch) where batch.finished && !batch.files.isEmpty:
             HStack(spacing: 6) {
                 CopyButton(iconOnly: true, style: WRound(size: 30)) { model.copyFiles(item.id) }
                 if batch.saved {
                     Button("Show") { model.revealFiles(item.id) }.buttonStyle(WPill(prominent: false, compact: true))
+                        .help("Show in Finder")
                 } else {
                     Button("Save") { model.saveFiles(item.id) }.buttonStyle(WPill(compact: true))
                         .help("Save to Downloads › From Phone")
                 }
             }
         case .files(let batch) where !batch.finished:
-            ProgressView(value: batch.progress).progressViewStyle(.circular).controlSize(.small)
+            ProgressRing(progress: batch.progress)
         default:
             EmptyView()
         }
     }
 
     private func icon(_ name: String, _ tint: Color) -> some View {
-        Image(systemName: name).font(.system(size: 13, weight: .semibold))
+        Image(systemName: name).font(.wh(13, .semibold))
             .foregroundStyle(tint)
             .frame(width: 32, height: 32).background(Circle().fill(tint.opacity(0.22)))
+    }
+}
+
+/// Lets a received file be dragged out of its row into Finder or another app.
+private struct FileDrag: ViewModifier {
+    let url: URL?
+
+    func body(content: Content) -> some View {
+        if let url {
+            content.onDrag { NSItemProvider(contentsOf: url) ?? NSItemProvider() }
+        } else {
+            content
+        }
     }
 }
 
@@ -428,7 +536,7 @@ private struct PairingCard: View {
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 24, style: .continuous).fill(theme.theme.card))
+        .background(RoundedRectangle(cornerRadius: WRadius.card, style: .continuous).fill(theme.theme.card))
     }
 }
 
@@ -444,6 +552,7 @@ private struct OnboardingPage: View {
                 }
                 Spacer()
                 Button { model.panelPage = .settings } label: { Image(systemName: "gearshape") }.buttonStyle(WRound(size: 34))
+                    .help("Settings").accessibilityLabel("Settings")
             }
             PairingQR(model: model)
             VStack(alignment: .leading, spacing: 10) {
@@ -452,7 +561,8 @@ private struct OnboardingPage: View {
                 step(3, "Tap Pair with QR code and scan this")
             }
             .padding(14)
-            .background(RoundedRectangle(cornerRadius: 20, style: .continuous).fill(WTheme.surface))
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(RoundedRectangle(cornerRadius: WRadius.group, style: .continuous).fill(WTheme.surface))
         }
         .padding(20)
     }
@@ -484,6 +594,7 @@ private struct PageHeader: View {
     var body: some View {
         HStack(spacing: 12) {
             Button(action: back) { Image(systemName: "chevron.left") }.buttonStyle(WRound(size: 34))
+                .help("Back").accessibilityLabel("Back")
             Text(title).font(.wh(22, .medium))
             Spacer()
         }
@@ -523,17 +634,27 @@ private struct SettingsPage: View {
                 }
                 .padding(.top, 10)
                 Text(model.hasNotch
-                     ? (model.displayMode == .notch ? "Hover or click the notch to open Lync. Drop files on it to send them." : "Click the phone icon in the menu bar to open Lync.")
+                     ? (model.displayMode == .notch ? "Hover or click the notch to open Lync. Drop files on it to send them; right-click it for more." : "Click the Lync icon in the menu bar to open Lync. Right-click it for more.")
                      : "This Mac has no notch, so Lync lives in the menu bar.")
                     .font(.wh(12, .medium)).foregroundStyle(WTheme.secondary).padding(.top, 8)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                group("General") {
+                    if model.canLaunchAtLogin {
+                        toggle("Open at login", Binding(get: { model.launchAtLogin }, set: { model.setLaunchAtLogin($0) }))
+                        divider
+                    }
+                    row("Lync \(model.appVersion)") {
+                        Button("About") { model.showAbout() }.buttonStyle(WPill(prominent: false, compact: true))
+                    }
+                }
 
                 group("Clipboard and alerts") {
                     toggle("Copy received text automatically", $model.copyTextAutomatically)
+                    divider
                     toggle("Show phone notifications", $model.showNotifications)
+                    divider
                     toggle("Hide notification text", $model.hideNotificationText)
-                    if model.canLaunchAtLogin {
-                        toggle("Open at login", Binding(get: { model.launchAtLogin }, set: { model.setLaunchAtLogin($0) }))
-                    }
                 }
 
                 if !model.mutedApps.isEmpty {
@@ -546,9 +667,15 @@ private struct SettingsPage: View {
 
                 group("Phones") {
                     ForEach(model.pairedPhones) { phone in
-                        row(phone.name) {
-                            Button("Forget") { model.forget(phone) }.buttonStyle(WPill(prominent: false, compact: true))
+                        if model.confirmingForget == phone.id {
+                            forgetConfirmation(phone)
+                        } else {
+                            row(phone.name) {
+                                Button("Forget") { model.confirmingForget = phone.id }
+                                    .buttonStyle(WPill(prominent: false, compact: true))
+                            }
                         }
+                        divider
                     }
                     row("Add a phone") {
                         Button("Show code") { model.panelPage = .addPhone }.buttonStyle(WPill(compact: true))
@@ -556,7 +683,13 @@ private struct SettingsPage: View {
                 }
 
                 HStack(spacing: 8) {
-                    Button("Preview notch") { model.show(.otp(code: "482913", sender: "Preview"), for: 4) }
+                    Button(model.displayMode == .notch && model.hasNotch ? "Preview notch" : "Preview alert") {
+                        // Close the panel first: live moments only show while it's closed.
+                        model.closePanel()
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                            model.show(.otp(code: "482913", sender: "Preview"), for: 4)
+                        }
+                    }
                         .buttonStyle(WPill(prominent: false))
                     Button("Received files") { model.openReceivedFolder() }.buttonStyle(WPill(prominent: false))
                     Spacer()
@@ -574,9 +707,28 @@ private struct SettingsPage: View {
         VStack(alignment: .leading, spacing: 10) {
             Text(title).font(.wh(14, .semibold))
             VStack(spacing: 0) { content() }
-                .background(RoundedRectangle(cornerRadius: 20, style: .continuous).fill(WTheme.surface))
+                .background(RoundedRectangle(cornerRadius: WRadius.group, style: .continuous).fill(WTheme.surface))
         }
         .padding(.top, 22)
+    }
+
+    private var divider: some View {
+        Divider().overlay(Color.white.opacity(0.08)).padding(.leading, 14)
+    }
+
+    /// Forget needs a second click: the phone has to pair again afterwards.
+    private func forgetConfirmation(_ phone: PairedPhone) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Forget \(phone.name)?").font(.wh(13, .semibold)).lineLimit(1)
+            Text("You'll need to pair again.").font(.wh(12, .medium)).foregroundStyle(WTheme.secondary)
+            HStack(spacing: 8) {
+                Spacer()
+                Button("Cancel") { model.confirmingForget = nil }.buttonStyle(WPill(prominent: false, compact: true))
+                Button("Forget") { model.forget(phone) }.buttonStyle(WPill(compact: true, destructive: true))
+            }
+        }
+        .padding(14)
+        .accessibilityElement(children: .contain)
     }
 
     private func toggle(_ title: String, _ value: Binding<Bool>) -> some View {
@@ -642,13 +794,16 @@ func spaced(_ code: String) -> String {
 struct CopyButton<S: ButtonStyle>: View {
     var iconOnly = false
     let style: S
+    /// Changing it copies as if the button was clicked (e.g. a click on the whole row).
+    var trigger = 0
     let action: () -> Void
     @State private var copied: Bool
     @State private var resetToken = 0
 
-    init(iconOnly: Bool = false, style: S, startCopied: Bool = false, action: @escaping () -> Void) {
+    init(iconOnly: Bool = false, style: S, startCopied: Bool = false, trigger: Int = 0, action: @escaping () -> Void) {
         self.iconOnly = iconOnly
         self.style = style
+        self.trigger = trigger
         self.action = action
         _copied = State(initialValue: startCopied)
     }
@@ -673,6 +828,7 @@ struct CopyButton<S: ButtonStyle>: View {
         .help(copied ? "Copied" : "Copy")
         .accessibilityLabel(copied ? "Copied" : "Copy")
         .animation(.spring(response: 0.3, dampingFraction: 0.8), value: copied)
+        .onChange(of: trigger) { _, _ in copy() }
     }
 
     private func copy() {

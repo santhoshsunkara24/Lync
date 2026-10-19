@@ -14,6 +14,11 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.calculateEndPadding
+import androidx.compose.foundation.layout.calculateStartPadding
+import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -80,6 +85,11 @@ fun Page(
     }
     val statusBar = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
     val navBar = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
+    // Landscape and camera cutouts: keep content clear of the sides as well.
+    val sides = WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal).asPaddingValues()
+    val layoutDirection = androidx.compose.ui.platform.LocalLayoutDirection.current
+    val start = sides.calculateStartPadding(layoutDirection)
+    val end = sides.calculateEndPadding(layoutDirection)
 
     Box(
         modifier
@@ -89,7 +99,7 @@ fun Page(
         LazyColumn(
             state = state,
             modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = statusBar + 14.dp, bottom = navBar + bottomClearance),
+            contentPadding = PaddingValues(start = start + 20.dp, end = end + 20.dp, top = statusBar + 14.dp, bottom = navBar + bottomClearance),
         ) {
             item(key = "title") {
                 Column(Modifier.fillMaxWidth().padding(bottom = 22.dp)) {

@@ -9,6 +9,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var messages: MessagesWindowController!
     private var panel: PanelController!
     private var sensor: NotchSensor!
+    private var menus: Menus!
     private var observers: [Any] = []
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -18,16 +19,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let server = LinkServer(identity: Identity.loadOrCreate(), paired: PairedPhones())
         model = AppModel(server: server)
-        statusItem = StatusItemController(model: model)
+        menus = Menus(model: model)
+        // Shown whenever Lync is the active app (e.g. with the Messages window open): Edit
+        // commands for text fields, ⌘, for Settings, ⌘W and ⌘Q.
+        menus.installMainMenu()
+        statusItem = StatusItemController(model: model) { [weak self] in self?.menus.contextMenu() ?? NSMenu() }
         overlay = OverlayController(model: model) { [weak self] in self?.statusItem.visibleFrame }
         messages = MessagesWindowController(server: server, appModel: model)
         model.openMessages = { [weak self] in self?.model.closePanel(); self?.messages.show() }
         panel = PanelController(model: model) { [weak self] in self?.statusItem.visibleFrame }
         statusItem.onToggle = { [weak self] in self?.panel.toggle() }
+        menus.openPanel = { [weak self] in self?.panel.open(byHover: false) }
         sensor = NotchSensor(
             onHover: { [weak self] in self?.panel.open(byHover: true) },
             onClick: { [weak self] in self?.panel.toggle() },
-            onDrop: { [weak self] urls in self?.model.sendFilesToPhone(urls) }
+            drop: FileDropHandler(model: model),
+            menu: { [weak self] in self?.menus.contextMenu() ?? NSMenu() }
         )
         let applyMode = { [weak self] in
             guard let self else { return }

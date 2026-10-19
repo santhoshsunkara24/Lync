@@ -4,6 +4,7 @@ import android.content.Context
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
+import android.util.Log
 import java.security.KeyStore
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
@@ -22,20 +23,37 @@ class Identity private constructor(val privateKey: ByteArray) {
         private const val PREFS = "identity"
         private const val KEY_WRAPPED = "wrapped_private_key"
         private const val KEYSTORE_ALIAS = "wallhop_identity_wrap"
+        private const val TAG = "WallhopIdentity"
 
         @Volatile private var cached: Identity? = null
 
-        fun get(context: Context): Identity = cached ?: synchronized(this) {
-            cached ?: load(context).also { cached = it }
+        /**
+         * The phone's key. Throws if a key is stored but the Keystore can't unlock it right now,
+         * rather than quietly replacing it (which would break the pairing). With
+         * [regenerateIfUnreadable], used when the user pairs again, an unreadable key is replaced.
+         */
+        fun get(context: Context, regenerateIfUnreadable: Boolean = false): Identity = cached ?: synchronized(this) {
+            cached ?: load(context, regenerateIfUnreadable).also { cached = it }
         }
 
-        private fun load(context: Context): Identity {
+        @android.annotation.SuppressLint("ApplySharedPref") // Deliberately synchronous, see below.
+        private fun load(context: Context, regenerateIfUnreadable: Boolean): Identity {
             val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             prefs.getString(KEY_WRAPPED, null)?.let { stored ->
-                runCatching { return Identity(unwrap(Base64.decode(stored, Base64.NO_WRAP))) }
+                val wrapped = runCatching { Base64.decode(stored, Base64.NO_WRAP) }.getOrNull()
+                // The Keystore can fail transiently (for example just after boot): try twice.
+                var failure: Throwable? = null
+                repeat(2) { attempt ->
+                    if (wrapped == null) return@repeat
+                    runCatching { return Identity(unwrap(wrapped)) }.onFailure { failure = it }
+                    if (attempt == 0) Thread.sleep(250)
+                }
+                Log.w(TAG, "Couldn't unlock the stored key", failure)
+                if (!regenerateIfUnreadable) throw IllegalStateException("This phone's key can't be unlocked", failure)
             }
             val privateKey = Crypto.generatePrivateKey()
-            prefs.edit().putString(KEY_WRAPPED, Base64.encodeToString(wrap(privateKey), Base64.NO_WRAP)).apply()
+            // commit(), not apply(): a key that's used but never saved would break the pairing.
+            prefs.edit().putString(KEY_WRAPPED, Base64.encodeToString(wrap(privateKey), Base64.NO_WRAP)).commit()
             return Identity(privateKey)
         }
 

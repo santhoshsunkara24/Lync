@@ -51,19 +51,24 @@ func readJSON() -> [String: Any] { HandshakeJSON.decode(readFrame()) ?? [:] }
 
 let me = Curve25519.KeyAgreement.PrivateKey()
 let myPub = me.publicKey.rawRepresentation
-sendJSON(["t": "pair", "v": 1, "name": "Test Phone", "pub": myPub.base64EncodedString()])
+// Pairing v2: commit to a nonce, get the Mac's, then reveal ours (PROTOCOL.md, Pairing).
+let myNonce = Handshake.randomBytes(16)!
+let commit = Handshake.pairingCommit(phonePub: myPub, phoneNonce: myNonce)
+sendJSON(["t": "pair", "v": 2, "name": "Test Phone", "pub": myPub.base64EncodedString(), "commit": commit.base64EncodedString()])
 let wait = readJSON()
-guard wait["t"] as? String == "pair_wait", let macPubB64 = wait["pub"] as? String, let macPub = Data(base64Encoded: macPubB64) else {
+guard wait["t"] as? String == "pair_wait", let macPubB64 = wait["pub"] as? String, let macPub = Data(base64Encoded: macPubB64),
+      let macNonce = (wait["nonce"] as? String).flatMap({ Data(base64Encoded: $0) }) else {
     log("unexpected: \(wait)"); exit(3)
 }
-log("pair_wait from \(wait["name"] ?? "?"), code \(Handshake.pairingCode(phonePub: myPub, macPub: macPub))")
+sendJSON(["t": "pair_nonce", "nonce": myNonce.base64EncodedString()])
+log("pair_wait from \(wait["name"] ?? "?"), code \(Handshake.pairingCode(phonePub: myPub, macPub: macPub, phoneNonce: myNonce, macNonce: macNonce))")
 let decision = readJSON()
 guard decision["t"] as? String == "pair_ok" else { log("pairing: \(decision)"); exit(4) }
 log("paired")
 
 let eph = Curve25519.KeyAgreement.PrivateKey()
 let ephPub = eph.publicKey.rawRepresentation
-sendJSON(["t": "hello", "v": 1, "name": "Test Phone", "pub": myPub.base64EncodedString(), "eph": ephPub.base64EncodedString()])
+sendJSON(["t": "hello", "v": 2, "name": "Test Phone", "pub": myPub.base64EncodedString(), "eph": ephPub.base64EncodedString()])
 let ok = readJSON()
 guard ok["t"] as? String == "hello_ok", let macEph = (ok["eph"] as? String).flatMap({ Data(base64Encoded: $0) }) else {
     log("hello: \(ok)"); exit(5)

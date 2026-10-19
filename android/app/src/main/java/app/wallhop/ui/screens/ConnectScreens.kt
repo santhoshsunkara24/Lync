@@ -1,6 +1,7 @@
 package app.wallhop.ui.screens
 
 import app.wallhop.ui.design.WIcons
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.fadeIn
@@ -21,7 +22,10 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.MutableState
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -36,6 +40,8 @@ import app.wallhop.link.DiscoveredMac
 import app.wallhop.link.LinkManager
 import app.wallhop.link.LinkState
 import app.wallhop.ui.components.ActivityIndicator
+import app.wallhop.ui.components.AlertAction
+import app.wallhop.ui.components.AlertSpec
 import app.wallhop.ui.components.ButtonStyle
 import app.wallhop.ui.components.CodeDisplay
 import app.wallhop.ui.components.GlassStage
@@ -53,6 +59,7 @@ import app.wallhop.ui.design.Type
 import app.wallhop.ui.design.Wallhop
 import app.wallhop.ui.design.capsule
 import app.wallhop.ui.design.rounded
+import kotlinx.coroutines.delay
 
 /** First run: find a Mac on this Wi-Fi (DESIGN.md §6.2). */
 @Composable
@@ -63,9 +70,36 @@ fun ConnectScreen(
     onPair: (host: String, port: Int, name: String) -> Unit,
     onDismissProblem: () -> Unit,
     onScan: () -> Unit,
+    onRetry: (() -> Unit)? = null,
 ) {
     val colors = Wallhop.colors
-    val address = remember { mutableStateOf("") }
+    val address = rememberSaveable { mutableStateOf("") }
+    val addressError = remember { mutableStateOf<String?>(null) }
+    fun enterAddress() = showAddressSheet(overlays, address, addressError) { host, port -> onPair(host, port, host) }
+
+    // A failed pairing needs an answer: try again, or put it away.
+    LaunchedEffect(problem) {
+        if (problem is LinkState.PairingFailed) {
+            overlays.showAlert(AlertSpec(
+                title = "Couldn't pair with ${problem.macName}",
+                message = problem.reason,
+                actions = buildList {
+                    if (onRetry != null) add(AlertAction("Try again", default = true) { onRetry() })
+                    add(AlertAction("Dismiss") { onDismissProblem() })
+                },
+                onBack = onDismissProblem,
+            ))
+        }
+    }
+    // Nothing found for a while: say what usually helps, and offer the address.
+    var searchingLong by remember { mutableStateOf(false) }
+    LaunchedEffect(macs.isEmpty()) {
+        searchingLong = false
+        if (macs.isEmpty()) {
+            delay(15_000)
+            searchingLong = true
+        }
+    }
 
     Page(
         title = "Connect your Mac",
@@ -78,28 +112,8 @@ fun ConnectScreen(
         }
         item(key = "scan") {
             // The quickest way: scan the code in the Mac's menu bar panel.
-            WButton("Pair with QR code", onScan, modifier = Modifier.fillMaxWidth(), style = ButtonStyle.Filled, icon = WIcons.Search)
+            WButton("Pair with QR code", onScan, modifier = Modifier.fillMaxWidth(), style = ButtonStyle.Filled, icon = WIcons.QrCode)
             Spacer(Modifier.height(28.dp))
-        }
-        if (problem is LinkState.PairingFailed || problem is LinkState.Forgotten) {
-            item(key = "problem") {
-                InsetSection {
-                    row {
-                        ListRow(
-                            title = if (problem is LinkState.PairingFailed) "Couldn't pair" else "Pair again",
-                            subtitle = when (problem) {
-                                is LinkState.PairingFailed -> problem.reason
-                                is LinkState.Forgotten -> "${problem.macName} no longer recognises this phone."
-                                else -> null
-                            },
-                            leading = { IconTile(WIcons.Warning, colors.red) },
-                            value = "OK",
-                            onClick = onDismissProblem,
-                        )
-                    }
-                }
-                Spacer(Modifier.height(28.dp))
-            }
         }
         item(key = "macs") {
             SectionHeader("Macs on this Wi-Fi") { ActivityIndicator(size = 14.dp) }
@@ -108,9 +122,20 @@ fun ConnectScreen(
                     row {
                         ListRow(
                             title = "Looking for Macs…",
-                            subtitle = "Make sure Lync is open on your Mac. Look for the phone icon in the menu bar.",
+                            subtitle = if (searchingLong) "Make sure Lync is open on your Mac and both are on the same Wi-Fi."
+                                else "Make sure Lync is open on your Mac. Look for the phone icon in the menu bar.",
                             leading = { IconTile(WIcons.Laptop, colors.gray) },
                         )
+                    }
+                    if (searchingLong) {
+                        row {
+                            ListRow(
+                                title = "Enter the Mac's address",
+                                leading = { IconTile(WIcons.Wifi, colors.indigo) },
+                                chevron = true,
+                                onClick = { enterAddress() },
+                            )
+                        }
                     }
                 } else {
                     macs.forEach { mac ->
@@ -129,29 +154,30 @@ fun ConnectScreen(
         }
         item(key = "manual") {
             Row(Modifier.fillMaxWidth().padding(top = 12.dp), horizontalArrangement = Arrangement.Center) {
-                TextAction("Enter the Mac's address instead", onClick = {
-                    showAddressSheet(overlays, address) { host, port -> onPair(host, port, host) }
-                })
+                TextAction("Enter the Mac's address instead", onClick = { enterAddress() })
             }
         }
     }
 }
 
-private fun showAddressSheet(overlays: Overlays, address: MutableState<String>, onConnect: (String, Int) -> Unit) {
-    fun parsed(): Pair<String, Int>? {
-        val text = address.value.trim()
-        val host = text.substringBefore(':')
-        val port = text.substringAfter(':', "").toIntOrNull() ?: LinkManager.DEFAULT_PORT
-        return if (host.isNotBlank()) host to port else null
-    }
+private fun showAddressSheet(
+    overlays: Overlays,
+    address: MutableState<String>,
+    error: MutableState<String?>,
+    onConnect: (String, Int) -> Unit,
+) {
+    error.value = null
     overlays.showSheet(
         title = "Mac's address",
         leading = { TextAction("Cancel", onClick = { overlays.dismissSheet() }) },
         trailing = {
             TextAction("Connect", bold = true, enabled = address.value.isNotBlank(), onClick = {
-                parsed()?.let { (host, port) ->
-                    overlays.dismissSheet()
-                    onConnect(host, port)
+                when (val result = parseMacAddress(address.value)) {
+                    is AddressInput.Valid -> {
+                        overlays.dismissSheet(cancelled = false)
+                        onConnect(result.host, result.port)
+                    }
+                    is AddressInput.Invalid -> error.value = result.message
                 }
             })
         },
@@ -162,9 +188,73 @@ private fun showAddressSheet(overlays: Overlays, address: MutableState<String>, 
             color = Wallhop.colors.labelSecondary,
         )
         Spacer(Modifier.height(12.dp))
-        WTextField(address.value, { address.value = it }, "IP address", keyboardType = KeyboardType.Uri)
+        WTextField(
+            address.value, { address.value = it; error.value = null }, "192.168.1.20",
+            keyboardType = KeyboardType.Uri, label = "Mac's address", error = error.value,
+        )
     }
 }
+
+/** What was typed in the address field: a host and port to try, or why it can't be used. */
+sealed interface AddressInput {
+    data class Valid(val host: String, val port: Int) : AddressInput
+    data class Invalid(val message: String) : AddressInput
+}
+
+/**
+ * Reads "192.168.1.20", "192.168.1.20:47474", "mac.local", "fe80::1", "[fe80::1]" or
+ * "[fe80::1]:47474". The port is optional and defaults to Lync's.
+ */
+fun parseMacAddress(input: String): AddressInput {
+    val text = input.trim()
+    if (text.isEmpty()) return AddressInput.Invalid("Enter your Mac's address.")
+    val host: String
+    val portText: String?
+    when {
+        text.startsWith("[") -> {
+            val close = text.indexOf(']')
+            if (close < 0) return AddressInput.Invalid("That address is missing a closing ].")
+            host = text.substring(1, close)
+            val rest = text.substring(close + 1)
+            portText = when {
+                rest.isEmpty() -> null
+                rest.startsWith(":") -> rest.substring(1)
+                else -> return AddressInput.Invalid("That doesn't look like an address.")
+            }
+            if (!isIpv6(host)) return AddressInput.Invalid("That doesn't look like an address.")
+        }
+        // Two or more colons and no brackets: a bare IPv6 address, no port.
+        text.count { it == ':' } > 1 -> {
+            if (!isIpv6(text)) return AddressInput.Invalid("That doesn't look like an address.")
+            host = text
+            portText = null
+        }
+        else -> {
+            host = text.substringBefore(':')
+            portText = text.substringAfter(':', "").takeIf { text.contains(':') }
+            if (!isIpv4(host) && !isHostName(host)) return AddressInput.Invalid("That doesn't look like an address.")
+        }
+    }
+    val port = if (portText == null) LinkManager.DEFAULT_PORT else portText.toIntOrNull()
+    if (port == null || port !in 1..65535) return AddressInput.Invalid("The port should be a number from 1 to 65535.")
+    return AddressInput.Valid(host, port)
+}
+
+private fun isIpv4(host: String): Boolean {
+    val parts = host.split('.')
+    return parts.size == 4 && parts.all { part -> part.isNotEmpty() && part.length <= 3 && part.all(Char::isDigit) && part.toInt() <= 255 }
+}
+
+private fun isIpv6(host: String): Boolean {
+    val address = host.substringBefore('%') // A zone such as %wlan0 may follow.
+    if (address.count { it == ':' } < 2 || address.contains(":::")) return false
+    if (address.split("::").size > 2) return false
+    return address.all { it.isDigit() || it in 'a'..'f' || it in 'A'..'F' || it == ':' || it == '.' }
+}
+
+private fun isHostName(host: String): Boolean =
+    host.isNotEmpty() && host.length <= 253 && !host.all { it.isDigit() || it == '.' } &&
+        host.split('.').all { label -> label.isNotEmpty() && label.length <= 63 && label.all { it.isLetterOrDigit() || it == '-' } }
 
 /** Phone · hopping dots · laptop, on a large rounded card. */
 @Composable
@@ -188,6 +278,8 @@ fun HeroIllustration(active: Boolean, modifier: Modifier = Modifier) {
 @Composable
 fun PairingScreen(state: LinkState.Pairing, onCancel: () -> Unit) {
     val colors = Wallhop.colors
+    // Back stops the pairing rather than leaving it running behind the home screen.
+    BackHandler(onBack = onCancel)
     GlassStage(
         modifier = Modifier.fillMaxSize(),
         background = colors.background,

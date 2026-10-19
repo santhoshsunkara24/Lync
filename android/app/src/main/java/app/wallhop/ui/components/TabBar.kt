@@ -317,7 +317,10 @@ fun PillNavBar(tabs: List<TabItem>, selected: Int, onSelect: (Int) -> Unit, modi
                                 onSelect(index)
                             }
                         }
-                        .semantics { contentDescription = tab.label; this.selected = active },
+                        .semantics {
+                            contentDescription = if (tab.badge) "${tab.label}, needs attention" else tab.label
+                            this.selected = active
+                        },
                     contentAlignment = Alignment.Center,
                 ) {
                     val tint by animateColorAsState(if (active) Wallhop.home.onPale else Wallhop.home.pale.copy(alpha = 0.72f), Springs.snappy(), label = "navTint")

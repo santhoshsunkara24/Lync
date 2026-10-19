@@ -57,6 +57,25 @@ object KeepAlive {
         }
     }
 
+    /**
+     * Android 13+ blocks notification access for apps installed from a downloaded APK ("Restricted
+     * setting") until the user allows it on the app's page: App info › ⋮ › Allow restricted
+     * settings. True when that step is likely needed: Android 13+ and not installed by a store.
+     */
+    fun restrictedSettingsLikely(context: Context): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return false
+        val installer = runCatching {
+            context.packageManager.getInstallSourceInfo(context.packageName).installingPackageName
+        }.getOrNull()
+        return installer == null || installer !in setOf("com.android.vending", "com.google.android.feedback")
+    }
+
+    /** Opens Lync's App info page, where "Allow restricted settings" lives (in the ⋮ menu). */
+    fun openAppInfo(context: Context) {
+        val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${context.packageName}"))
+        runCatching { context.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+    }
+
     /** Opens the maker's screen, falling back to Wallhop's app page. */
     fun open(context: Context) {
         val screens = brand?.screens.orEmpty().map { Intent().setComponent(it) } +

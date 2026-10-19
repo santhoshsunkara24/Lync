@@ -1,8 +1,6 @@
 package app.wallhop.ui.screens
 
 import app.wallhop.ui.design.WIcons
-import android.content.ClipData
-import android.content.ClipboardManager
 import android.text.format.DateUtils
 import androidx.compose.animation.core.Animatable
 import androidx.compose.foundation.background
@@ -47,6 +45,7 @@ import app.wallhop.ui.components.InsetSection
 import app.wallhop.ui.components.ListRow
 import app.wallhop.ui.components.Overlays
 import app.wallhop.ui.components.SegmentedControl
+import app.wallhop.ui.components.copyCode
 import app.wallhop.ui.components.spacedCode
 import app.wallhop.ui.design.Haptic
 import app.wallhop.ui.design.Springs
@@ -54,7 +53,6 @@ import app.wallhop.ui.design.Type
 import app.wallhop.ui.design.Wallhop
 import app.wallhop.ui.design.rememberHaptics
 import kotlinx.coroutines.launch
-import java.util.Calendar
 import kotlin.math.roundToInt
 
 private val filters = listOf("All", "Codes", "Files & text", "Calls")
@@ -153,21 +151,7 @@ private fun ActivityPage(entries: List<ActivityEntry>, filter: Int, overlays: Ov
                 InsetSection(dividerInset = 57.dp) {
                     items.forEach { entry ->
                         row {
-                            ActivityRow(entry, onLongClick = {
-                                overlays.showActionSheet(ActionSheetSpec(
-                                    message = null,
-                                    actions = buildList {
-                                        if (entry.kind == ActivityEntry.Kind.Otp) {
-                                            add(AlertAction("Copy code") {
-                                                context.getSystemService(ClipboardManager::class.java)
-                                                    .setPrimaryClip(ClipData.newPlainText("Code", entry.title))
-                                                overlays.toast("Copied")
-                                            })
-                                        }
-                                        add(AlertAction("Delete", destructive = true) { onDelete(entry.id) })
-                                    },
-                                ))
-                            })
+                            ActivityRow(entry, onLongClick = { showEntryActions(overlays, context, entry, onDelete) })
                         }
                     }
                 }
@@ -177,8 +161,25 @@ private fun ActivityPage(entries: List<ActivityEntry>, filter: Int, overlays: Ov
     }
 }
 
+/** Copy code / Delete for one entry; the same on Home and in Activity. */
+internal fun showEntryActions(overlays: Overlays, context: android.content.Context, entry: ActivityEntry, onDelete: (String) -> Unit) {
+    overlays.showActionSheet(ActionSheetSpec(
+        message = null,
+        actions = buildList {
+            if (entry.kind == ActivityEntry.Kind.Otp) {
+                add(AlertAction("Copy code") {
+                    copyCode(context, entry.title)
+                    overlays.toast("Code copied", WIcons.CheckCircle)
+                })
+            }
+            add(AlertAction("Delete", destructive = true) { onDelete(entry.id) })
+        },
+    ))
+}
+
+/** One entry. Long press (or [onClick], where given) offers Copy code / Delete. */
 @Composable
-internal fun ActivityRow(entry: ActivityEntry, onLongClick: () -> Unit) {
+internal fun ActivityRow(entry: ActivityEntry, onLongClick: () -> Unit, onClick: (() -> Unit)? = null) {
     val colors = Wallhop.colors
     val context = LocalContext.current
     val (icon, color) = when (entry.kind) {
@@ -199,18 +200,19 @@ internal fun ActivityRow(entry: ActivityEntry, onLongClick: () -> Unit) {
                 color = colors.labelSecondary,
             )
         },
+        onLongClickLabel = "Show actions",
         onLongClick = onLongClick,
+        onClick = onClick,
     )
 }
 
 private fun dayLabel(context: android.content.Context, time: Long): String {
-    val now = Calendar.getInstance()
-    val then = Calendar.getInstance().apply { timeInMillis = time }
-    val sameYear = now.get(Calendar.YEAR) == then.get(Calendar.YEAR)
-    val days = now.get(Calendar.DAY_OF_YEAR) - then.get(Calendar.DAY_OF_YEAR)
-    return when {
-        sameYear && days == 0 -> "Today"
-        sameYear && days == 1 -> "Yesterday"
+    val zone = java.time.ZoneId.systemDefault()
+    val today = java.time.LocalDate.now(zone)
+    val day = java.time.Instant.ofEpochMilli(time).atZone(zone).toLocalDate()
+    return when (day) {
+        today -> "Today"
+        today.minusDays(1) -> "Yesterday"
         else -> DateUtils.formatDateTime(context, time, DateUtils.FORMAT_SHOW_DATE or DateUtils.FORMAT_SHOW_WEEKDAY)
     }
 }

@@ -70,4 +70,17 @@ class OtpExtractorTest {
     @Test fun phoneNumberIgnored() = assertNoCode("Call 9876543210 to verify your address.")
 
     @Test fun shoppingDoesNotMatchPin() = assertNoCode("Shopping list: 2 eggs, 1200 grams flour")
+
+    // A word ending in "x" or "box" right before the code isn't an account marker.
+    @Test fun brandEndingInX() = assertCode("482913", "Roblox: 482913 is your code")
+
+    @Test fun dropbox() = assertCode("553311", "Your Dropbox code is 553311")
+
+    @Test fun androidWord() = assertCode("120934", "Android verification code 120934")
+
+    @Test fun groupedPhoneNumberIgnored() = assertNoCode("Call 1-888-280-4331 to confirm your order")
+
+    @Test fun codeBeforePhoneNumber() = assertCode("482913", "Your code is 482913. Call 1-800-555-0199 if this wasn't you")
+
+    @Test fun indianPhoneNumberIgnored() = assertNoCode("To verify, call us on +91 98765 43210")
 }

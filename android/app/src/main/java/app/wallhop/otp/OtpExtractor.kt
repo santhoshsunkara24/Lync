@@ -33,8 +33,15 @@ object OtpExtractor {
 
     private val alphanumericPattern = Regex("""(?<![\p{L}\p{N}])([A-Z0-9]{6,8})(?![\p{L}\p{N}])""")
 
-    private val amountBefore = Regex("""(?:rs\.?|inr|₹|\$|usd|eur|€|£|gbp|amt|amount|bal|balance)\s*:?\s*$""", RegexOption.IGNORE_CASE)
-    private val accountBefore = Regex("""(?:a/c|acct|account|card|ending|ending in|xx+|\*+|x+|no\.?|number|ref|ref\.? no|order|txn|id)\s*:?\s*$""", RegexOption.IGNORE_CASE)
+    // A letter just before ("Roblox: ", "Dropbox ") means it's the end of a word, not "x"/"box".
+    private val amountBefore = Regex("""(?<![\p{L}])(?:rs\.?|inr|₹|\$|usd|eur|€|£|gbp|amt|amount|bal|balance)\s*:?\s*$""", RegexOption.IGNORE_CASE)
+    private val accountBefore = Regex("""(?<![\p{L}])(?:a/c|acct|account|card|ending|ending in|xx+|\*+|x+|no\.?|number|ref|ref\.? no|order|txn|id)\s*:?\s*$""", RegexOption.IGNORE_CASE)
+    /**
+     * Grouped numbers like 1-888-280-4331 or +91 98765 43210: three or more groups are a phone
+     * number, never a code (codes split at most once, as in 123-456).
+     */
+    private val phoneNumber = Regex("""(?<![\p{N}])(?:\+\d{1,3}[ -]?)?(?:\(\d{2,4}\)\s?|\d{1,5}[ -])\d{2,5}[ -]\d{3,5}(?:[ -]\d{2,5})*(?![\p{N}])""")
+    private val phoneBefore = Regex("""(?<![\p{L}])(?:call|tel|phone|helpline|dial|contact us|contact)\.?\s*(?:us\s*)?(?:on|at)?\s*:?\s*\+?$""", RegexOption.IGNORE_CASE)
     private val decimalAfter = Regex("""^[.,]\d""")
     private val strongBefore = Regex("""(?:otp|code|pin|passcode|password|is|:|：)\s*(?:is)?\s*:?\s*$""", RegexOption.IGNORE_CASE)
     private val strongAfter = Regex("""^\s*(?:is your|is the|is ur|as your|為|为|は|은|는|là)""", RegexOption.IGNORE_CASE)
@@ -47,6 +54,7 @@ object OtpExtractor {
 
         data class Candidate(val code: String, val start: Int, val end: Int, val score: Int)
 
+        val phoneRanges = phoneNumber.findAll(text).map { it.range }.toList()
         val candidates = mutableListOf<Candidate>()
         for (match in candidatePattern.findAll(text)) {
             val group = match.groups[1] ?: continue
@@ -59,6 +67,7 @@ object OtpExtractor {
 
             if (amountBefore.containsMatchIn(before) || decimalAfter.containsMatchIn(after)) continue
             if (accountBefore.containsMatchIn(before)) continue
+            if (phoneRanges.any { start <= it.last && end > it.first } || phoneBefore.containsMatchIn(before)) continue
             if (code.length == 4 && code.toInt() in 1900..2099 && !strongBefore.containsMatchIn(before)) continue
 
             val distance = keywordPositions.minOf { position ->

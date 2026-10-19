@@ -7,6 +7,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
+import android.provider.CallLog
 import android.provider.ContactsContract
 import android.telecom.TelecomManager
 import android.telephony.SubscriptionManager
@@ -39,16 +40,19 @@ class CallReceiver : BroadcastReceiver() {
         @Suppress("DEPRECATION")
         val number = intent.getStringExtra(TelephonyManager.EXTRA_INCOMING_NUMBER)?.takeIf { it.isNotBlank() }
         val subscription = intent.getIntExtra(SubscriptionManager.EXTRA_SUBSCRIPTION_INDEX, SubscriptionManager.INVALID_SUBSCRIPTION_ID)
-        CallTracker.onState(context, state, number, subscription)
+        CallTracker.onState(context, state, number, subscription, this)
     }
 }
 
 object CallTracker {
     private var current: CallInfo? = null
     private var answered = false
+    /** When the current call started ringing (wall clock, like the call log). */
+    private var ringingSince = 0L
 
+    /** [receiver] keeps the broadcast alive while the call log is checked after a call ends. */
     @Synchronized
-    fun onState(context: Context, state: String, number: String?, subscription: Int) {
+    fun onState(context: Context, state: String, number: String?, subscription: Int, receiver: BroadcastReceiver? = null) {
         val link = LinkManager.get(context)
         when (state) {
             TelephonyManager.EXTRA_STATE_RINGING -> {
@@ -61,6 +65,7 @@ object CallTracker {
                     sim = simLabel(context, subscription) ?: previous?.sim,
                 )
                 if (call == previous) return
+                if (previous?.id != call.id) ringingSince = System.currentTimeMillis()
                 answered = false
                 current = call
                 link.sendCall(call)
@@ -74,11 +79,39 @@ object CallTracker {
             }
             TelephonyManager.EXTRA_STATE_IDLE -> {
                 val call = current ?: return
-                link.sendCall(call.copy(state = if (answered || call.state == "active") "ended" else "missed"))
                 current = null
-                answered = false
+                if (answered || call.state == "active") {
+                    answered = false
+                    link.sendCall(call.copy(state = "ended"))
+                    return
+                }
+                // Not answered: missed, unless it was declined on the phone. The call log says
+                // which, but only once the phone app has written it, a moment after the call ends.
+                val since = ringingSince
+                val pending = runCatching { receiver?.goAsync() }.getOrNull()
+                Thread {
+                    try {
+                        Thread.sleep(1_500)
+                        val declined = wasDeclined(context, since)
+                        link.sendCall(call.copy(state = if (declined) "ended" else "missed"))
+                    } finally {
+                        pending?.finish()
+                    }
+                }.start()
             }
         }
+    }
+
+    /** True when the call log shows the call that rang at [since] was declined (not missed). */
+    private fun wasDeclined(context: Context, since: Long): Boolean {
+        if (!granted(context, Manifest.permission.READ_CALL_LOG)) return false
+        return runCatching {
+            context.contentResolver.query(
+                CallLog.Calls.CONTENT_URI, arrayOf(CallLog.Calls.TYPE),
+                "${CallLog.Calls.DATE} >= ?", arrayOf((since - 10_000).toString()),
+                "${CallLog.Calls.DATE} DESC",
+            )?.use { if (it.moveToFirst()) it.getInt(0) == CallLog.Calls.REJECTED_TYPE else false } ?: false
+        }.getOrDefault(false)
     }
 
     /** "SIM 1 · Jio", only when more than one SIM is active. */
@@ -119,9 +152,7 @@ object CallControl {
         return runCatching {
             when (action) {
                 "answer" -> { telecom.acceptRingingCall(); true }
-                "decline", "end" ->
-                    app.wallhop.otp.OtpNotificationListener.endCallFromNotification(context) ||
-                        @Suppress("DEPRECATION") telecom.endCall()
+                "decline", "end" -> app.wallhop.otp.OtpNotificationListener.endCall(context)
                 else -> false
             }
         }.getOrDefault(false)

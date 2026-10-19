@@ -23,6 +23,8 @@ enum LinkEvent {
     case fileSaved(batch: String, url: URL)
     case fileFailed(batch: String, name: String)
     case batchFinished(id: String)
+    /// The connection dropped before the batch finished.
+    case batchInterrupted(id: String)
     case notification(PhoneNotification, icon: Data?)
     case call(PhoneCall)
     case smsChanged
@@ -92,6 +94,11 @@ final class LinkServer {
     /// WALLHOP_PORT overrides it for a test copy, so a real phone never reaches that copy.
     static let preferredPort: UInt16 = ProcessInfo.processInfo.environment["WALLHOP_PORT"].flatMap(UInt16.init) ?? 47474
 
+    /// The longest text that still fits in one frame with its header (PROTOCOL.md, Framing).
+    static let maxTextBytes = Framing.maxOutgoingPayload - 16 - 2 - 1024
+    /// Pairing attempts allowed per address per minute.
+    static let pairAttemptsPerMinute = 5
+
     let identity: Identity
     let paired: PairedPhones
     let queue = DispatchQueue(label: "app.wallhop.link")
@@ -102,13 +109,21 @@ final class LinkServer {
 
     private var listener: NWListener?
     private var connections: [UUID: PhoneConnection] = [:]
+    /// The newest established connection of each paired phone, by public key.
+    private var readyByKey: [Data: PhoneConnection] = [:]
+    /// The phone the app shows and talks to. Another paired phone stays connected in the
+    /// background and takes over when this one leaves.
     private var active: PhoneConnection?
     private var listeningPort: UInt16?
     /// The secret in the pairing QR currently on screen. One at a time, used once, two minutes.
     private var invite: (token: Data, expires: Date)?
-    private lazy var files = FileReceiver()
-    private var pendingAcks: [String: (Bool) -> Void] = [:]
-    private var pendingResults: [String: (Message?) -> Void] = [:]
+    /// The connection whose pairing request is waiting for the user; one at a time.
+    private var pendingPairing: UUID?
+    private var pairAttempts: [String: [Date]] = [:]
+    /// Replies we're waiting for, with the connection they were sent on.
+    private var pendingAcks: [String: (connection: UUID, callback: (Bool) -> Void)] = [:]
+    private var pendingResults: [String: (connection: UUID, callback: (Message?) -> Void)] = [:]
+    private var senders: [String: FileSender] = [:]
 
     init(identity: Identity, paired: PairedPhones) {
         self.identity = identity
@@ -128,8 +143,9 @@ final class LinkServer {
         tcp.keepaliveInterval = 10
         tcp.keepaliveCount = 3
         tcp.noDelay = true
+        // No allowLocalEndpointReuse: with it, a second copy could bind 47474 too, and the
+        // fallback to a random port below would never kick in.
         let parameters = NWParameters(tls: nil, tcp: tcp)
-        parameters.allowLocalEndpointReuse = true
 
         let listener: NWListener
         do {
@@ -139,7 +155,12 @@ final class LinkServer {
                 listener = try NWListener(using: parameters)
             }
         } catch {
-            if port != nil { startListener(port: nil) } else { emit(.stopped(reason: error.localizedDescription)) }
+            if port != nil {
+                startListener(port: nil)
+            } else {
+                NSLog("Lync: can't listen: \(error.localizedDescription)")
+                emit(.stopped(reason: error.localizedDescription))
+            }
             return
         }
 
@@ -155,6 +176,7 @@ final class LinkServer {
                 if port != nil, case .posix(.EADDRINUSE) = error {
                     self.startListener(port: nil)
                 } else {
+                    NSLog("Lync: listener failed: \(error.localizedDescription)")
                     self.emit(.stopped(reason: error.localizedDescription))
                     self.queue.asyncAfter(deadline: .now() + 3) { self.startListener(port: port) }
                 }
@@ -170,6 +192,16 @@ final class LinkServer {
         }
         listener.start(queue: queue)
         self.listener = listener
+    }
+
+    /// Starts listening again, e.g. after the user taps Try again.
+    func restart() {
+        queue.async {
+            self.listener?.stateUpdateHandler = nil
+            self.listener?.cancel()
+            self.listener = nil
+            self.startListener(port: Self.preferredPort)
+        }
     }
 
     // MARK: - QR pairing
@@ -211,10 +243,31 @@ final class LinkServer {
     func redeemInvite(proof: Data, phonePub: Data) -> Bool {
         guard let current = invite, current.expires > Date() else { return false }
         let expected = Handshake.qrProof(token: current.token, phonePub: phonePub, macPub: identity.publicKey)
-        // Constant-time comparison, so timing doesn't leak how much of the proof was right.
-        guard expected.count == proof.count, zip(expected, proof).reduce(UInt8(0), { $0 | ($1.0 ^ $1.1) }) == 0 else { return false }
+        guard Handshake.constantTimeEqual(expected, proof) else { return false }
         invite = nil
         return true
+    }
+
+    /// At most `pairAttemptsPerMinute` pairing attempts per address per minute.
+    func allowPairAttempt(from host: String) -> Bool {
+        let now = Date()
+        var recent = (pairAttempts[host] ?? []).filter { now.timeIntervalSince($0) < 60 }
+        guard recent.count < Self.pairAttemptsPerMinute else { return false }
+        recent.append(now)
+        pairAttempts[host] = recent
+        pairAttempts = pairAttempts.filter { !$0.value.isEmpty && now.timeIntervalSince($0.value.last!) < 60 }
+        return true
+    }
+
+    /// Claims the single pairing slot. False while another phone's request is pending.
+    func beginPairing(_ connection: PhoneConnection) -> Bool {
+        if let pending = pendingPairing, connections[pending] != nil { return false }
+        pendingPairing = connection.id
+        return true
+    }
+
+    func endPairing(_ connection: PhoneConnection) {
+        if pendingPairing == connection.id { pendingPairing = nil }
     }
 
     func pairedWithQR(name: String) {
@@ -236,25 +289,75 @@ final class LinkServer {
     }
 
     func connectionReady(_ connection: PhoneConnection, phone: PairedPhone) {
-        // One active connection per Mac; a reconnecting phone replaces the old one.
-        if let old = active, old !== connection { old.close() }
+        let key = phone.publicKey
+        let old = readyByKey[key]
+        readyByKey[key] = connection
+        // The same phone reconnecting replaces its old connection.
+        if let old, old !== connection {
+            if active === old {
+                active = connection
+                retire(old)
+                old.close()
+                emit(.connected(phone, host: connection.remoteHost))
+                return
+            }
+            old.close()
+        }
+        // Another phone that's still connected keeps the app; this one waits its turn.
+        if let current = active, current !== connection { return }
         active = connection
         emit(.connected(phone, host: connection.remoteHost))
     }
 
     func connectionClosed(_ connection: PhoneConnection) {
         connections[connection.id] = nil
+        endPairing(connection)
         if let id = connection.pairingId { emit(.pairingEnded(id: id)) }
-        if active === connection {
-            active = nil
-            files.cancelAll()
-            if let phone = connection.phone { emit(.disconnected(phone)) }
+        if let key = connection.phone?.publicKey, readyByKey[key] === connection { readyByKey[key] = nil }
+        retire(connection)
+        guard active === connection else { return }
+        active = nil
+        if let phone = connection.phone { emit(.disconnected(phone)) }
+        // Hand over to another paired phone that's still connected.
+        if let next = readyByKey.values.first(where: { $0.state == .ready }), let phone = next.phone {
+            active = next
+            emit(.connected(phone, host: next.remoteHost))
+        }
+    }
+
+    /// Fails everything still waiting on a connection that's going away.
+    private func retire(_ connection: PhoneConnection) {
+        for batch in connection.files.cancelAll() { emit(.batchInterrupted(id: batch)) }
+        for (id, pending) in pendingAcks where pending.connection == connection.id {
+            pendingAcks[id] = nil
+            pending.callback(false)
+        }
+        for (id, pending) in pendingResults where pending.connection == connection.id {
+            pendingResults[id] = nil
+            pending.callback(nil)
+        }
+    }
+
+    /// Drops the connection of a phone that was just forgotten.
+    func disconnect(publicKey: Data) {
+        queue.async {
+            for connection in self.connections.values where connection.phone?.publicKey == publicKey {
+                connection.close()
+            }
         }
     }
 
     func handle(_ message: Message, from connection: PhoneConnection) {
         if Self.debugLog { NSLog("Lync: ← \(message.type) \(message.header.filter { $0.key != "t" && $0.key != "text" })") }
         guard let phone = connection.phone else { return }
+        // A paired phone waiting in the background still delivers codes, texts, links and files;
+        // its status, media, calls and notifications would mix with the active phone's.
+        if connection !== active {
+            let background: Set<String> = ["ping", "text", "otp", "open_url", "ack",
+                                           "batch_start", "file_start", "file_chunk", "file_end", "batch_end"]
+            guard background.contains(message.type) else { return }
+        }
+        let files = connection.files
         switch message.type {
         case "ping":
             connection.send(Message("pong"))
@@ -274,6 +377,7 @@ final class LinkServer {
 
         case "batch_start":
             if let batch = message.string("batch") {
+                files.startBatch(batch)
                 emit(.batchStarted(id: batch, count: message.int("count") ?? 1,
                                    bytes: Int64(message.int("bytes") ?? 0)))
             }
@@ -298,7 +402,10 @@ final class LinkServer {
             }
 
         case "batch_end":
-            if let batch = message.string("batch") { emit(.batchFinished(id: batch)) }
+            if let batch = message.string("batch") {
+                files.endBatch(batch)
+                emit(.batchFinished(id: batch))
+            }
 
         case "notif":
             guard let key = message.string("key"), let pkg = message.string("pkg") else { break }
@@ -330,8 +437,8 @@ final class LinkServer {
             }
 
         case "sms_result":
-            if let id = message.string("id"), let callback = pendingResults.removeValue(forKey: id) {
-                callback(message)
+            if let id = message.string("id"), let pending = pendingResults.removeValue(forKey: id) {
+                pending.callback(message)
             }
 
         case "open_url":
@@ -356,8 +463,8 @@ final class LinkServer {
             if let key = message.string("key") { emit(.notificationRemoved(key: key)) }
 
         case "ack":
-            if let id = message.string("id"), let callback = pendingAcks.removeValue(forKey: id) {
-                callback(message.bool("ok") ?? true)
+            if let id = message.string("id"), let pending = pendingAcks.removeValue(forKey: id) {
+                pending.callback(message.bool("ok") ?? true)
             }
 
         default:
@@ -378,13 +485,8 @@ final class LinkServer {
                 DispatchQueue.main.async { completion(false) }
                 return
             }
-            let id = UUID().uuidString
-            self.pendingAcks[id] = { ok in DispatchQueue.main.async { completion(ok) } }
-            active.send(Message("text", ["id": id], body: Data(text.utf8))) { sent in
-                if !sent, let callback = self.pendingAcks.removeValue(forKey: id) { callback(false) }
-            }
-            self.queue.asyncAfter(deadline: .now() + 10) {
-                if let callback = self.pendingAcks.removeValue(forKey: id) { callback(false) }
+            self.expectAck(on: active, message: Message("text", body: Data(text.utf8)), timeout: 10) { ok in
+                DispatchQueue.main.async { completion(ok) }
             }
         }
     }
@@ -396,11 +498,8 @@ final class LinkServer {
                 DispatchQueue.main.async { completion(false) }
                 return
             }
-            let id = UUID().uuidString
-            self.pendingAcks[id] = { ok in DispatchQueue.main.async { completion(ok) } }
-            active.send(Message("notif_reply", ["id": id, "key": key], body: Data(text.utf8)))
-            self.queue.asyncAfter(deadline: .now() + 10) {
-                if let callback = self.pendingAcks.removeValue(forKey: id) { callback(false) }
+            self.expectAck(on: active, message: Message("notif_reply", ["key": key], body: Data(text.utf8)), timeout: 10) { ok in
+                DispatchQueue.main.async { completion(ok) }
             }
         }
     }
@@ -422,10 +521,12 @@ final class LinkServer {
             let id = UUID().uuidString
             var header = fields
             header["id"] = id
-            self.pendingResults[id] = { message in DispatchQueue.main.async { completion(message) } }
-            active.send(Message(type, header))
+            self.pendingResults[id] = (active.id, { message in DispatchQueue.main.async { completion(message) } })
+            active.send(Message(type, header)) { sent in
+                if !sent, let pending = self.pendingResults.removeValue(forKey: id) { pending.callback(nil) }
+            }
             self.queue.asyncAfter(deadline: .now() + timeout) {
-                if let callback = self.pendingResults.removeValue(forKey: id) { callback(nil) }
+                if let pending = self.pendingResults.removeValue(forKey: id) { pending.callback(nil) }
             }
         }
     }
@@ -437,13 +538,10 @@ final class LinkServer {
                 DispatchQueue.main.async { completion("Your phone isn't connected") }
                 return
             }
-            let id = UUID().uuidString
-            var header: [String: Any] = ["id": id, "address": address]
+            var header: [String: Any] = ["address": address]
             if let sim { header["sim"] = sim }
-            self.pendingAcks[id] = { ok in DispatchQueue.main.async { completion(ok ? nil : "Your phone couldn't send it") } }
-            active.send(Message("sms_send", header, body: Data(text.utf8)))
-            self.queue.asyncAfter(deadline: .now() + 20) {
-                if let callback = self.pendingAcks.removeValue(forKey: id) { callback(false) }
+            self.expectAck(on: active, message: Message("sms_send", header, body: Data(text.utf8)), timeout: 20) { ok in
+                DispatchQueue.main.async { completion(ok ? nil : "Your phone couldn't send it") }
             }
         }
     }
@@ -497,19 +595,40 @@ final class LinkServer {
                 self.emit(.outgoingFinished(id: batch, ok: false))
                 return
             }
-            FileSender(batch: batch, urls: readable, connection: active, queue: self.queue) { [weak self] event in
+            let sender = FileSender(batch: batch, urls: readable, connection: active, queue: self.queue) { event in
+                // The sender is released here, which also breaks the server ↔ sender reference.
                 switch event {
-                case .progress(let sent, let total): self?.emit(.outgoingProgress(id: batch, sent: sent, total: total))
-                case .finished(let ok): self?.emit(.outgoingFinished(id: batch, ok: ok))
+                case .progress(let sent, let total): self.emit(.outgoingProgress(id: batch, sent: sent, total: total))
+                case .finished(let ok):
+                    self.senders[batch] = nil
+                    self.emit(.outgoingFinished(id: batch, ok: ok))
                 }
-            } registerAck: { [weak self] id, callback in
-                self?.pendingAcks[id] = callback
-            }.start()
+            } registerAck: { id, callback in
+                self.pendingAcks[id] = (active.id, callback)
+            }
+            self.senders[batch] = sender
+            sender.start()
         }
         return batch
     }
 
     // MARK: - Helpers
+
+    /// Sends a message with a fresh `id` and calls back (on the queue) with the phone's ack, or
+    /// false if it can't be sent, the connection drops, or no ack comes in time.
+    private func expectAck(on connection: PhoneConnection, message: Message, timeout: TimeInterval,
+                           completion: @escaping (Bool) -> Void) {
+        let id = UUID().uuidString
+        var message = message
+        message.header["id"] = id
+        pendingAcks[id] = (connection.id, completion)
+        connection.send(message) { sent in
+            if !sent, let pending = self.pendingAcks.removeValue(forKey: id) { pending.callback(false) }
+        }
+        queue.asyncAfter(deadline: .now() + timeout) {
+            if let pending = self.pendingAcks.removeValue(forKey: id) { pending.callback(false) }
+        }
+    }
 
     private func ack(_ message: Message, on connection: PhoneConnection) {
         guard let id = message.string("id") else { return }

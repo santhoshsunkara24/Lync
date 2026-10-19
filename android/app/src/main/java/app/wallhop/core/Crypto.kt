@@ -24,8 +24,21 @@ object Crypto {
         return digest.digest()
     }
 
-    fun pairingCode(phonePub: ByteArray, macPub: ByteArray): String {
-        val hash = sha256("wallhop-pair-v1".toByteArray(), phonePub, macPub)
+    /** Length of each side's pairing nonce (pairing v2). */
+    const val PAIR_NONCE_SIZE = 16
+
+    fun pairNonce(): ByteArray = ByteArray(PAIR_NONCE_SIZE).also { java.security.SecureRandom().nextBytes(it) }
+
+    /**
+     * Pairing v2 commitment: the phone commits to its nonce before it sees the Mac's, so neither
+     * side can grind keys or nonces to make the six digits match (PROTOCOL.md, Pairing).
+     */
+    fun pairingCommit(phonePub: ByteArray, phoneNonce: ByteArray): ByteArray =
+        sha256("lync-pair-commit-v2".toByteArray(Charsets.UTF_8), phonePub, phoneNonce)
+
+    /** The 6-digit code both screens show, from both keys and both nonces. */
+    fun pairingCode(phonePub: ByteArray, macPub: ByteArray, phoneNonce: ByteArray, macNonce: ByteArray): String {
+        val hash = sha256("lync-pair-v2".toByteArray(Charsets.UTF_8), phonePub, macPub, phoneNonce, macNonce)
         val value = ByteBuffer.wrap(hash, 0, 4).int.toLong() and 0xFFFFFFFFL
         return "%06d".format(value % 1_000_000)
     }

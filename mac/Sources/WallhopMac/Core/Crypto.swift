@@ -1,18 +1,43 @@
 import CryptoKit
 import Foundation
+import Security
 
 /// Key derivation and the pairing code. See docs/PROTOCOL.md.
 enum Handshake {
     static let infoPhoneToMac = Data("wallhop v1 phone->mac".utf8)
     static let infoMacToPhone = Data("wallhop v1 mac->phone".utf8)
 
-    static func pairingCode(phonePub: Data, macPub: Data) -> String {
-        var input = Data("wallhop-pair-v1".utf8)
+    /// Pairing v2 commitment: the phone commits to its nonce before it sees the Mac's, so neither
+    /// side can grind keys or nonces to make the six digits match (PROTOCOL.md, Pairing).
+    static func pairingCommit(phonePub: Data, phoneNonce: Data) -> Data {
+        var input = Data("lync-pair-commit-v2".utf8)
+        input.append(phonePub)
+        input.append(phoneNonce)
+        return Data(SHA256.hash(data: input))
+    }
+
+    /// The 6-digit code both screens show, from both keys and both nonces.
+    static func pairingCode(phonePub: Data, macPub: Data, phoneNonce: Data, macNonce: Data) -> String {
+        var input = Data("lync-pair-v2".utf8)
         input.append(phonePub)
         input.append(macPub)
+        input.append(phoneNonce)
+        input.append(macNonce)
         let digest = Array(SHA256.hash(data: input))
         let value = UInt32(digest[0]) << 24 | UInt32(digest[1]) << 16 | UInt32(digest[2]) << 8 | UInt32(digest[3])
         return String(format: "%06u", value % 1_000_000)
+    }
+
+    static func randomBytes(_ count: Int) -> Data? {
+        var data = Data(count: count)
+        let status = data.withUnsafeMutableBytes { SecRandomCopyBytes(kSecRandomDefault, count, $0.baseAddress!) }
+        return status == errSecSuccess ? data : nil
+    }
+
+    /// Constant-time comparison, so timing doesn't leak how much of a secret matched.
+    static func constantTimeEqual(_ a: Data, _ b: Data) -> Bool {
+        guard a.count == b.count else { return false }
+        return zip(a, b).reduce(UInt8(0)) { $0 | ($1.0 ^ $1.1) } == 0
     }
 
     static func sessionKeys(ikm: Data, transcript: Data) -> (phoneToMac: SymmetricKey, macToPhone: SymmetricKey) {

@@ -20,6 +20,10 @@ struct WTheme: Equatable {
     static let chip = Color.white.opacity(0.13)
     static let secondary = Color.white.opacity(0.68)
     static let tertiary = Color.white.opacity(0.4)
+    /// Destructive actions, failures and declining a call.
+    static let danger = Color(red: 1, green: 0.42, blue: 0.38)
+    /// Answering a call, codes.
+    static let success = Color(red: 0.36, green: 0.84, blue: 0.5)
 
     static let defaultSeed: UInt32 = 0xFF4B2BC9
 
@@ -83,6 +87,18 @@ struct WTheme: Equatable {
     }
 }
 
+/// Corner radii (DESIGN.md "Current direction"). Always with `style: .continuous`.
+enum WRadius {
+    /// Cards: the latest code, now playing, pairing.
+    static let card: CGFloat = 28
+    /// Grouped lists: notifications, Recent, settings groups.
+    static let group: CGFloat = 24
+    /// Text fields, the QR's white tile, artwork.
+    static let field: CGFloat = 14
+    /// Thumbnails and small tiles.
+    static let small: CGFloat = 10
+}
+
 /// Figtree, the phone app's font (SIL OFL, bundled in Resources).
 enum WFont {
     static func register() {
@@ -101,18 +117,20 @@ extension Font {
 }
 
 /// Pale pill (main action) or see-through pill (secondary), like the phone's buttons.
+/// `destructive` makes a red pill for actions that can't be undone, like Forget.
 struct WPill: ButtonStyle {
     var prominent = true
     var compact = false
+    var destructive = false
     @EnvironmentObject var theme: ThemeStore
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(.wh(compact ? 12 : 13, .semibold))
-            .foregroundStyle(prominent ? theme.theme.onPale : Color.white)
+            .foregroundStyle(destructive ? WTheme.ink : prominent ? theme.theme.onPale : Color.white)
             .padding(.horizontal, compact ? 12 : 16)
             .frame(height: compact ? 30 : 36)
-            .background(Capsule().fill(prominent ? theme.theme.pale : WTheme.chip))
+            .background(Capsule().fill(destructive ? WTheme.danger : prominent ? theme.theme.pale : WTheme.chip))
             .scaleEffect(configuration.isPressed ? 0.96 : 1)
             .opacity(configuration.isPressed ? 0.85 : 1)
             .contentShape(Capsule())

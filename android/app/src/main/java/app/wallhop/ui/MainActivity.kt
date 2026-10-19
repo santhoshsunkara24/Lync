@@ -31,15 +31,18 @@ class MainActivity : ComponentActivity() {
 
     override fun onStart() {
         super.onStart()
+        LinkService.screensOpen++
+        Pickers.open = false
         LinkService.start(this)
     }
 
     override fun onStop() {
         super.onStop()
-        // "Run in background" off in Wallhop: stay connected only while the app is open.
-        if (!isChangingConfigurations && !app.wallhop.core.Features.on(this, app.wallhop.core.Features.Key.Background)) {
-            LinkService.stop(this)
-        }
+        LinkService.screensOpen = (LinkService.screensOpen - 1).coerceAtLeast(0)
+        // "Run in background" off in Lync: stay connected only while the app is open. Not while
+        // a photo or file picker is up (the app comes straight back), and not while a transfer
+        // is waiting or sending: the service stops itself once that ends.
+        if (!isChangingConfigurations && !Pickers.open) LinkService.stopIfIdle(this)
     }
 
     override fun onTrimMemory(level: Int) {
@@ -48,4 +51,9 @@ class MainActivity : ComponentActivity() {
         @Suppress("DEPRECATION")
         if (level >= TRIM_MEMORY_UI_HIDDEN) app.wallhop.ui.screens.trimAppIcons()
     }
+}
+
+/** True while Lync's own photo or file picker is on screen, so leaving for it doesn't drop the link. */
+internal object Pickers {
+    @Volatile var open = false
 }

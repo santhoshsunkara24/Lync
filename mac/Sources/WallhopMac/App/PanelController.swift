@@ -99,8 +99,11 @@ final class PanelController {
             panel.hasShadow = true
             return
         }
-        let screen = NSScreen.main ?? NSScreen.screens[0]
-        if let anchor = statusFrame() {
+        let anchor = statusFrame()
+        // The screen the menu bar icon is on (it can be another display than the main one).
+        guard let screen = anchor.flatMap({ frame in NSScreen.screens.first { $0.frame.intersects(frame) } })
+                ?? NSScreen.main ?? NSScreen.screens.first else { return }
+        if let anchor {
             var x = anchor.midX - width / 2
             x = min(max(x, screen.visibleFrame.minX + 6), screen.visibleFrame.maxX - width - 6)
             panel.setFrame(NSRect(x: x, y: anchor.minY - 6 - height, width: width, height: height), display: true)
@@ -113,10 +116,17 @@ final class PanelController {
 
     private func installMonitors() {
         removeMonitors()
-        // Esc closes.
+        // Esc goes back from Settings or Add a phone, then closes.
         if let keys = NSEvent.addLocalMonitorForEvents(matching: .keyDown, handler: { [weak self] event in
-            if event.keyCode == 53, self?.model.replyingTo == nil { self?.model.closePanel(); return nil }
-            return event
+            guard let self, event.keyCode == 53, self.model.replyingTo == nil else { return event }
+            if self.model.confirmingForget != nil {
+                self.model.confirmingForget = nil
+            } else if self.model.panelPage != .home {
+                self.model.panelPage = .home
+            } else {
+                self.model.closePanel()
+            }
+            return nil
         }) { monitors.append(keys) }
         // A click anywhere else closes.
         if let clicks = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown], handler: { [weak self] _ in
@@ -168,12 +178,13 @@ private struct PanelRoot: View {
     }
 }
 
-/// An invisible strip over the notch: hover or click opens the panel; drop files to send them.
+/// An invisible strip over the notch: hover or click opens the panel; drop files to send them;
+/// right-click for the menu.
 final class NotchSensor {
     private let window: NSPanel
     private let view: SensorView
 
-    init(onHover: @escaping () -> Void, onClick: @escaping () -> Void, onDrop: @escaping ([URL]) -> Void) {
+    init(onHover: @escaping () -> Void, onClick: @escaping () -> Void, drop: FileDropHandler, menu: @escaping () -> NSMenu) {
         window = NSPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)
         window.isOpaque = false
         window.backgroundColor = .clear
@@ -181,7 +192,7 @@ final class NotchSensor {
         window.level = NSWindow.Level(rawValue: NSWindow.Level.statusBar.rawValue + 1)
         window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
         window.ignoresMouseEvents = false
-        view = SensorView(onHover: onHover, onClick: onClick, onDrop: onDrop)
+        view = SensorView(onHover: onHover, onClick: onClick, drop: drop, menu: menu)
         window.contentView = view
     }
 
@@ -207,13 +218,15 @@ final class NotchSensor {
 private final class SensorView: NSView {
     private let onHover: () -> Void
     private let onClick: () -> Void
-    private let onDrop: ([URL]) -> Void
+    private let drop: FileDropHandler
+    private let makeMenu: () -> NSMenu
     private var hoverWork: DispatchWorkItem?
 
-    init(onHover: @escaping () -> Void, onClick: @escaping () -> Void, onDrop: @escaping ([URL]) -> Void) {
+    init(onHover: @escaping () -> Void, onClick: @escaping () -> Void, drop: FileDropHandler, menu: @escaping () -> NSMenu) {
         self.onHover = onHover
         self.onClick = onClick
-        self.onDrop = onDrop
+        self.drop = drop
+        self.makeMenu = menu
         super.init(frame: .zero)
         registerForDraggedTypes([.fileURL])
     }
@@ -236,23 +249,20 @@ private final class SensorView: NSView {
 
     override func mouseDown(with event: NSEvent) {
         hoverWork?.cancel()
-        onClick()
+        if event.modifierFlags.contains(.control) {
+            rightMouseDown(with: event)
+        } else {
+            onClick()
+        }
     }
 
-    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
-        fileURLs(sender).isEmpty ? [] : .copy
+    override func rightMouseDown(with event: NSEvent) {
+        hoverWork?.cancel()
+        NSMenu.popUpContextMenu(makeMenu(), with: event, for: self)
     }
 
-    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
-        let urls = fileURLs(sender)
-        guard !urls.isEmpty else { return false }
-        onDrop(urls)
-        return true
-    }
-
-    private func fileURLs(_ info: NSDraggingInfo) -> [URL] {
-        let options: [NSPasteboard.ReadingOptionKey: Any] = [.urlReadingFileURLsOnly: true]
-        let urls = info.draggingPasteboard.readObjects(forClasses: [NSURL.self], options: options) as? [URL] ?? []
-        return urls.filter { !$0.hasDirectoryPath }
-    }
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation { drop.entered(sender) }
+    override func draggingExited(_ sender: NSDraggingInfo?) { drop.exited() }
+    override func draggingEnded(_ sender: NSDraggingInfo) { drop.exited() }
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool { drop.perform(sender) }
 }

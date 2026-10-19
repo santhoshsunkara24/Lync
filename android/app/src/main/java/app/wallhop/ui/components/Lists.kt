@@ -30,7 +30,16 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.interaction.PressInteraction
+import androidx.compose.foundation.selection.toggleable
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.customActions
+import androidx.compose.ui.semantics.onLongClick
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -147,7 +156,10 @@ private class SectionSliceShape(
 
 /**
  * One row. Highlights the instant it's touched and fades back on release — no ripple.
- * [trailing] holds a value, switch, button or nothing; [chevron] adds the navigation arrow.
+ * [trailing] holds a value, button or nothing; [chevron] adds the navigation arrow.
+ * With [checked] the row is a switch: a tap anywhere on it toggles, and TalkBack reads the
+ * title with the switch's state. A row with only [onLongClick] isn't announced as a button;
+ * TalkBack offers the long press as an action named [onLongClickLabel].
  */
 @Composable
 fun ListRow(
@@ -161,6 +173,10 @@ fun ListRow(
     destructive: Boolean = false,
     titleColor: Color? = null,
     role: Role = Role.Button,
+    checked: Boolean? = null,
+    onCheckedChange: ((Boolean) -> Unit)? = null,
+    switchEnabled: Boolean = true,
+    onLongClickLabel: String? = null,
     onLongClick: (() -> Unit)? = null,
     onClick: (() -> Unit)? = null,
 ) {
@@ -168,26 +184,58 @@ fun ListRow(
     val source = remember { MutableInteractionSource() }
     val pressed by source.collectIsPressedAsState()
     val haptics = rememberHaptics()
+    val isSwitch = checked != null && onCheckedChange != null
     val highlight by animateColorAsState(
-        if (pressed && (onClick != null || onLongClick != null)) colors.fill else Color.Transparent,
+        if (pressed && (onClick != null || onLongClick != null || isSwitch)) colors.fill else Color.Transparent,
         animationSpec = tween(if (pressed) 0 else 250),
         label = "rowHighlight",
     )
+    val currentLongClick by rememberUpdatedState(onLongClick)
     Row(
         modifier = modifier
             .fillMaxWidth()
             .background(highlight)
             .then(
-                if (onClick != null || onLongClick != null) {
-                    Modifier.combinedClickable(
+                when {
+                    isSwitch -> Modifier.toggleable(
+                        value = checked!!,
+                        interactionSource = source,
+                        indication = null,
+                        enabled = switchEnabled,
+                        role = Role.Switch,
+                    ) {
+                        haptics.perform(Haptic.Selection)
+                        onCheckedChange!!(it)
+                    }
+                    onClick != null -> Modifier.combinedClickable(
                         interactionSource = source,
                         indication = null,
                         role = role,
+                        onLongClickLabel = onLongClickLabel,
                         onLongClick = onLongClick?.let { long -> { haptics.perform(Haptic.Medium); long() } },
-                        onClick = onClick ?: {},
+                        onClick = onClick,
                     )
-                } else {
-                    Modifier
+                    // Long press only: no tap, so no button role; TalkBack gets a named action.
+                    onLongClick != null -> Modifier
+                        .pointerInput(source) {
+                            detectTapGestures(
+                                onPress = { offset ->
+                                    val press = PressInteraction.Press(offset)
+                                    source.emit(press)
+                                    source.emit(if (tryAwaitRelease()) PressInteraction.Release(press) else PressInteraction.Cancel(press))
+                                },
+                                onLongPress = {
+                                    haptics.perform(Haptic.Medium)
+                                    currentLongClick?.invoke()
+                                },
+                            )
+                        }
+                        .semantics(mergeDescendants = true) {
+                            val label = onLongClickLabel ?: "More options"
+                            onLongClick(label) { currentLongClick?.invoke(); true }
+                            customActions = listOf(CustomAccessibilityAction(label) { currentLongClick?.invoke(); true })
+                        }
+                    else -> Modifier
                 },
             )
             .defaultMinSize(minHeight = if (subtitle != null) 64.dp else 56.dp)
@@ -213,6 +261,10 @@ fun ListRow(
             Text(value, style = Type.callout, color = colors.labelSecondary, maxLines = 1)
         }
         trailing?.invoke()
+        if (isSwitch) {
+            // Drawn only: the whole row is the control.
+            WSwitch(checked!!, onCheckedChange = null, enabled = switchEnabled, interactionSource = source)
+        }
         if (chevron) {
             Icon(WIcons.ChevronRight, null, tint = colors.labelTertiary, modifier = Modifier.size(16.dp))
         }

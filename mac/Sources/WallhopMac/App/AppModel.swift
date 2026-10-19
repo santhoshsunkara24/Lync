@@ -26,6 +26,8 @@ struct FileBatch: Equatable {
     var finished = false
     /// Moved from the inbox to Downloads › From Phone.
     var saved = false
+    /// The connection dropped before the phone finished sending.
+    var interrupted = false
 
     var progress: Double {
         guard totalBytes > 0 else { return finished ? 1 : 0 }
@@ -68,9 +70,22 @@ enum LiveCard: Equatable {
     case info(symbol: String, title: String, subtitle: String?)
 }
 
+/// A short message at the bottom of the open panel, optionally with an Undo button.
+struct Toast: Equatable {
+    let id = UUID()
+    let symbol: String
+    let message: String
+    var actionTitle: String?
+    var action: (() -> Void)?
+
+    static func == (a: Toast, b: Toast) -> Bool { a.id == b.id }
+}
+
 /// App state for the UI. Main thread only.
 final class AppModel: ObservableObject {
     @Published private(set) var listening = false
+    /// Listening failed (not just "still starting"): the panel offers Try again.
+    @Published private(set) var listenFailed = false
     @Published private(set) var statusMessage = "Starting…"
     @Published private(set) var connectedPhone: PairedPhone?
     @Published private(set) var phoneHost: String?
@@ -98,6 +113,13 @@ final class AppModel: ObservableObject {
     @Published private(set) var appIcons: [String: NSImage] = [:]
     /// The notification being replied to from the notch card, if any.
     @Published var replyingTo: String?
+    /// Feedback shown inside the panel while it's open (the overlay is hidden then).
+    @Published private(set) var toast: Toast?
+    /// The paired phone (id) whose Forget button is waiting for confirmation in Settings.
+    @Published var confirmingForget: String?
+    private var toastToken = 0
+    /// Notifications cleared with "Clear all", dismissed on the phone once Undo has expired.
+    private var pendingClear: (notifications: [PhoneNotification], work: DispatchWorkItem)?
 
     @Published var showNotifications: Bool {
         didSet { UserDefaults.standard.set(showNotifications, forKey: "showNotifications") }
@@ -144,6 +166,7 @@ final class AppModel: ObservableObject {
 
         server.onEvent = { [weak self] event in self?.handle(event) }
         _ = macInfo // Start watching lock state now, not on the first connection.
+        FileReceiver.cleanTempFolder()
         ReceivedFiles.cleanInbox()
         inboxTimer = Timer.scheduledTimer(withTimeInterval: 60 * 60, repeats: true) { _ in ReceivedFiles.cleanInbox() }
         expiryTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
@@ -168,6 +191,11 @@ final class AppModel: ObservableObject {
         return nil
     }
 
+    var appVersion: String {
+        let info = Bundle.main.infoDictionary
+        return info?["CFBundleShortVersionString"] as? String ?? "dev"
+    }
+
     func openPanel(_ page: PanelPage = .home) {
         panelPage = page
         panelOpen = true
@@ -175,6 +203,8 @@ final class AppModel: ObservableObject {
 
     func closePanel() {
         panelOpen = false
+        confirmingForget = nil
+        toast = nil
         if replyingTo == nil { panelPage = .home }
     }
 
@@ -184,11 +214,14 @@ final class AppModel: ObservableObject {
         switch event {
         case .listening(let port):
             listening = true
+            listenFailed = false
             statusMessage = "Listening on port \(port.map(String.init) ?? "?")"
 
-        case .stopped(let reason):
+        case .stopped:
+            // The reason is logged by the server; people get plain words and a Try again button.
             listening = false
-            statusMessage = "Not listening: \(reason)"
+            listenFailed = true
+            statusMessage = "Lync can't accept connections right now."
 
         case .pairingRequested(let request):
             pairingRequest = request
@@ -223,8 +256,15 @@ final class AppModel: ObservableObject {
                 battery = nil
                 nowPlaying = nil
                 ringing = false
+                ringTimer?.invalidate()
                 notifications.removeAll()
                 replyingTo = nil
+                call = nil
+                // Cards about this phone's live state can't be acted on any more.
+                switch live {
+                case .call, .receiving, .notification: hideLive()
+                default: break
+                }
             }
 
         case .text(let text, _):
@@ -275,6 +315,11 @@ final class AppModel: ObservableObject {
         case .fileFailed(let id, _):
             updateBatch(id) { $0.failed += 1 }
 
+        case .batchInterrupted(let id):
+            updateBatch(id) { $0.finished = true; $0.interrupted = true }
+            if let batch = batch(id), !batch.files.isEmpty { Clipboard.copyFiles(batch.files) }
+            if live == .receiving(batchId: id) || live == nil { show(.added(batchId: id), for: 8) }
+
         case .batchFinished(let id):
             updateBatch(id) { $0.finished = true; $0.receivedBytes = $0.totalBytes }
             // Straight to the clipboard: paste anywhere. Saving to Downloads is a button away.
@@ -322,7 +367,7 @@ final class AppModel: ObservableObject {
 
         case .outgoingFinished(let id, let ok):
             if outgoing?.id == id { outgoing = nil }
-            show(.sentToPhone(ok ? "Sent to your phone" : "Couldn't send to your phone"), for: 2.5)
+            feedback(ok ? "Sent to your phone" : "Couldn't send to your phone", failed: !ok)
         }
     }
 
@@ -394,6 +439,40 @@ final class AppModel: ObservableObject {
         }
     }
 
+    // MARK: - Feedback
+
+    /// Tells the user how an action went: in the panel when it's open (the overlay is hidden
+    /// then), otherwise as a short live card.
+    func feedback(_ message: String, symbol: String? = nil, subtitle: String? = nil, failed: Bool = false) {
+        let icon = symbol ?? (failed ? "exclamationmark.circle.fill" : "checkmark.circle.fill")
+        if panelOpen {
+            showToast(Toast(symbol: icon, message: message))
+        } else if let subtitle {
+            show(.info(symbol: icon, title: message, subtitle: subtitle), for: 3)
+        } else {
+            show(.sentToPhone(message), for: 2.5)
+        }
+    }
+
+    /// Shows a toast in the panel and reads it out with VoiceOver. Toasts with an action stay 5 s.
+    func showToast(_ toast: Toast) {
+        self.toast = toast
+        toastToken += 1
+        let token = toastToken
+        NSAccessibility.post(element: NSApp as Any, notification: .announcementRequested,
+                             userInfo: [.announcement: toast.message, .priority: NSAccessibilityPriorityLevel.high.rawValue])
+        DispatchQueue.main.asyncAfter(deadline: .now() + (toast.action == nil ? 2 : 5)) { [weak self] in
+            guard let self, self.toastToken == token else { return }
+            self.toast = nil
+        }
+    }
+
+    func runToastAction() {
+        let action = toast?.action
+        toast = nil
+        action?()
+    }
+
     // MARK: - Actions
 
     func decidePairing(_ accept: Bool) {
@@ -403,7 +482,7 @@ final class AppModel: ObservableObject {
     }
 
     func copyOTP(_ code: String) {
-        let changeCount = Clipboard.copy(code)
+        let changeCount = Clipboard.copySecret(code)
         otpClearTimer?.invalidate()
         otpClearTimer = Timer.scheduledTimer(withTimeInterval: Self.clipboardClearDelay, repeats: false) { _ in
             Clipboard.clear(ifUnchangedSince: changeCount)
@@ -425,15 +504,27 @@ final class AppModel: ObservableObject {
     func copyFiles(_ id: String) {
         guard let batch = batch(id), !batch.files.isEmpty else { return }
         Clipboard.copyFiles(batch.files)
-        show(.info(symbol: "doc.on.clipboard", title: "Copied \(batch.summary)", subtitle: "Paste it anywhere"), for: 2.5)
+        feedback("Copied \(batch.summary)", symbol: "doc.on.clipboard", subtitle: "Paste it anywhere")
     }
 
     /// Moves a received batch from the inbox into Downloads › From Phone.
     func saveFiles(_ id: String) {
         guard let current = batch(id), !current.files.isEmpty else { return }
-        let saved = ReceivedFiles.save(current.files)
-        updateBatch(id) { $0.files = saved; $0.saved = true }
-        show(.saved(batchId: id), for: 5)
+        let results = ReceivedFiles.save(current.files)
+        let failures = results.filter { !$0.ok }.count
+        // Only a batch that really moved counts as saved; files that didn't stay in the inbox.
+        updateBatch(id) { $0.files = results.map(\.url); $0.saved = failures == 0 }
+        if failures == 0 {
+            if panelOpen { feedback("Saved to Downloads › From Phone", symbol: "arrow.down.circle.fill") } else { show(.saved(batchId: id), for: 5) }
+        } else {
+            let what = failures == 1 ? "1 file" : "\(failures) files"
+            feedback("Couldn't save \(what) to Downloads", subtitle: "Check Downloads has space and try again", failed: true)
+        }
+    }
+
+    /// Opens a received file with its default app.
+    func openFile(_ url: URL) {
+        NSWorkspace.shared.open(url)
     }
 
     func revealFiles(_ id: String) {
@@ -446,13 +537,22 @@ final class AppModel: ObservableObject {
         activity.removeAll { $0.id == item.id }
     }
 
+    /// Clears Recent (it's only on this Mac), with Undo for a few seconds.
     func clearActivity() {
+        let cleared = activity
+        guard !cleared.isEmpty else { return }
         activity.removeAll()
+        showToast(Toast(symbol: "trash", message: "Cleared Recent", actionTitle: "Undo") { [weak self] in
+            guard let self else { return }
+            self.activity = cleared + self.activity
+        })
     }
 
     func ringPhone() {
+        guard connectedPhone != nil else { return }
         let start = !ringing
         server.ringPhone(start)
+        feedback(start ? "Ringing your phone" : "Stopped ringing", symbol: start ? "bell.and.waves.left.and.right" : "bell.slash")
         ringing = start
         ringTimer?.invalidate()
         if start {
@@ -461,28 +561,109 @@ final class AppModel: ObservableObject {
     }
 
     func sendClipboardToPhone() {
+        guard connectedPhone != nil else {
+            feedback("Your phone isn't connected", failed: true)
+            return
+        }
         let raw = NSPasteboard.general.string(forType: .string)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if let url = URL(string: raw), let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https",
-           !raw.contains(" ") {
+           !raw.contains(" "), raw.utf8.count < 8 * 1024 {
             server.openOnPhone(url)
-            show(.sentToPhone("Link sent · tap it on your phone"), for: 2.5)
+            feedback("Link sent · tap it on your phone", symbol: "link")
             return
         }
         guard let text = NSPasteboard.general.string(forType: .string), !text.isEmpty else {
-            show(.sentToPhone("Your clipboard has no text"), for: 2.5)
+            feedback("Your clipboard has no text", failed: true)
+            return
+        }
+        // Too long for one message: it goes as a text file instead (PROTOCOL.md, Framing).
+        if text.utf8.count > LinkServer.maxTextBytes {
+            sendTextAsFile(text)
             return
         }
         server.sendText(text) { [weak self] ok in
-            self?.show(.sentToPhone(ok ? "Clipboard sent to your phone" : "Couldn't reach your phone"), for: 2.5)
+            self?.feedback(ok ? "Clipboard sent to your phone" : "Couldn't reach your phone", failed: !ok)
         }
     }
 
-    func sendFilesToPhone(_ urls: [URL]) {
-        guard connectedPhone != nil else {
-            show(.sentToPhone("Your phone isn't connected"), for: 2.5)
+    private func sendTextAsFile(_ text: String) {
+        let folder = Storage.directory.appendingPathComponent("Outgoing", isDirectory: true)
+        let fm = FileManager.default
+        try? fm.removeItem(at: folder) // Only the latest one is kept.
+        try? fm.createDirectory(at: folder, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        let stamp = Date().formatted(.dateTime.year().month(.twoDigits).day(.twoDigits).hour().minute())
+            .replacingOccurrences(of: "/", with: "-").replacingOccurrences(of: ":", with: ".")
+        let url = folder.appendingPathComponent(ReceivedFiles.sanitize("Clipboard \(stamp).txt"))
+        do {
+            try Data(text.utf8).write(to: url, options: .atomic)
+        } catch {
+            feedback("Too big to send as text", failed: true)
             return
         }
-        if let id = server.sendFiles(urls) { outgoing = (id, 0) }
+        feedback("Long text · sending it as a file", symbol: "doc.text")
+        if let id = server.sendFiles([url]) { outgoing = (id, 0) }
+    }
+
+    /// `skippedFolders`: how many dropped items were folders, which can't be sent.
+    func sendFilesToPhone(_ urls: [URL], skippedFolders: Int = 0) {
+        guard connectedPhone != nil else {
+            feedback("Your phone isn't connected", failed: true)
+            return
+        }
+        if skippedFolders > 0 {
+            let what = skippedFolders == 1 ? "a folder" : "\(skippedFolders) folders"
+            feedback(urls.isEmpty ? "Folders can't be sent · drop files instead" : "Skipped \(what) · sending the files",
+                     symbol: "folder.badge.minus", failed: urls.isEmpty)
+        }
+        guard !urls.isEmpty else { return }
+        if let id = server.sendFiles(urls) {
+            outgoing = (id, 0)
+        } else {
+            feedback("Couldn't read those files", failed: true)
+        }
+    }
+
+    /// Picks files to send. The panel closes first so the open dialog isn't hidden under it.
+    func chooseFilesToSend() {
+        closePanel()
+        DispatchQueue.main.async { [weak self] in
+            let panel = NSOpenPanel()
+            panel.allowsMultipleSelection = true
+            panel.canChooseDirectories = false
+            panel.prompt = "Send to Phone"
+            NSApp.activate(ignoringOtherApps: true)
+            if panel.runModal() == .OK { self?.sendFilesToPhone(panel.urls) }
+        }
+    }
+
+    /// While files are dragged over the notch or the menu bar icon: says where they'll go.
+    func dropHover(_ entered: Bool) {
+        let card = dropHintCard
+        if entered {
+            show(card, for: connectedPhone == nil ? 2.5 : nil)
+        } else if live == card {
+            hideLive()
+        }
+    }
+
+    /// The overlay lets drags through while it shows this, so the drop still reaches the notch.
+    func isDropHint(_ card: LiveCard?) -> Bool {
+        guard let card else { return false }
+        return card == dropHintCard
+    }
+
+    private var dropHintCard: LiveCard {
+        if let phone = connectedPhone {
+            return .info(symbol: "arrow.up.doc.fill", title: "Drop to send to \(phone.name)", subtitle: nil)
+        }
+        return .info(symbol: "iphone.slash", title: "Your phone isn't connected", subtitle: "Connect it to send files")
+    }
+
+    /// Tries to start listening again after it failed.
+    func retryListening() {
+        statusMessage = "Starting…"
+        listenFailed = false
+        server.restart()
     }
 
     // MARK: - Notifications
@@ -540,9 +721,31 @@ final class AppModel: ObservableObject {
         if live == .notification(key: key) { hideLive() }
     }
 
+    /// Clears every notification here at once and on the phone after 5 s, unless Undo is pressed.
     func dismissAllNotifications() {
-        notifications.forEach { server.dismissNotification(key: $0.key) }
+        flushPendingClear()
+        let cleared = notifications
+        guard !cleared.isEmpty else { return }
         notifications.removeAll()
+        let work = DispatchWorkItem { [weak self] in self?.flushPendingClear() }
+        pendingClear = (cleared, work)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5, execute: work)
+        let what = cleared.count == 1 ? "1 notification" : "\(cleared.count) notifications"
+        showToast(Toast(symbol: "bell.slash", message: "Cleared \(what)", actionTitle: "Undo") { [weak self] in
+            guard let self, let pending = self.pendingClear else { return }
+            pending.work.cancel()
+            self.pendingClear = nil
+            let keys = Set(self.notifications.map(\.key))
+            self.notifications = (self.notifications + pending.notifications.filter { !keys.contains($0.key) })
+                .sorted { $0.time > $1.time }
+        })
+    }
+
+    private func flushPendingClear() {
+        guard let pending = pendingClear else { return }
+        pending.work.cancel()
+        pendingClear = nil
+        pending.notifications.forEach { server.dismissNotification(key: $0.key) }
     }
 
     func mute(_ notification: PhoneNotification) {
@@ -555,12 +758,25 @@ final class AppModel: ObservableObject {
     }
 
     func forget(_ phone: PairedPhone) {
+        confirmingForget = nil
         server.paired.remove(id: phone.id)
+        server.disconnect(publicKey: phone.publicKey)
         pairedPhones = server.paired.all
-        if connectedPhone?.id == phone.id {
-            connectedPhone = nil
-            phoneHost = nil
-        }
+        feedback("Forgot \(phone.name)", symbol: "iphone.slash")
+    }
+
+    /// The standard About window, with the version. The panel closes so it doesn't cover it.
+    func showAbout() {
+        closePanel()
+        NSApp.activate(ignoringOtherApps: true)
+        let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? ""
+        NSApp.orderFrontStandardAboutPanel(options: [
+            .applicationName: "Lync",
+            .applicationVersion: appVersion,
+            .version: build,
+            .credits: NSAttributedString(string: "Codes, texts, files and notifications from your Android phone.",
+                                         attributes: [.font: NSFont.systemFont(ofSize: 11), .foregroundColor: NSColor.secondaryLabelColor]),
+        ])
     }
 
     func openReceivedFolder() {
@@ -597,6 +813,18 @@ enum Clipboard {
         let board = NSPasteboard.general
         board.clearContents()
         board.setString(text, forType: .string)
+        return board.changeCount
+    }
+
+    /// A one-time code: kept off Universal Clipboard and marked (nspasteboard.org) so clipboard
+    /// managers neither show nor keep it.
+    @discardableResult
+    static func copySecret(_ text: String) -> Int {
+        let board = NSPasteboard.general
+        board.prepareForNewContents(with: .currentHostOnly)
+        board.setString(text, forType: .string)
+        board.setData(Data(), forType: NSPasteboard.PasteboardType("org.nspasteboard.ConcealedType"))
+        board.setData(Data(), forType: NSPasteboard.PasteboardType("org.nspasteboard.TransientType"))
         return board.changeCount
     }
 

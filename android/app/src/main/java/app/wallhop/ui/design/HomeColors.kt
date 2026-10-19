@@ -10,12 +10,15 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.graphics.Color
 import androidx.core.graphics.ColorUtils
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 /**
  * The home screen's colours, from your wallpaper (DESIGN.md §6.4) — see [themeSeeds].
@@ -124,7 +127,14 @@ private fun hue(argb: Int) = FloatArray(3).also { ColorUtils.colorToHSL(argb, it
 
 private fun hueDistance(a: Float, b: Float) = minOf(kotlin.math.abs(a - b), 360f - kotlin.math.abs(a - b))
 
-/** Home colours from the wallpaper; violet before Android 12. Updates when the wallpaper changes. */
+/** The last colours worked out, so a new screen (or the share sheet) starts with them. */
+@Volatile private var lastHomeColors: HomeColors? = null
+
+/**
+ * Home colours from the wallpaper; violet before Android 12. Updates when the wallpaper changes.
+ * Reading the wallpaper's colours can take a while, so it happens off the main thread; until then
+ * the screen uses the last colours, or the system palette on first launch.
+ */
 @Composable
 fun rememberHomeColors(): HomeColors {
     val context = LocalContext.current
@@ -137,7 +147,17 @@ fun rememberHomeColors(): HomeColors {
         runCatching { manager.addOnColorsChangedListener(listener, Handler(Looper.getMainLooper())) }
         onDispose { runCatching { manager.removeOnColorsChangedListener(listener) } }
     }
-    return remember(configuration, wallpaperVersion) {
-        themeSeeds(context)?.let { (seed, accent) -> HomeColors.from(seed, accent) } ?: HomeColors.Default
+    val initial = remember { lastHomeColors ?: quickHomeColors(context) }
+    val colors by produceState(initial, configuration, wallpaperVersion) {
+        value = withContext(Dispatchers.IO) {
+            themeSeeds(context)?.let { (seed, accent) -> HomeColors.from(seed, accent) } ?: HomeColors.Default
+        }.also { lastHomeColors = it }
     }
+    return colors
+}
+
+/** A first guess without touching the wallpaper: the system palette, which is quick to read. */
+private fun quickHomeColors(context: Context): HomeColors {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return HomeColors.Default
+    return HomeColors.from(context.getColor(android.R.color.system_accent1_500), context.getColor(android.R.color.system_accent3_500))
 }

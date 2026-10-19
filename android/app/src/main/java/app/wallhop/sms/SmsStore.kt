@@ -2,7 +2,12 @@ package app.wallhop.sms
 
 import android.Manifest
 import android.annotation.SuppressLint
+import android.app.Activity
+import android.app.PendingIntent
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.database.ContentObserver
 import android.net.Uri
@@ -14,15 +19,19 @@ import android.provider.Telephony
 import android.telephony.SmsManager
 import android.telephony.SubscriptionManager
 import androidx.core.content.ContextCompat
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONArray
 import org.json.JSONObject
+import java.util.UUID
 
 /**
  * Reads conversations and sends texts on request from the Mac. Text (SMS) only for now;
  * picture messages (MMS) aren't included yet.
  */
 class SmsStore(private val context: Context) {
-    private val names = HashMap<String, String?>()
+    // Read from several coroutines at once. "" means no contact, as the map can't hold null.
+    private val names = java.util.concurrent.ConcurrentHashMap<String, String>()
 
     val canRead: Boolean get() = granted(Manifest.permission.READ_SMS)
     val canSend: Boolean get() = granted(Manifest.permission.SEND_SMS)
@@ -83,9 +92,12 @@ class SmsStore(private val context: Context) {
         return JSONObject().put("thread", threadId).put("messages", JSONArray(list.asReversed()))
     }
 
-    /** Sends a text. Android saves it to the phone's Sent messages automatically. */
+    /**
+     * Sends a text and waits for the radio's answer for every part (up to 30 s), so the Mac hears
+     * "sent" only once it really went. Android saves it to the phone's Sent messages automatically.
+     */
     @SuppressLint("MissingPermission")
-    fun send(address: String, text: String, subscriptionId: Int?): Result<Unit> = runCatching {
+    suspend fun send(address: String, text: String, subscriptionId: Int?): Result<Unit> = runCatching {
         require(canSend) { "permission" }
         require(address.isNotBlank() && text.isNotBlank()) { "empty" }
         val manager: SmsManager = if (subscriptionId != null && subscriptionId >= 0) {
@@ -100,8 +112,37 @@ class SmsStore(private val context: Context) {
             @Suppress("DEPRECATION") SmsManager.getDefault()
         }
         val parts = manager.divideMessage(text)
-        if (parts.size > 1) manager.sendMultipartTextMessage(address, null, parts, null, null)
-        else manager.sendTextMessage(address, null, text, null, null)
+        // One action per send, so results from another text can't be mistaken for this one's.
+        val action = "${context.packageName}.SMS_SENT.${UUID.randomUUID()}"
+        val results = Channel<Int>(Channel.UNLIMITED)
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context, intent: Intent) {
+                results.trySend(resultCode)
+            }
+        }
+        ContextCompat.registerReceiver(context, receiver, IntentFilter(action), ContextCompat.RECEIVER_NOT_EXPORTED)
+        try {
+            val sent = ArrayList(parts.indices.map { index ->
+                PendingIntent.getBroadcast(
+                    context, index, Intent(action).setPackage(context.packageName),
+                    PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_ONE_SHOT,
+                )
+            })
+            if (parts.size > 1) manager.sendMultipartTextMessage(address, null, parts, sent, null)
+            else manager.sendTextMessage(address, null, text, sent.first(), null)
+            val codes = withTimeoutOrNull(SEND_TIMEOUT_MS) { List(parts.size) { results.receive() } }
+                ?: error("No answer from the network")
+            codes.firstOrNull { it != Activity.RESULT_OK }?.let { error(sendError(it)) }
+        } finally {
+            runCatching { context.unregisterReceiver(receiver) }
+        }
+    }
+
+    private fun sendError(code: Int): String = when (code) {
+        SmsManager.RESULT_ERROR_RADIO_OFF -> "Airplane mode is on"
+        SmsManager.RESULT_ERROR_NO_SERVICE -> "No mobile service"
+        SmsManager.RESULT_ERROR_NULL_PDU, SmsManager.RESULT_ERROR_GENERIC_FAILURE -> "The text couldn't be sent"
+        else -> "The text couldn't be sent ($code)"
     }
 
     private fun simsJson(): JSONArray {
@@ -125,19 +166,22 @@ class SmsStore(private val context: Context) {
 
     private fun contactName(address: String): String? {
         if (address.isBlank() || !granted(Manifest.permission.READ_CONTACTS)) return null
-        return names.getOrPut(address) {
-            runCatching {
-                val uri = Uri.withAppendedPath(ContactsContract.PhoneLookup.CONTENT_FILTER_URI, Uri.encode(address))
-                context.contentResolver.query(uri, arrayOf(ContactsContract.PhoneLookup.DISPLAY_NAME), null, null, null)
-                    ?.use { if (it.moveToFirst()) it.getString(0) else null }
-            }.getOrNull()
-        }
+        names[address]?.let { return it.ifEmpty { null } }
+        val name = runCatching {
+            val uri = Uri.withAppendedPath(ContactsContract.PhoneLookup.CONTENT_FILTER_URI, Uri.encode(address))
+            context.contentResolver.query(uri, arrayOf(ContactsContract.PhoneLookup.DISPLAY_NAME), null, null, null)
+                ?.use { if (it.moveToFirst()) it.getString(0) else null }
+        }.getOrNull()
+        names[address] = name.orEmpty()
+        return name
     }
 
     private fun granted(permission: String) =
         ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
 
     companion object {
+        private const val SEND_TIMEOUT_MS = 30_000L
+
         val permissions = arrayOf(
             Manifest.permission.READ_SMS,
             Manifest.permission.SEND_SMS,
@@ -163,7 +207,16 @@ class SmsChangeWatcher(private val context: Context, private val onChange: () ->
 
     fun start() {
         if (registered || ContextCompat.checkSelfPermission(context, Manifest.permission.READ_SMS) != PackageManager.PERMISSION_GRANTED) return
-        context.contentResolver.registerContentObserver(Telephony.Sms.CONTENT_URI, true, observer)
-        registered = true
+        // Some phones throw here even with the permission granted (work profiles, OEM SMS apps).
+        registered = runCatching {
+            context.contentResolver.registerContentObserver(Telephony.Sms.CONTENT_URI, true, observer)
+        }.isSuccess
+    }
+
+    fun stop() {
+        if (!registered) return
+        handler.removeCallbacks(notify)
+        runCatching { context.contentResolver.unregisterContentObserver(observer) }
+        registered = false
     }
 }
