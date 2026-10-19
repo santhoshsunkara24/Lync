@@ -55,4 +55,4 @@ If this policy changes, the new version will be published here with a new date.
 
 ## Contact
 
-Questions: santhoshreddy1058@gmail.com
+Questions: open an issue at https://github.com/santhoshsunkara24/Lync/issues

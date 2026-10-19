@@ -22,7 +22,7 @@ password in `lync-upload.properties`). Gradle finds it through `lync.signing` in
 - Turn on **Play App Signing** when asked (the default). Google then keeps the key that signs what
   users download, and this key only proves uploads come from you.
 - Upload key SHA-256 fingerprint:
-  `9E:47:89:11:65:E1:16:8A:36:33:62:9B:1D:D9:E7:1E:57:95:07:C1:0D:95:1E:B2:91:B0:33:E2:A9:FB:5D:7F`
+  `BD:88:B2:D8:8E:33:D3:A8:F0:2C:F6:81:73:1C:49:61:EC:37:7C:92:81:F4:44:C6:18:C9:21:CB:05:41:99:8A`
 
 **Glyph SDK.** Build the Play bundle with Nothing's Glyph SDK in `android/app/libs/` (see the README
 there), or Nothing phones lose the Glyph feature. Its licence allows using it inside your app, forbids
@@ -70,7 +70,7 @@ Codes, calls, texts and files from your Android phone, in your Mac's notch.
 > Wi-Fi network as your phone.
 
 **Category:** Tools. **Tags:** productivity, connectivity.
-**Contact email:** santhoshreddy1058@gmail.com.
+**Contact:** https://github.com/santhoshsunkara24/Lync/issues (add a personal email here before submitting; Play requires one).
 **Privacy policy URL:** host `docs/PRIVACY.md` publicly. The simplest way is to make the repo public; the
 file's GitHub link then works as the URL. Otherwise use any free page host.
 
