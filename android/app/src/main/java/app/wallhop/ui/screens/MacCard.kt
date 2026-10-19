@@ -405,7 +405,7 @@ private fun ProgressRing(progress: Float, modifier: Modifier) {
 }
 
 private fun notchEvent(entry: ActivityEntry): NotchEvent = when (entry.kind) {
-    ActivityEntry.Kind.Otp -> NotchEvent(WIcons.Lock, spacedCode(entry.title))
+    ActivityEntry.Kind.Otp -> NotchEvent(WIcons.Code, spacedCode(entry.title))
     ActivityEntry.Kind.FilesSent -> NotchEvent(WIcons.Image, entry.title)
     ActivityEntry.Kind.TextSent -> NotchEvent(WIcons.Text, entry.title)
     ActivityEntry.Kind.Call -> NotchEvent(WIcons.Call, entry.title)

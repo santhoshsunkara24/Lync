@@ -110,7 +110,7 @@ fun SettingsTab(
                     row {
                         ListRow(
                             title = "Codes from messages",
-                            leading = { IconTile(WIcons.Lock, colors.green) },
+                            leading = { IconTile(WIcons.Code, colors.green) },
                             checked = setup.sms,
                             onCheckedChange = toggle(Features.Key.Codes, actions.allowSms),
                         )

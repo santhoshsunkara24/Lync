@@ -25,6 +25,11 @@ object WIcons {
     val Phone: ImageVector by lazy { icon("Phone", "M176,16H80A24,24,0,0,0,56,40V216a24,24,0,0,0,24,24h96a24,24,0,0,0,24-24V40A24,24,0,0,0,176,16ZM80,32h96a8,8,0,0,1,8,8v8H72V40A8,8,0,0,1,80,32Zm96,192H80a8,8,0,0,1-8-8v-8H184v8A8,8,0,0,1,176,224Z") }
     val BellRinging: ImageVector by lazy { icon("BellRinging", "M224,71.1a8,8,0,0,1-10.78-3.42,94.13,94.13,0,0,0-33.46-36.91,8,8,0,1,1,8.54-13.54,111.46,111.46,0,0,1,39.12,43.09A8,8,0,0,1,224,71.1ZM35.71,72a8,8,0,0,0,7.1-4.32A94.13,94.13,0,0,1,76.27,30.77a8,8,0,1,0-8.54-13.54A111.46,111.46,0,0,0,28.61,60.32,8,8,0,0,0,35.71,72Zm186.1,103.94A16,16,0,0,1,208,200H167.2a40,40,0,0,1-78.4,0H48a16,16,0,0,1-13.79-24.06C43.22,160.39,48,138.28,48,112a80,80,0,0,1,160,0C208,138.27,212.78,160.38,221.81,175.94ZM150.62,200H105.38a24,24,0,0,0,45.24,0Z") }
     val Bell: ImageVector by lazy { icon("Bell", "M168,224a8,8,0,0,1-8,8H96a8,8,0,1,1,0-16h64A8,8,0,0,1,168,224Zm53.81-48.06C216.25,166.38,208,139.33,208,104a80,80,0,1,0-160,0c0,35.34-8.26,62.38-13.81,71.94A16,16,0,0,0,48,200H208a16,16,0,0,0,13.8-24.06Z") }
+    /**
+     * One-time codes: a pill with six dots in two groups of three ("••• •••"), the shape of a
+     * hidden code. Lync's own drawing on Phosphor's 256 grid (the dots are holes, even-odd).
+     */
+    val Code: ImageVector by lazy { icon("Code", "M64 76H192A52 52 0 0 1 192 180H64A52 52 0 0 1 64 76ZM26 128A13 13 0 1 1 52 128A13 13 0 1 1 26 128ZM60 128A13 13 0 1 1 86 128A13 13 0 1 1 60 128ZM94 128A13 13 0 1 1 120 128A13 13 0 1 1 94 128ZM136 128A13 13 0 1 1 162 128A13 13 0 1 1 136 128ZM170 128A13 13 0 1 1 196 128A13 13 0 1 1 170 128ZM204 128A13 13 0 1 1 230 128A13 13 0 1 1 204 128Z", evenOdd = true) }
     val Lock: ImageVector by lazy { icon("Lock", "M208,80H176V56a48,48,0,0,0-96,0V80H48A16,16,0,0,0,32,96V208a16,16,0,0,0,16,16H208a16,16,0,0,0,16-16V96A16,16,0,0,0,208,80ZM96,56a32,32,0,0,1,64,0V80H96Z") }
     val Warning: ImageVector by lazy { icon("Warning", "M128,24A104,104,0,1,0,232,128,104.11,104.11,0,0,0,128,24Zm-8,56a8,8,0,0,1,16,0v56a8,8,0,0,1-16,0Zm8,104a12,12,0,1,1,12-12A12,12,0,0,1,128,184Z") }
     val CheckCircle: ImageVector by lazy { icon("CheckCircle", "M128,24A104,104,0,1,0,232,128,104.11,104.11,0,0,0,128,24Zm45.66,85.66-56,56a8,8,0,0,1-11.32,0l-24-24a8,8,0,0,1,11.32-11.32L112,148.69l50.34-50.35a8,8,0,0,1,11.32,11.32Z") }
@@ -50,7 +55,11 @@ object WIcons {
     val ChevronLeft: ImageVector by lazy { icon("ChevronLeft", "M168.49,199.51a12,12,0,0,1-17,17l-80-80a12,12,0,0,1,0-17l80-80a12,12,0,0,1,17,17L97,128Z") }
 }
 
-private fun icon(name: String, path: String): ImageVector =
+private fun icon(name: String, path: String, evenOdd: Boolean = false): ImageVector =
     ImageVector.Builder(name, 24.dp, 24.dp, viewportWidth = 256f, viewportHeight = 256f)
-        .addPath(addPathNodes(path), fill = SolidColor(Color.Black))
+        .addPath(
+            addPathNodes(path),
+            fill = SolidColor(Color.Black),
+            pathFillType = if (evenOdd) androidx.compose.ui.graphics.PathFillType.EvenOdd else androidx.compose.ui.graphics.PathFillType.NonZero,
+        )
         .build()

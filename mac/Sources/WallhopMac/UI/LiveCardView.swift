@@ -44,7 +44,7 @@ struct LiveCardView: View {
 
     private func otp(code: String, sender: String) -> some View {
         HStack(spacing: 14) {
-            iconTile("lock.fill", tint: WTheme.success)
+            CodeIconTile(size: 34, tint: WTheme.success, wash: 0.16)
             VStack(alignment: .leading, spacing: 2) {
                 RollingCode(code: code, font: .wh(26, .semibold).monospacedDigit(), tracking: 1)
                 Text(sender.isEmpty ? "Verification code" : sender)

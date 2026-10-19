@@ -210,7 +210,7 @@ internal fun ActivityRow(entry: ActivityEntry, onLongClick: () -> Unit, onClick:
     val colors = Wallhop.colors
     val context = LocalContext.current
     val (icon, color) = when (entry.kind) {
-        ActivityEntry.Kind.Otp -> WIcons.Lock to colors.green
+        ActivityEntry.Kind.Otp -> WIcons.Code to colors.green
         ActivityEntry.Kind.TextSent -> WIcons.Text to colors.tint
         ActivityEntry.Kind.FilesSent -> WIcons.File to colors.tint
         ActivityEntry.Kind.FromMac -> WIcons.Laptop to colors.gray

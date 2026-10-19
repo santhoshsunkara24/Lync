@@ -562,7 +562,7 @@ private struct RecentRow: View {
 
     @ViewBuilder private var leading: some View {
         switch item.payload {
-        case .otp: icon("lock.fill", WTheme.success)
+        case .otp: CodeIconTile(size: 32, tint: WTheme.success, wash: 0.22)
         case .text: icon("text.bubble.fill", theme.theme.pale)
         case .files(let batch):
             if batch.files.isEmpty { icon("arrow.down", batch.finished ? WTheme.danger : theme.theme.pale) } else { ThumbnailStack(urls: batch.files, size: 28) }
