@@ -143,14 +143,22 @@ fun MacTab(
                 )
             }
             item(key = "cards") {
+                // The Mac card fills the width. When there's more (a transfer, the latest item),
+                // it narrows so the next card peeks in from the right and the row snaps card by card.
+                val others = (if (transfer != null) 1 else 0) + (if (card.latest != null) 1 else 0)
+                val screen = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp.dp
+                val heroWidth = (screen - 40.dp - if (others > 0) 64.dp else 0.dp).coerceAtMost(520.dp)
+                val rowState = androidx.compose.foundation.lazy.rememberLazyListState()
                 LazyRow(
+                    state = rowState,
+                    flingBehavior = androidx.compose.foundation.gestures.snapping.rememberSnapFlingBehavior(rowState),
                     contentPadding = PaddingValues(horizontal = 20.dp),
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
                     // One height for the row, so every card lines up top and bottom.
                     modifier = Modifier.padding(top = 16.dp).height(CardHeight),
                 ) {
                     if (transfer != null) item(key = "transfer") { TransferCard(transfer, home, actions) }
-                    item(key = "mac") { MacHero(macName, connected, card, home, actions) }
+                    item(key = "mac") { MacHero(macName, connected, card, home, actions, heroWidth) }
                     card.latest?.let { latest -> item(key = "latest") { LatestCard(latest, home, actions) } }
                 }
             }
@@ -220,7 +228,7 @@ private fun SectionTitle(title: String, subtitle: String?, onClick: (() -> Unit)
 
 /** The Mac: its live miniature on its own wallpaper, then its name and a quick action. */
 @Composable
-private fun MacHero(name: String, connected: Boolean, card: MacCardData, home: HomeColors, actions: MacActions) {
+private fun MacHero(name: String, connected: Boolean, card: MacCardData, home: HomeColors, actions: MacActions, width: Dp) {
     val info = card.info
     val wallpaper = remember(info.wallpaper) { info.wallpaper?.asImageBitmap() }
     val since by produceState<Long?>(null, card.connectedSince) {
@@ -240,14 +248,14 @@ private fun MacHero(name: String, connected: Boolean, card: MacCardData, home: H
         }
     }.joinToString(" · ")
 
-    CardBox(width = 252.dp, color = home.card, modifier = Modifier.fillMaxHeight()) {
+    CardBox(width = width, color = home.card, modifier = Modifier.fillMaxHeight()) {
         Box(Modifier.fillMaxWidth().height(170.dp).background(home.top), contentAlignment = Alignment.Center) {
             if (wallpaper != null) {
                 // Blurred, so the little Mac (which shows the same wallpaper) stands out.
                 Image(wallpaper, null, Modifier.fillMaxSize().blur(28.dp).alpha(0.6f), contentScale = ContentScale.Crop)
             }
             Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color.Transparent, home.card.copy(alpha = 0.55f)))))
-            LiveMac(connected, card, Modifier.width(196.dp).padding(top = 12.dp))
+            LiveMac(connected, card, Modifier.width((width * 0.6f).coerceIn(196.dp, 228.dp)).padding(top = 12.dp))
         }
         Column(Modifier.weight(1f).padding(start = 16.dp, end = 16.dp, top = 14.dp, bottom = 16.dp)) {
             Text(kind(name, info.laptop), style = Overline, color = Color.White.copy(alpha = 0.72f))
