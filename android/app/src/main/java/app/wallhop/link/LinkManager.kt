@@ -786,7 +786,7 @@ class LinkManager private constructor(private val context: Context) {
                 // Some files couldn't be read at all: say so rather than a plain "Done".
                 val note = if (unreadable > 0) "${items.size} of ${items.size + unreadable} sent — couldn't read $unreadable" else null
                 _transfer.update { it?.copy(sentBytes = total, phase = TransferPhase.Done, message = note) }
-                record(ActivityEntry(id, ActivityEntry.Kind.FilesSent, summary(items), note ?: "Copied on your Mac · save it there if you like"))
+                record(ActivityEntry(id, ActivityEntry.Kind.FilesSent, summary(items), note ?: "Copied on your Mac"))
             }
         }
     }

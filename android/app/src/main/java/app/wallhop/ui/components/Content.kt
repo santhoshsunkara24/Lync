@@ -77,8 +77,9 @@ import kotlin.math.abs
 val LocalScreenActive = androidx.compose.runtime.compositionLocalOf { true }
 
 /**
- * Text field (DESIGN.md §5.8): filled well, focus ring, clear button. [label] shows above the
- * field and names it for TalkBack; [error] shows below in red and rings the field.
+ * Text field (DESIGN.md §5.8): filled well, focus ring, clear button. [label] names it for
+ * TalkBack only; the sheet title and placeholder already say what it's for on screen. [error]
+ * shows below in red and rings the field.
  */
 @Composable
 fun WTextField(
@@ -100,10 +101,6 @@ fun WTextField(
     val ringColor = if (error != null) colors.red else colors.tint
     val shape = rounded(20.dp)
     Column(modifier.fillMaxWidth()) {
-        if (label != null) {
-            Text(label, style = Type.footnote, color = colors.labelSecondary,
-                modifier = Modifier.padding(start = 4.dp, bottom = 6.dp).clearAndSetSemantics { })
-        }
         BasicTextField(
             value = value,
             onValueChange = onValueChange,

@@ -133,7 +133,7 @@ fun SettingsTab(
                     }
                 }
                 Text(
-                    "Only one-time codes leave your messages. Call audio always stays on the phone.",
+                    "Everything goes only to your paired Mac. Call audio stays on the phone.",
                     style = app.wallhop.ui.design.Type.footnote,
                     color = colors.labelSecondary,
                     modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 7.dp),
@@ -146,7 +146,6 @@ fun SettingsTab(
                 SectionHeader("Stay connected")
                 InsetSection(
                     dividerInset = 57.dp,
-                    footer = "Notification access is the one thing Android only grants in its own settings. If its switch there is greyed out: App info › ⋮ › Allow restricted settings.",
                 ) {
                     row {
                         ListRow(

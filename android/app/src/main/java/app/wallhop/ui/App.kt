@@ -677,10 +677,11 @@ private fun HomeSlot(
         app.wallhop.ui.screens.MacCardData(
             macInfo.copy(battery = 82, charging = true, laptop = true), latencyMs = 9,
             connectedSince = remember { System.currentTimeMillis() - 134 * 60_000L }, latest = activity.firstOrNull(), transfer = transfer,
-            recent = activity.take(4),
+            recent = activity.drop(1).take(4),
         )
     } else {
-        app.wallhop.ui.screens.MacCardData(macInfo, latency, connectedSince, activity.firstOrNull(), transfer, activity.take(4))
+        // The newest entry has its own card beside the Mac, so Recent starts with the one after it.
+        app.wallhop.ui.screens.MacCardData(macInfo, latency, connectedSince, activity.firstOrNull(), transfer, activity.drop(1).take(4))
     }
     MacTab(state, macName, transfer, needsSetup, actions = actions, card = card)
 }
@@ -772,12 +773,12 @@ private fun demoActivity(): List<app.wallhop.link.ActivityEntry> {
     val hour = 3_600_000L
     return listOf(
         app.wallhop.link.ActivityEntry("1", app.wallhop.link.ActivityEntry.Kind.Otp, "482913", "From HDFC Bank · sent to your Mac", now - 120_000),
-        app.wallhop.link.ActivityEntry("2", app.wallhop.link.ActivityEntry.Kind.FilesSent, "3 photos", "Copied on your Mac · save it there if you like", now - hour),
+        app.wallhop.link.ActivityEntry("2", app.wallhop.link.ActivityEntry.Kind.FilesSent, "3 photos", "Copied on your Mac", now - hour),
         app.wallhop.link.ActivityEntry("3", app.wallhop.link.ActivityEntry.Kind.Call, "Missed call", "Mom", now - 2 * hour),
         app.wallhop.link.ActivityEntry("4", app.wallhop.link.ActivityEntry.Kind.TextSent, "Link opened on your Mac", "https://www.nothing.tech", now - 3 * hour),
         app.wallhop.link.ActivityEntry("5", app.wallhop.link.ActivityEntry.Kind.Otp, "771204", "From Swiggy · sent to your Mac", now - 26 * hour),
         app.wallhop.link.ActivityEntry("6", app.wallhop.link.ActivityEntry.Kind.FromMac, "2 files from your Mac", "Saved to Downloads › Lync", now - 27 * hour),
-        app.wallhop.link.ActivityEntry("7", app.wallhop.link.ActivityEntry.Kind.FilesSent, "Invoice.pdf", "Copied on your Mac · save it there if you like", now - 28 * hour),
+        app.wallhop.link.ActivityEntry("7", app.wallhop.link.ActivityEntry.Kind.FilesSent, "Invoice.pdf", "Copied on your Mac", now - 28 * hour),
         app.wallhop.link.ActivityEntry("8", app.wallhop.link.ActivityEntry.Kind.Otp, "903311", "From Google · sent to your Mac", now - 30 * hour),
         app.wallhop.link.ActivityEntry("9", app.wallhop.link.ActivityEntry.Kind.Call, "Missed call", "+91 98765 43210", now - 50 * hour),
     )

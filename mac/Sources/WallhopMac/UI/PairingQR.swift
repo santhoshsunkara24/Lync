@@ -15,6 +15,8 @@ struct PairingQR: View {
     @State private var refresh = Timer.publish(every: 110, on: .main, in: .common).autoconnect()
     /// Bumped for each new QR, so the old one turns into the new one.
     @State private var generation = 0
+    /// This Mac's address, for typing on the phone instead of scanning.
+    @State private var address: String?
 
     var body: some View {
         VStack(spacing: 10) {
@@ -58,6 +60,13 @@ struct PairingQR: View {
                 .font(.wh(11, .medium))
                 .foregroundStyle(WTheme.secondary)
                 .multilineTextAlignment(.center)
+            if let address, !failed {
+                Text("No camera? On the phone, tap \u{201C}Enter the Mac's address\u{201D} and type \(address)")
+                    .font(.wh(11, .medium))
+                    .foregroundStyle(WTheme.secondary)
+                    .multilineTextAlignment(.center)
+                    .textSelection(.enabled)
+            }
             Button(failed ? "Try again" : "New code") { restart() }
                 .buttonStyle(WPill(prominent: failed, compact: true))
                 .help(failed ? "Look for a network address again" : "Make a new QR code; the old one stops working")
@@ -93,6 +102,7 @@ struct PairingQR: View {
             return
         }
         failed = false
+        address = model.server.manualAddress()
         image = Self.qr(url.absoluteString)
         generation += 1
     }

@@ -8,10 +8,12 @@ import androidx.compose.animation.core.MutableTransitionState
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
+import androidx.compose.animation.scaleIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.gestures.draggable
 import androidx.compose.foundation.gestures.rememberDraggableState
@@ -222,9 +224,10 @@ private fun BoxScope.SheetLayer(overlays: Overlays) {
         enter = slideUpIn(reduceMotion) { it / 2 },
         exit = slideDownOut(reduceMotion),
     ) {
-        val appear by transition.animateFloat({ if (targetState == EnterExitState.Visible) materialize else dematerialize }, label = "sheet") {
-            if (it == EnterExitState.Visible) 1f else 0f
-        }
+        // Fully drawn as soon as it's on screen; the enter/exit transition does the motion.
+        // (An animated "appear" here could stop short on some phones and leave the sheet
+        // half see-through, blended with the screen behind it.)
+        val appear = 1f
         val scope = rememberCoroutineScope()
         val drag = remember { Animatable(0f) }
         var height by remember { mutableStateOf(1) }
@@ -241,10 +244,10 @@ private fun BoxScope.SheetLayer(overlays: Overlays) {
                 .padding(bottom = if (spec.large) 0.dp else 8.dp)
                 .offset { IntOffset(0, drag.value.roundToInt()) }
                 .onSizeChanged { height = it.height }
-                .then(
-                    if (spec.large) Modifier.clip(shape).background(colors.backgroundElevated)
-                    else Modifier.glass(shape, GlassVariant.Regular, appear = { appear }),
-                )
+                // Always a solid surface: the slide is the entrance.
+                .clip(shape)
+                .background(colors.backgroundElevated)
+                .then(if (spec.large) Modifier else Modifier.border(0.5.dp, colors.separator, shape))
                 .draggable(
                     dragState,
                     Orientation.Vertical,
@@ -257,7 +260,7 @@ private fun BoxScope.SheetLayer(overlays: Overlays) {
                         }
                     },
                 )
-                .alpha(((appear - 0.3f) / 0.7f).coerceIn(0f, 1f)),
+                
         ) {
             Box(
                 Modifier
@@ -382,16 +385,16 @@ private fun BoxScope.AlertLayer(overlays: Overlays) {
     AnimatedVisibility(
         overlays.alert != null,
         modifier = Modifier.align(Alignment.Center),
-        enter = fadeIn(tween(1)),
-        exit = fadeOut(tween(250)),
+        enter = if (reduceMotion) fadeIn(tween(Durations.Quick)) else fadeIn(tween(200)) + scaleIn(Springs.materialize(), initialScale = 1.08f),
+        exit = fadeOut(tween(200)),
     ) {
-        val appear by transition.animateFloat({ if (targetState == EnterExitState.Visible) materialize else dematerialize }, label = "alert") {
-            if (it == EnterExitState.Visible) 1f else 0f
-        }
+        // Fully drawn as soon as it's on screen; the enter/exit transition does the motion.
+        // (An animated "appear" here could stop short on some phones and leave the alert
+        // half see-through, blended with the screen behind it.)
+        val appear = 1f
         val spec = shown ?: return@AnimatedVisibility
         Column(
             Modifier
-                .graphicsLayer { val s = if (reduceMotion) 1f else 1.08f - 0.08f * appear; scaleX = s; scaleY = s }
                 .width(270.dp)
                 .glass(rounded(Radius.xl), GlassVariant.Regular, appear = { appear })
                 .padding(20.dp)
@@ -458,9 +461,10 @@ private fun BoxScope.ActionSheetLayer(overlays: Overlays) {
         enter = slideUpIn(reduceMotion) { it / 3 },
         exit = slideDownOut(reduceMotion),
     ) {
-        val appear by transition.animateFloat({ if (targetState == EnterExitState.Visible) materialize else dematerialize }, label = "actions") {
-            if (it == EnterExitState.Visible) 1f else 0f
-        }
+        // Fully drawn as soon as it's on screen; the enter/exit transition does the motion.
+        // (An animated "appear" here could stop short on some phones and leave the actions
+        // half see-through, blended with the screen behind it.)
+        val appear = 1f
         val spec = shown ?: return@AnimatedVisibility
         Column(
             Modifier.fillMaxWidth().navigationBarsPadding().padding(10.dp).alpha(((appear - 0.2f) / 0.8f).coerceIn(0f, 1f)),
@@ -519,9 +523,10 @@ private fun BoxScope.ToastLayer(overlays: Overlays) {
         exit = if (reduceMotion) fadeOut(tween(Durations.Quick))
             else slideOutVertically(Springs.smooth()) { -it } + fadeOut(tween(Durations.Fade)),
     ) {
-        val appear by transition.animateFloat({ if (targetState == EnterExitState.Visible) materialize else dematerialize }, label = "toast") {
-            if (it == EnterExitState.Visible) 1f else 0f
-        }
+        // Fully drawn as soon as it's on screen; the enter/exit transition does the motion.
+        // (An animated "appear" here could stop short on some phones and leave the toast
+        // half see-through, blended with the screen behind it.)
+        val appear = 1f
         val spec = shown ?: return@AnimatedVisibility
         Row(
             Modifier

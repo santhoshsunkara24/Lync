@@ -463,7 +463,7 @@ private fun transferStatus(transfer: TransferState) = when (transfer.phase) {
 }
 
 private fun transferMessage(transfer: TransferState) = transfer.message ?: when (transfer.phase) {
-    TransferPhase.Done -> "Copied to your Mac's clipboard. Paste it, or save it there."
+    TransferPhase.Done -> "On your Mac's clipboard"
     else -> "${app.wallhop.ui.components.formatBytes(transfer.sentBytes)} of ${app.wallhop.ui.components.formatBytes(transfer.totalBytes)}"
 }
 

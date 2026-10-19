@@ -206,6 +206,15 @@ final class LinkServer {
 
     // MARK: - QR pairing
 
+    /// What to type on the phone when the camera can't be used: "192.168.1.20", plus ":port"
+    /// when the listener isn't on the usual port. Nil until the listener is up.
+    func manualAddress() -> String? {
+        queue.sync {
+            guard let port = listeningPort, let host = NetworkInfo.localIPv4s().first else { return nil }
+            return port == Self.preferredPort ? host : "\(host):\(port)"
+        }
+    }
+
     /// A fresh pairing link for a QR code: this Mac's address, name and key plus a one-time
     /// secret. Making a new one cancels the previous one. Nil until the listener is up.
     func makeInvite() -> URL? {

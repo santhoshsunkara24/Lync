@@ -139,8 +139,9 @@ fun ConnectScreen(
                         row {
                             ListRow(
                                 title = "Looking for Macs…",
-                                subtitle = if (searchingLong) "Make sure Lync is open on your Mac and both are on the same Wi-Fi."
-                                    else "Make sure Lync is open on your Mac. Look for the phone icon in the menu bar.",
+                                // The line above the list already says to open Lync on the Mac; after a
+                                // while without results, say what usually fixes it.
+                                subtitle = if (searchingLong) "Check both are on the same Wi-Fi, or enter the address below." else null,
                                 leading = { IconTile(WIcons.Laptop, colors.gray) },
                             )
                         }
@@ -207,7 +208,7 @@ private fun showAddressSheet(
         },
     ) {
         Text(
-            "Click the Lync icon in your Mac's menu bar to see its address, for example 192.168.1.20.",
+            "On your Mac, open Lync › Settings › Add a phone. The address is under the QR code.",
             style = Type.footnote,
             color = Wallhop.colors.labelSecondary,
         )

@@ -242,7 +242,7 @@ private struct PanelRoot: View {
     }
 }
 
-/// An invisible strip over the notch: hover or click opens the panel; drop files to send them;
+/// An invisible strip over the notch: a click opens the panel; drop files to send them;
 /// right-click for the menu.
 final class NotchSensor {
     private let window: NSPanel
@@ -302,12 +302,9 @@ private final class SensorView: NSView {
         addTrackingArea(NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self))
     }
 
-    override func mouseEntered(with event: NSEvent) {
-        // A short pause, so passing the pointer across the top of the screen doesn't open it.
-        let work = DispatchWorkItem { [weak self] in self?.onHover() }
-        hoverWork = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: work)
-    }
+    // The notch opens on a click only: hovering it does nothing, so moving the pointer to the top
+    // of the screen (menus, tabs, fullscreen toolbars) never pops the panel open by accident.
+    override func mouseEntered(with event: NSEvent) {}
 
     override func mouseExited(with event: NSEvent) { hoverWork?.cancel() }
 

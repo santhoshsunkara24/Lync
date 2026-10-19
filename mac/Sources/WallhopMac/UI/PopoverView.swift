@@ -202,11 +202,15 @@ private struct HomePage: View {
                     .transition(.opacity)
                     .revealSection(3)
                 }
-                Group {
-                    SectionTitle("Recent", action: model.activity.isEmpty ? nil : ("Clear", { model.clearActivity() })).padding(.top, 22)
-                    RecentList(model: model).padding(.top, 10)
+                // The latest code has its own card above, so Recent leaves it out; with nothing
+                // else to show, the section waits until there is.
+                if model.activity.isEmpty || !RecentList.items(model).isEmpty {
+                    Group {
+                        SectionTitle("Recent", action: model.activity.isEmpty ? nil : ("Clear", { model.clearActivity() })).padding(.top, 22)
+                        RecentList(model: model).padding(.top, 10)
+                    }
+                    .revealSection(4)
                 }
-                .revealSection(4)
             }
             .padding(20)
             .onChange(of: model.connectedPhone?.id) { old, new in
@@ -453,6 +457,12 @@ private struct NotificationRow: View {
 private struct RecentList: View {
     @ObservedObject var model: AppModel
 
+    /// Activity without the code already shown in the Latest code card.
+    static func items(_ model: AppModel) -> [ActivityItem] {
+        let shown = model.latestCode?.item.id
+        return model.activity.filter { $0.id != shown }
+    }
+
     var body: some View {
         if model.activity.isEmpty {
             VStack(spacing: 10) {
@@ -466,7 +476,7 @@ private struct RecentList: View {
             .transition(.opacity)
         } else {
             VStack(spacing: 0) {
-                ForEach(Array(model.activity.prefix(12).enumerated()), id: \.element.id) { index, item in
+                ForEach(Array(Self.items(model).prefix(12).enumerated()), id: \.element.id) { index, item in
                     VStack(spacing: 0) {
                         if index > 0 { Divider().overlay(Color.white.opacity(0.08)).padding(.leading, 56) }
                         RecentRow(model: model, item: item)
@@ -754,7 +764,7 @@ private struct SettingsPage: View {
                 }
                 .padding(.top, 10)
                 Text(model.hasNotch
-                     ? (model.displayMode == .notch ? "Hover or click the notch to open Lync. Drop files on it to send them; right-click it for more." : "Click the Lync icon in the menu bar to open Lync. Right-click it for more.")
+                     ? (model.displayMode == .notch ? "Click the notch to open Lync. Drop files on it to send them; right-click it for more." : "Click the Lync icon in the menu bar to open Lync. Right-click it for more.")
                      : "This Mac has no notch, so Lync lives in the menu bar.")
                     .font(.wh(12, .medium)).foregroundStyle(WTheme.secondary).padding(.top, 8)
                     .fixedSize(horizontal: false, vertical: true)
