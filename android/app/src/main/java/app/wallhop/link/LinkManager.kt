@@ -244,8 +244,16 @@ class LinkManager private constructor(private val context: Context) {
         }
     }
 
+    /** When the last session ended (elapsedRealtime), or 0 before the first one. */
+    private var disconnectedAt = 0L
+
     private suspend fun runSession(session: Session) {
         this.session = session
+        // A Glyph pulse when the Mac connects, but not for a reconnect after a short network blip.
+        val now = android.os.SystemClock.elapsedRealtime()
+        if (disconnectedAt == 0L || now - disconnectedAt >= 2 * 60_000) {
+            app.wallhop.glyph.Glyphs.play(context, app.wallhop.glyph.Glyphs.Effect.Connected)
+        }
         iconsSent.clear()
         _state.value = LinkState.Connected(session.macName, session.host)
         _connectedSince.value = System.currentTimeMillis()
@@ -273,6 +281,7 @@ class LinkManager private constructor(private val context: Context) {
             session.close()
             incoming.cancelAll()
             if (this.session === session) this.session = null
+            disconnectedAt = android.os.SystemClock.elapsedRealtime()
             _latencyMs.value = null
             _connectedSince.value = null
             _macInfo.value = _macInfo.value.copy(locked = false)

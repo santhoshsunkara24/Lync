@@ -24,6 +24,11 @@ password in `lync-upload.properties`). Gradle finds it through `lync.signing` in
 - Upload key SHA-256 fingerprint:
   `9E:47:89:11:65:E1:16:8A:36:33:62:9B:1D:D9:E7:1E:57:95:07:C1:0D:95:1E:B2:91:B0:33:E2:A9:FB:5D:7F`
 
+**Glyph SDK.** Build the Play bundle with Nothing's Glyph SDK in `android/app/libs/` (see the README
+there), or Nothing phones lose the Glyph feature. Its licence allows using it inside your app, forbids
+redistributing the file itself (so it stays out of the repo), and says commercial use needs Nothing's
+written permission. Lync is free, but if you ever charge for it, ask Nothing first (GDKsupport@nothing.tech).
+
 ## 2. Developer account
 
 - **Fee:** $25, once.

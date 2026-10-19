@@ -6,6 +6,10 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
+// Nothing's Glyph SDK can't be redistributed, so it's optional: with the file in libs/ the Glyph
+// feature is built in (src/glyph); without it, a stub (src/noglyph) hides it. See libs/README.md.
+val glyphSdk = file("libs/glyph-matrix-sdk-2.0.aar")
+
 android {
     namespace = "app.wallhop"
     compileSdk = 37
@@ -13,6 +17,8 @@ android {
     defaultConfig {
         // Permanent: Play and Android identify the app by this, so it can never change after release.
         applicationId = "com.santhoshsunkara.lync"
+        // -Plync.devId=app.wallhop builds over the original development install and keeps its pairing.
+        (findProperty("lync.devId") as String?)?.let { applicationId = it }
         minSdk = 29
         targetSdk = 36
         versionCode = 3
@@ -54,6 +60,8 @@ android {
             buildConfigField("boolean", "STRESS_HOOKS", "true")
         }
     }
+
+    sourceSets["main"].kotlin.directories += if (glyphSdk.exists()) "src/glyph/java" else "src/noglyph/java"
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
@@ -100,6 +108,7 @@ dependencies {
     // Liquid Glass: backdrop blur, lens refraction, highlights and continuous (squircle) corners.
     implementation("io.github.kyant0:backdrop:2.0.1")
     implementation("io.github.kyant0:shapes:1.2.1")
+    if (glyphSdk.exists()) implementation(files(glyphSdk))
     debugImplementation("androidx.compose.ui:ui-tooling")
 
     testImplementation("junit:junit:4.13.2")

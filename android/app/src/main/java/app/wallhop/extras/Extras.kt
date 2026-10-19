@@ -22,6 +22,7 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.lifecycle.lifecycleScope
 import app.wallhop.R
+import app.wallhop.glyph.Glyphs
 import app.wallhop.link.LinkManager
 import app.wallhop.link.Notifications
 import kotlinx.coroutines.launch
@@ -67,6 +68,7 @@ object PhoneFinder {
                 }
             }.getOrNull()
             vibrate(app)
+            Glyphs.play(app, Glyphs.Effect.Ringing)
             showNotification(app)
             handler.postDelayed(stopLater, 30_000)
         }
@@ -78,6 +80,7 @@ object PhoneFinder {
             player?.runCatching { stop(); release() }
             player = null
             vibrator(context)?.cancel()
+            Glyphs.stop(context)
             NotificationManagerCompat.from(context).cancel(NOTIFICATION_ID)
         }
     }

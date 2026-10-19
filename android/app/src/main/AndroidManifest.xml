@@ -1,5 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!-- Nothing's Glyph SDK says Android 13+; Lync only calls it on Android 14+ Nothing phones. -->
+    <uses-sdk tools:overrideLibrary="com.nothing.thirdparty" />
 
     <!-- Talk to the Mac over the local network and find it with Bonjour (mDNS). -->
     <uses-permission android:name="android.permission.INTERNET" />
@@ -15,6 +19,8 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <!-- "Ring my phone" from the Mac vibrates as well as playing a sound. -->
     <uses-permission android:name="android.permission.VIBRATE" />
+    <!-- Nothing phones: light the Glyphs (only used where the phone has them). -->
+    <uses-permission android:name="com.nothing.ketchum.permission.ENABLE" />
 
     <!-- Read incoming SMS to find one-time codes. Only the code is sent to the Mac. -->
     <uses-permission android:name="android.permission.RECEIVE_SMS" />

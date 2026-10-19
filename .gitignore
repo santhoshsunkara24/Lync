@@ -26,3 +26,6 @@ brand/*
 brand/redesign/*
 !brand/redesign/final/
 brand/kit/out/AppIcon.iconset/
+
+# Nothing Glyph SDK: its licence forbids redistribution. See android/app/libs/README.md
+android/app/libs/*.aar

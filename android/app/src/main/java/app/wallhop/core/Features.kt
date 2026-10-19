@@ -15,6 +15,10 @@ object Features {
         Notifications("notifications"),
         AppNotifications("app_notifications"),
         Background("background"),
+        /** Nothing phones: Glyphs light up when the Mac rings the phone. */
+        GlyphRing("glyph_ring"),
+        /** Nothing phones: a short Glyph pulse when the Mac connects. */
+        GlyphConnect("glyph_connect"),
     }
 
     private fun prefs(context: Context) =

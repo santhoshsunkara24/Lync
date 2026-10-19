@@ -10,6 +10,8 @@ phone to it:
 - **Texts and notifications.** Read and reply to SMS, and mirror notifications from the apps you pick.
 - **Send anything.** Files, photos and links in both directions, from the share sheet or by dropping on the notch.
 - **Ring your phone** from the Mac, even on silent.
+- **Nothing phones:** the Glyph lights pulse, or the Lync droid appears on the Glyph Matrix, when your Mac
+  rings the phone or connects.
 
 No accounts, no cloud, no tracking. The phone talks only to your own Mac, directly over your Wi-Fi,
 end-to-end encrypted. See the [privacy policy](docs/PRIVACY.md).
@@ -28,6 +30,9 @@ cd android
 ./gradlew :app:assembleDebug        # debug APK
 ./gradlew :app:bundleRelease        # Play bundle (signed if lync.signing is set, see docs/PLAY_STORE.md)
 ```
+
+The Glyph feature needs Nothing's Glyph SDK, which can't be redistributed: see
+[android/app/libs/README.md](android/app/libs/README.md). Without it the app builds normally, minus Glyphs.
 
 **Mac:**
 

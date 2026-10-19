@@ -169,6 +169,9 @@ fun SettingsTab(setup: Setup, macName: String?, mirroredCount: Int, actions: Set
             }
             Spacer(Modifier.height(32.dp))
         }
+        app.wallhop.glyph.Glyphs.hardware?.let { hardware ->
+            item(key = "glyph") { GlyphSection(hardware) }
+        }
         if (macName != null) {
             item(key = "pairedMac") {
                 SectionHeader("Mac")
@@ -311,4 +314,46 @@ private fun launchableApps(context: Context): List<AppEntry> {
         .filter { it.packageName != context.packageName }
         .distinctBy { it.packageName }
         .sortedBy { it.label.lowercase() }
+}
+
+/** Nothing phones only: which events light the Glyphs. */
+@Composable
+private fun GlyphSection(hardware: app.wallhop.glyph.Glyphs.Hardware) {
+    val context = LocalContext.current
+    val colors = Wallhop.colors
+    var ring by remember { mutableStateOf(Features.on(context, Features.Key.GlyphRing)) }
+    var connect by remember { mutableStateOf(Features.on(context, Features.Key.GlyphConnect)) }
+    val matrix = hardware == app.wallhop.glyph.Glyphs.Hardware.Matrix
+    SectionHeader(if (matrix) "Glyph Matrix" else "Glyph lights")
+    InsetSection(
+        dividerInset = 57.dp,
+        footer = if (matrix) "The Lync droid appears on the Glyph Matrix." else "Your Glyph lights pulse.",
+    ) {
+        row {
+            ListRow(
+                title = "When your Mac rings this phone",
+                leading = { IconTile(WIcons.BellRinging, colors.orange) },
+                trailing = {
+                    WSwitch(ring, { on -> ring = on; Features.set(context, Features.Key.GlyphRing, on) })
+                },
+            )
+        }
+        row {
+            ListRow(
+                title = "When your Mac connects",
+                leading = { IconTile(WIcons.Link, colors.indigo) },
+                trailing = {
+                    WSwitch(connect, { on -> connect = on; Features.set(context, Features.Key.GlyphConnect, on) })
+                },
+            )
+        }
+        row {
+            ListRow(
+                title = "Try it",
+                leading = { IconTile(WIcons.Lightning, colors.gray) },
+                onClick = { app.wallhop.glyph.Glyphs.preview(context) },
+            )
+        }
+    }
+    Spacer(Modifier.height(32.dp))
 }
