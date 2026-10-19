@@ -56,6 +56,8 @@ CTFontManagerRegisterFontsForURL(URL(fileURLWithPath: "Resources/Figtree.ttf") a
     // A connected phone with a bit of everything.
     server.paired.add(phone)
     send(.pairingEnded(id: UUID()))
+    // Paired, phone not around yet: "looking for your phone".
+    render("1b_home_searching", PanelView(model: model, theme: model.themeStore, fromNotch: true).fixedSize())
     send(.connected(phone, host: "192.168.0.12"))
     send(.status(battery: 76, charging: true))
     send(.theme(seed: 0xFF6B4EFF, accent: 0xFFE8505B))
@@ -83,6 +85,8 @@ CTFontManagerRegisterFontsForURL(URL(fileURLWithPath: "Resources/Figtree.ttf") a
     model.confirmingForget = phone.id
     render("4b_settings_forget", PanelView(model: model, theme: model.themeStore, fromNotch: false).fixedSize())
     model.confirmingForget = nil
+    model.panelPage = .addPhone
+    render("4c_add_phone", PanelView(model: model, theme: model.themeStore, fromNotch: false).fixedSize())
     model.panelPage = .home
 
     // Feedback while the panel is open: a toast at the bottom (one with Undo).
@@ -107,8 +111,15 @@ CTFontManagerRegisterFontsForURL(URL(fileURLWithPath: "Resources/Figtree.ttf") a
     send(.fileSaved(batch: "b2", url: photo))
     send(.batchInterrupted(id: "b2"))
 
+    // A phone asking to pair, and a ringing call.
+    let request = PairingRequest(id: UUID(), phoneName: "Pixel 9", code: "482913", decide: { _ in })
+    send(.pairingRequested(request))
+    send(.call(PhoneCall(id: "c1", state: .ringing, number: "+44 7700 900123", name: "Alex Morgan", sim: "SIM 1")))
+
     // Live moments, drawn the way the notch shows them.
-    for (name, card) in [("5_live_code", LiveCard.otp(code: "731942", sender: "HDFC Bank")),
+    for (name, card) in [("7c_live_pairing", LiveCard.pairing(request.id)),
+                         ("7d_live_call", LiveCard.call("c1")),
+                         ("7e_live_notification", LiveCard.notification(key: "n1")),("5_live_code", LiveCard.otp(code: "731942", sender: "HDFC Bank")),
                          ("6_live_files", LiveCard.added(batchId: "b1")),
                          ("7_live_text", LiveCard.text("Meeting moved to 4:30")),
                          ("7b_live_interrupted", LiveCard.added(batchId: "b2"))] {

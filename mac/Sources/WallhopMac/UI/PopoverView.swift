@@ -236,7 +236,8 @@ private struct HomePage: View {
                     .font(.wh(12, .semibold)).tracking(0.1).foregroundStyle(WTheme.secondary)
                     .contentTransition(.opacity)
                 Text(model.connectedPhone?.name ?? model.pairedPhones.first?.name ?? "Your phone")
-                    .font(.wh(24, .medium)).lineLimit(1)
+                    // Long names shrink a little before they're cut off.
+                    .font(.wh(24, .medium)).lineLimit(1).minimumScaleFactor(0.7)
                     // One soft glow when the phone connects.
                     .shadow(color: theme.theme.pale.opacity(0.7 * glow), radius: 14)
                     .scaleEffect(1 + 0.015 * glow, anchor: .leading)
@@ -682,7 +683,8 @@ private struct OnboardingPage: View {
                     .help("Settings").accessibilityLabel("Settings")
             }
             .revealSection(0)
-            PairingQR(model: model).revealSection(1)
+            // The numbered steps below already say how; the QR only adds its expiry.
+            PairingQR(model: model, stepsShown: true).revealSection(1)
             VStack(alignment: .leading, spacing: 10) {
                 step(1, "Install Lync on your Android phone")
                 step(2, "Join the same Wi‑Fi as this Mac")
@@ -749,7 +751,7 @@ private struct SettingsPage: View {
                         Button {
                             model.displayMode = mode
                         } label: {
-                            Label(mode.label, systemImage: mode == .notch ? "rectangle.topthird.inset.filled" : "menubar.rectangle")
+                            Label(mode.label, systemImage: mode == .notch ? "laptopcomputer" : "menubar.rectangle")
                                 .labelStyle(.titleAndIcon)
                                 .font(.wh(13, .semibold))
                                 .foregroundStyle(on ? theme.theme.onPale : .white)

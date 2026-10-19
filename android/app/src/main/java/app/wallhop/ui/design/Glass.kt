@@ -170,7 +170,8 @@ fun Modifier.glass(
     if (solid) {
         val fill = when (variant) {
             GlassVariant.Tinted -> accent
-            else -> lerp(colors.backgroundElevated, colors.backgroundElevated2, 0.3f).copy(alpha = 0.96f)
+            // Fully opaque: at 96 % the rows and tab bar behind showed through action sheets.
+            else -> lerp(colors.backgroundElevated, colors.backgroundElevated2, 0.3f)
         }
         return scaled
             .alpha(appear().coerceIn(0f, 1f))

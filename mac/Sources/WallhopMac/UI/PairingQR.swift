@@ -7,6 +7,8 @@ import SwiftUI
 /// Each QR works once and for two minutes; a fresh one appears automatically while it's on screen.
 struct PairingQR: View {
     @ObservedObject var model: AppModel
+    /// The screen lists the steps itself, so the QR leaves out its own how-to line.
+    var stepsShown = false
     @State private var image: NSImage?
     /// Nothing to put in a QR yet (no listener or no network address) after ~10 s of trying.
     @State private var failed = false
@@ -56,7 +58,8 @@ struct PairingQR: View {
 
             Text("Scan with Lync on your phone")
                 .font(.wh(13, .semibold))
-            Text(failed ? "Join a Wi‑Fi network, then try again." : "Lync › Pair with QR. Same Wi‑Fi as this Mac. Code expires in 2 minutes.")
+            Text(failed ? "Join a Wi‑Fi network, then try again."
+                 : stepsShown ? "Code expires in 2 minutes." : "Lync › Pair with QR code. Same Wi‑Fi as this Mac. Code expires in 2 minutes.")
                 .font(.wh(11, .medium))
                 .foregroundStyle(WTheme.secondary)
                 .multilineTextAlignment(.center)

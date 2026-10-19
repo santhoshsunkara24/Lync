@@ -82,7 +82,7 @@ fun LicencesScreen(overlays: Overlays, onBack: () -> Unit) {
 }
 
 private fun showLicence(overlays: Overlays, context: Context, name: String, res: Int) {
-    val text = runCatching { context.resources.openRawResource(res).bufferedReader().use { it.readText() } }.getOrDefault("")
+    val text = runCatching { context.resources.openRawResource(res).bufferedReader().use { reflow(it.readText()) } }.getOrDefault("")
     overlays.showSheet(title = name, large = true) {
         Text(
             text.trim(),
@@ -99,4 +99,27 @@ internal fun openLink(context: Context, url: String) {
     runCatching {
         context.startActivity(Intent(Intent.ACTION_VIEW, url.toUri()).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
     }
+}
+
+/**
+ * Licence files are hard-wrapped at ~80 columns, which leaves ragged half-empty lines on a phone.
+ * Joins the lines of each paragraph. Blank lines, list items, ruled lines and ALL-CAPS headings
+ * stay on lines of their own.
+ */
+internal fun reflow(text: String): String {
+    val listItem = Regex("""^([-*•]|\d+[.)]|\(\w\))\s""")
+    val rule = Regex("""^[-=_]{3,}$""")
+    fun standsAlone(t: String) = rule.matches(t) || (t.any { it.isLetter() } && t == t.uppercase())
+    val lines = mutableListOf<String>()
+    var joinable = false // whether the next line may be joined onto the last one
+    for (raw in text.replace("\r\n", "\n").lines()) {
+        val t = raw.trim()
+        if (t.isNotEmpty() && joinable && !standsAlone(t) && !listItem.containsMatchIn(t)) {
+            lines[lines.lastIndex] += " $t"
+        } else {
+            lines += t
+            joinable = t.isNotEmpty() && !standsAlone(t)
+        }
+    }
+    return lines.joinToString("\n").replace(Regex("\n{3,}"), "\n\n").trim()
 }

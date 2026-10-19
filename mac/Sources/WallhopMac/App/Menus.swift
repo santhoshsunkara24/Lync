@@ -71,7 +71,7 @@ final class Menus: NSObject {
         menu.addItem(.separator())
         menu.addItem(item("Send clipboard", #selector(sendClipboard), enabled: connected))
         menu.addItem(item("Send files…", #selector(sendFiles), enabled: connected))
-        menu.addItem(item("Messages", #selector(openMessages)))
+        menu.addItem(item("Texts", #selector(openMessages)))
         menu.addItem(item(model.ringing ? "Stop ringing" : "Ring phone", #selector(ringPhone), enabled: connected))
         menu.addItem(.separator())
         menu.addItem(item("Settings…", #selector(showSettings), key: ","))

@@ -129,16 +129,19 @@ fun Page(
         }
         // Content fades out under the status bar once scrolled, with the title small on top.
         val fade by animateFloatAsState(if (collapsed) 1f else 0f, Springs.smooth(), label = "edge")
+        // Solid behind the small title and a little below it, then a short fade, so rows never
+        // show through the title as they scroll under it.
+        val solid = statusBar + 64.dp
+        val total = solid + 28.dp
         Box(
             Modifier
                 .fillMaxWidth()
-                .height(statusBar + 72.dp)
+                .height(total)
                 .graphicsLayer { alpha = fade }
-                .background(Brush.verticalGradient(0f to home.top, 0.72f to home.top, 1f to home.top.copy(alpha = 0f))),
-            contentAlignment = Alignment.BottomCenter,
+                .background(Brush.verticalGradient(0f to home.top, solid / total to home.top, 1f to home.top.copy(alpha = 0f))),
         ) {
             Text(title, style = Type.headline, color = colors.label, maxLines = 1, overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.padding(bottom = 26.dp))
+                modifier = Modifier.align(Alignment.TopCenter).padding(top = statusBar + 18.dp))
         }
         if (bottomClearance > 40.dp) {
             val canScroll by remember { derivedStateOf { state.canScrollForward } }

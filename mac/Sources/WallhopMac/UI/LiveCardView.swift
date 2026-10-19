@@ -110,7 +110,7 @@ struct LiveCardView: View {
                     .lineLimit(1)
                 Text(files.isEmpty ? "Nothing arrived"
                      : interrupted ? "\(batch?.summary ?? "") arrived · copied"
-                     : "\(batch?.summary ?? "") · paste anywhere")
+                     : batch?.summary ?? "")
                     .font(.wh(12, .medium))
                     .foregroundStyle(.white.opacity(0.65))
                     .lineLimit(1)
@@ -243,7 +243,8 @@ private struct NotificationCard: View {
                     HStack(spacing: 6) {
                         Text(notification.appName)
                         Text("·")
-                        Text(notification.time, style: .relative)
+                        // "now" for a fresh one rather than "0 sec".
+                        Text(notification.time, format: .relative(presentation: .named))
                     }
                     .font(.wh(11, .medium))
                     .foregroundStyle(.white.opacity(0.5))

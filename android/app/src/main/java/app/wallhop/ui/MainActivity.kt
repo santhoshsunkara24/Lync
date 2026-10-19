@@ -21,9 +21,9 @@ class MainActivity : ComponentActivity() {
         // The foreground service keeps the link alive after the app is closed.
         LinkService.start(this)
         val link = LinkManager.get(this)
-        // Debug builds only: `adb shell am start -n app.wallhop/.ui.MainActivity --ez demo true`
-        // shows the paired screens with sample data, for design review.
-        val demo = app.wallhop.BuildConfig.DEBUG && intent.getBooleanExtra("demo", false)
+        // Test builds only (debug and benchmark): `adb shell am start -n app.wallhop/.ui.MainActivity
+        // --ez demo true` shows the paired screens with sample data, for design review and screenshots.
+        val demo = (app.wallhop.BuildConfig.DEBUG || app.wallhop.BuildConfig.STRESS_HOOKS) && intent.getBooleanExtra("demo", false)
         setContent {
             WallhopTheme { WallhopRoot(link, demo) }
         }

@@ -147,7 +147,7 @@ private val Body = style(13, 500)
 private val Label = style(14, 600)
 private val Meta = style(12, 500)
 private val TransferTitle = style(22, 600, -0.2f, 27)
-private val CodeStyle = style(40, 600, 2.4f, 46)
+private val CodeStyle = style(30, 600, 1.2f, 36)
 
 /**
  * Home (DESIGN.md §6.4). The whole screen takes its colour from the phone's Material You
@@ -268,7 +268,7 @@ fun MacTab(
                         rows.forEach { entry ->
                             row {
                                 AnimatedVisibility(entry.visible, enter = rowEnter(reduceMotion), exit = rowExit(reduceMotion)) {
-                                    ActivityRow(entry.item, onLongClick = { actions.entryActions(entry.item) }, onClick = { actions.entryActions(entry.item) })
+                                    ActivityRow(entry.item, onLongClick = { actions.entryActions(entry.item) }, onClick = { actions.entryActions(entry.item) }, showDay = true)
                                 }
                             }
                         }
@@ -437,7 +437,7 @@ private fun cardRowHeight(name: String, meta: String, heroWidth: Dp, transfer: T
             text(transferMessage(it), Meta, small, 4)
     } ?: 0.dp
     val latestCard = latest?.let {
-        val title = if (it.kind == ActivityEntry.Kind.Otp) text(spacedCode(it.title).replace(" ", "\n"), CodeStyle, small)
+        val title = if (it.kind == ActivityEntry.Kind.Otp) text(spacedCode(it.title), CodeStyle, small)
             else text(it.title, TransferTitle, small, 3)
         32.dp + 8.dp + 48.dp + text(latestLabel(it), Overline, small) + title + text(it.detail, Meta, small, 2)
     } ?: 0.dp
@@ -557,7 +557,11 @@ private fun LatestCard(entry: ActivityEntry, home: HomeColors, actions: MacActio
                 // A new code rolls in like an odometer, digit by digit (an old one just shows).
                 val fresh = remember(entry.id) { System.currentTimeMillis() - entry.time < 15_000 }
                 val groups = spacedCode(entry.title).split(' ')
-                Column(Modifier.clearAndSetSemantics { contentDescription = spacedCode(entry.title) }) {
+                // One line, "482 913", like everywhere else the code appears.
+                Row(
+                    Modifier.clearAndSetSemantics { contentDescription = spacedCode(entry.title) },
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
                     var offset = 0L
                     groups.forEach { group ->
                         RollingCode(group, CodeStyle, Color.White, animate = fresh, delayOffsetMs = offset)

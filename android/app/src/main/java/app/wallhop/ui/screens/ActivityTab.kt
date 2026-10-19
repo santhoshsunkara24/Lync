@@ -205,7 +205,8 @@ internal fun showEntryActions(
 
 /** One entry. Long press (or [onClick], where given) offers Copy code / Delete. */
 @Composable
-internal fun ActivityRow(entry: ActivityEntry, onLongClick: () -> Unit, onClick: (() -> Unit)? = null) {
+/** [showDay]: lists that aren't grouped by day (Home's Recent) say "Yesterday" or the date. */
+internal fun ActivityRow(entry: ActivityEntry, onLongClick: () -> Unit, onClick: (() -> Unit)? = null, showDay: Boolean = false) {
     val colors = Wallhop.colors
     val context = LocalContext.current
     val (icon, color) = when (entry.kind) {
@@ -232,7 +233,7 @@ internal fun ActivityRow(entry: ActivityEntry, onLongClick: () -> Unit, onClick:
         leading = { IconTile(icon, color) },
         trailing = {
             Text(
-                DateUtils.formatDateTime(context, entry.time, DateUtils.FORMAT_SHOW_TIME),
+                if (showDay) rowTime(context, entry.time) else DateUtils.formatDateTime(context, entry.time, DateUtils.FORMAT_SHOW_TIME),
                 style = Type.caption1,
                 color = colors.labelSecondary,
             )
@@ -241,6 +242,17 @@ internal fun ActivityRow(entry: ActivityEntry, onLongClick: () -> Unit, onClick:
         onLongClick = onLongClick,
         onClick = onClick,
     )
+}
+
+/** The time today, otherwise "Yesterday" or a short date. */
+private fun rowTime(context: android.content.Context, time: Long): String {
+    val zone = java.time.ZoneId.systemDefault()
+    val today = java.time.LocalDate.now(zone)
+    return when (java.time.Instant.ofEpochMilli(time).atZone(zone).toLocalDate()) {
+        today -> DateUtils.formatDateTime(context, time, DateUtils.FORMAT_SHOW_TIME)
+        today.minusDays(1) -> "Yesterday"
+        else -> DateUtils.formatDateTime(context, time, DateUtils.FORMAT_SHOW_DATE or DateUtils.FORMAT_ABBREV_MONTH)
+    }
 }
 
 private fun dayLabel(context: android.content.Context, time: Long): String {
