@@ -70,7 +70,7 @@ Codes, calls, texts and files from your Android phone, in your Mac's notch.
 > Wi-Fi network as your phone.
 
 **Category:** Tools. **Tags:** productivity, connectivity.
-**Contact:** https://github.com/santhoshsunkara24/Lync/issues (add a personal email here before submitting; Play requires one).
+**Contact email:** santhoshreddy1058@gmail.com.
 **Privacy policy URL:** host `docs/PRIVACY.md` publicly. The simplest way is to make the repo public; the
 file's GitHub link then works as the URL. Otherwise use any free page host.
 
