@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Lets the paired Mac appear in the share sheet's top row (Direct Share). -->
+    <share-target android:targetClass="app.wallhop.share.ShareActivity">
+        <data android:mimeType="*/*" />
+        <category android:name="app.wallhop.category.SEND_TO_MAC" />
+    </share-target>
+</shortcuts>

@@ -1,0 +1,136 @@
+package app.wallhop.calls
+
+import android.Manifest
+import android.annotation.SuppressLint
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.net.Uri
+import android.provider.ContactsContract
+import android.telecom.TelecomManager
+import android.telephony.SubscriptionManager
+import android.telephony.TelephonyManager
+import androidx.core.content.ContextCompat
+import app.wallhop.link.LinkManager
+import app.wallhop.link.MacStore
+import java.util.UUID
+
+/** One phone call, as the Mac sees it. */
+data class CallInfo(
+    val id: String,
+    val state: String,
+    val number: String?,
+    val name: String?,
+    val sim: String?,
+)
+
+/**
+ * Listens for the phone's call state and tells the Mac. Android sends this broadcast once
+ * without the number and again with it (when call log access is granted), so updates for
+ * the same call reuse one id.
+ */
+class CallReceiver : BroadcastReceiver() {
+    override fun onReceive(context: Context, intent: Intent) {
+        if (intent.action != TelephonyManager.ACTION_PHONE_STATE_CHANGED) return
+        if (!app.wallhop.core.Features.on(context, app.wallhop.core.Features.Key.Calls)) return
+        if (MacStore(context).get() == null) return
+        val state = intent.getStringExtra(TelephonyManager.EXTRA_STATE) ?: return
+        @Suppress("DEPRECATION")
+        val number = intent.getStringExtra(TelephonyManager.EXTRA_INCOMING_NUMBER)?.takeIf { it.isNotBlank() }
+        val subscription = intent.getIntExtra(SubscriptionManager.EXTRA_SUBSCRIPTION_INDEX, SubscriptionManager.INVALID_SUBSCRIPTION_ID)
+        CallTracker.onState(context, state, number, subscription)
+    }
+}
+
+object CallTracker {
+    private var current: CallInfo? = null
+    private var answered = false
+
+    @Synchronized
+    fun onState(context: Context, state: String, number: String?, subscription: Int) {
+        val link = LinkManager.get(context)
+        when (state) {
+            TelephonyManager.EXTRA_STATE_RINGING -> {
+                val previous = current
+                val call = CallInfo(
+                    id = previous?.takeIf { it.state == "ringing" }?.id ?: UUID.randomUUID().toString(),
+                    state = "ringing",
+                    number = number ?: previous?.number,
+                    name = (number ?: previous?.number)?.let { contactName(context, it) } ?: previous?.name,
+                    sim = simLabel(context, subscription) ?: previous?.sim,
+                )
+                if (call == previous) return
+                answered = false
+                current = call
+                link.sendCall(call)
+            }
+            TelephonyManager.EXTRA_STATE_OFFHOOK -> {
+                val call = current ?: return // An outgoing call; nothing to show.
+                if (call.state == "active") return
+                answered = true
+                current = call.copy(state = "active")
+                link.sendCall(current!!)
+            }
+            TelephonyManager.EXTRA_STATE_IDLE -> {
+                val call = current ?: return
+                link.sendCall(call.copy(state = if (answered || call.state == "active") "ended" else "missed"))
+                current = null
+                answered = false
+            }
+        }
+    }
+
+    /** "SIM 1 · Jio", only when more than one SIM is active. */
+    @SuppressLint("MissingPermission")
+    private fun simLabel(context: Context, subscriptionId: Int): String? {
+        if (!granted(context, Manifest.permission.READ_PHONE_STATE)) return null
+        if (subscriptionId == SubscriptionManager.INVALID_SUBSCRIPTION_ID) return null
+        val manager = context.getSystemService(SubscriptionManager::class.java) ?: return null
+        val active = runCatching { manager.activeSubscriptionInfoList }.getOrNull().orEmpty()
+        if (active.size < 2) return null
+        val info = active.firstOrNull { it.subscriptionId == subscriptionId } ?: return null
+        val carrier = info.displayName?.toString()?.takeIf { it.isNotBlank() } ?: info.carrierName?.toString()
+        return listOfNotNull("SIM ${info.simSlotIndex + 1}", carrier).joinToString(" · ")
+    }
+
+    private fun contactName(context: Context, number: String): String? {
+        if (!granted(context, Manifest.permission.READ_CONTACTS)) return null
+        val uri = Uri.withAppendedPath(ContactsContract.PhoneLookup.CONTENT_FILTER_URI, Uri.encode(number))
+        return runCatching {
+            context.contentResolver.query(uri, arrayOf(ContactsContract.PhoneLookup.DISPLAY_NAME), null, null, null)
+                ?.use { if (it.moveToFirst()) it.getString(0) else null }
+        }.getOrNull()
+    }
+
+    private fun granted(context: Context, permission: String) =
+        ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
+}
+
+/** Answers or declines the ringing call when the Mac asks. Needs the "answer calls" permission. */
+object CallControl {
+    @SuppressLint("MissingPermission")
+    fun perform(context: Context, action: String): Boolean {
+        if (!app.wallhop.core.Features.on(context, app.wallhop.core.Features.Key.Calls)) return false
+        if (ContextCompat.checkSelfPermission(context, Manifest.permission.ANSWER_PHONE_CALLS) != PackageManager.PERMISSION_GRANTED) {
+            return false
+        }
+        val telecom = context.getSystemService(TelecomManager::class.java) ?: return false
+        return runCatching {
+            when (action) {
+                "answer" -> { telecom.acceptRingingCall(); true }
+                "decline", "end" ->
+                    app.wallhop.otp.OtpNotificationListener.endCallFromNotification(context) ||
+                        @Suppress("DEPRECATION") telecom.endCall()
+                else -> false
+            }
+        }.getOrDefault(false)
+    }
+
+    val permissions = arrayOf(
+        Manifest.permission.READ_PHONE_STATE,
+        Manifest.permission.READ_CALL_LOG,
+        Manifest.permission.READ_CONTACTS,
+        Manifest.permission.ANSWER_PHONE_CALLS,
+    )
+}

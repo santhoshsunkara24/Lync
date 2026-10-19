@@ -1,0 +1,487 @@
+package app.wallhop.ui.components
+
+import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.EnterExitState
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.MutableTransitionState
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.Orientation
+import androidx.compose.foundation.gestures.draggable
+import androidx.compose.foundation.gestures.rememberDraggableState
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.requiredSize
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.material3.Icon
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.Stable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.staticCompositionLocalOf
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.lerp
+import app.wallhop.ui.design.GlassVariant
+import app.wallhop.ui.design.Haptic
+import app.wallhop.ui.design.Radius
+import app.wallhop.ui.design.Springs
+import app.wallhop.ui.design.Type
+import app.wallhop.ui.design.Wallhop
+import app.wallhop.ui.design.capsule
+import app.wallhop.ui.design.glass
+import app.wallhop.ui.design.rememberHaptics
+import app.wallhop.ui.design.rounded
+import app.wallhop.ui.design.tappable
+import com.kyant.shapes.RoundedRectangle
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlin.math.roundToInt
+
+// Sheets, menus, alerts, action sheets and toasts. See docs/DESIGN.md §4.2 (materialization),
+// §5.10–5.14.
+
+class SheetSpec(
+    val title: String?,
+    val leading: (@Composable () -> Unit)?,
+    val trailing: (@Composable () -> Unit)?,
+    /** Tall sheets attach to the screen edges and become opaque, like iOS at the large detent. */
+    val large: Boolean,
+    val content: @Composable ColumnScope.() -> Unit,
+)
+
+class AlertSpec(val title: String, val message: String?, val actions: List<AlertAction>)
+
+data class AlertAction(val label: String, val destructive: Boolean = false, val default: Boolean = false, val onClick: () -> Unit = {})
+
+class ActionSheetSpec(val message: String?, val actions: List<AlertAction>, val cancel: String = "Cancel")
+
+data class MenuItem(val label: String, val icon: ImageVector? = null, val destructive: Boolean = false, val onClick: () -> Unit)
+
+/** A menu that grows out of the button at [anchor] (root coordinates). */
+class MenuSpec(val anchor: Rect, val items: List<MenuItem>)
+
+data class ToastSpec(val text: String, val icon: ImageVector?, val tint: Color? = null, val id: Long = System.nanoTime())
+
+/** Everything that floats above the app. One instance at the app root. */
+@Stable
+class Overlays {
+    var sheet by mutableStateOf<SheetSpec?>(null); private set
+    var alert by mutableStateOf<AlertSpec?>(null); private set
+    var actionSheet by mutableStateOf<ActionSheetSpec?>(null); private set
+    var menu by mutableStateOf<MenuSpec?>(null); private set
+    var toast by mutableStateOf<ToastSpec?>(null); private set
+
+    fun showSheet(
+        title: String? = null,
+        large: Boolean = false,
+        leading: (@Composable () -> Unit)? = null,
+        trailing: (@Composable () -> Unit)? = null,
+        content: @Composable ColumnScope.() -> Unit,
+    ) {
+        sheet = SheetSpec(title, leading, trailing, large, content)
+    }
+
+    fun dismissSheet() { sheet = null }
+    fun showAlert(spec: AlertSpec) { alert = spec }
+    fun dismissAlert() { alert = null }
+    fun showActionSheet(spec: ActionSheetSpec) { actionSheet = spec }
+    fun dismissActionSheet() { actionSheet = null }
+    fun showMenu(anchor: Rect, items: List<MenuItem>) { menu = MenuSpec(anchor, items) }
+    fun dismissMenu() { menu = null }
+    fun toast(text: String, icon: ImageVector? = null, tint: Color? = null) { toast = ToastSpec(text, icon, tint) }
+    internal fun clearToast(id: Long) { if (toast?.id == id) toast = null }
+}
+
+val LocalOverlays = staticCompositionLocalOf<Overlays?> { null }
+
+/** How glass materializes: refraction and light ramp up rather than a plain fade. */
+private val materialize = spring<Float>(dampingRatio = 0.8f, stiffness = 300f)
+private val dematerialize = spring<Float>(dampingRatio = 1f, stiffness = 500f)
+
+@Composable
+fun BoxScope.OverlayHost(overlays: Overlays) {
+    val dimmed = overlays.sheet != null || overlays.alert != null || overlays.actionSheet != null
+
+    AnimatedVisibility(dimmed, enter = fadeIn(tween(250)), exit = fadeOut(tween(200))) {
+        val source = remember { MutableInteractionSource() }
+        Box(
+            Modifier
+                .fillMaxSize()
+                .background(Color.Black.copy(alpha = if (overlays.alert != null) 0.2f else 0.25f))
+                .tappable(source) {
+                    when {
+                        overlays.alert != null -> Unit // Alerts need an answer.
+                        overlays.actionSheet != null -> overlays.dismissActionSheet()
+                        else -> overlays.dismissSheet()
+                    }
+                },
+        )
+    }
+
+    SheetLayer(overlays)
+    ActionSheetLayer(overlays)
+    MenuLayer(overlays)
+    AlertLayer(overlays)
+    ToastLayer(overlays)
+}
+
+// MARK: - Sheet
+
+@Composable
+private fun BoxScope.SheetLayer(overlays: Overlays) {
+    val colors = Wallhop.colors
+    var shown by remember { mutableStateOf<SheetSpec?>(null) }
+    val visible = remember { MutableTransitionState(false) }
+    LaunchedEffect(overlays.sheet) {
+        if (overlays.sheet != null) shown = overlays.sheet
+        visible.targetState = overlays.sheet != null
+    }
+    if (visible.isIdle && !visible.currentState && overlays.sheet == null) shown = null
+    val spec = shown ?: return
+    BackHandler(enabled = overlays.sheet != null) { overlays.dismissSheet() }
+
+    AnimatedVisibility(
+        visibleState = visible,
+        modifier = Modifier.align(Alignment.BottomCenter),
+        enter = slideInVertically(Springs.smooth()) { it / 2 },
+        exit = slideOutVertically(Springs.smooth()) { it },
+    ) {
+        val appear by transition.animateFloat({ if (targetState == EnterExitState.Visible) materialize else dematerialize }, label = "sheet") {
+            if (it == EnterExitState.Visible) 1f else 0f
+        }
+        val scope = rememberCoroutineScope()
+        val drag = remember { Animatable(0f) }
+        var height by remember { mutableStateOf(1) }
+        val dragState = rememberDraggableState { delta ->
+            scope.launch { drag.snapTo((drag.value + delta).coerceAtLeast(0f)) }
+        }
+        val shape = rounded(Radius.sheet)
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .then(if (spec.large) Modifier else Modifier.padding(horizontal = 8.dp))
+                .navigationBarsPadding()
+                .imePadding()
+                .padding(bottom = if (spec.large) 0.dp else 8.dp)
+                .offset { IntOffset(0, drag.value.roundToInt()) }
+                .onSizeChanged { height = it.height }
+                .then(
+                    if (spec.large) Modifier.clip(shape).background(colors.backgroundElevated)
+                    else Modifier.glass(shape, GlassVariant.Regular, appear = { appear }),
+                )
+                .draggable(
+                    dragState,
+                    Orientation.Vertical,
+                    onDragStopped = { velocity ->
+                        if (drag.value > height * 0.25f || velocity > 1800f) {
+                            overlays.dismissSheet()
+                            drag.snapTo(0f)
+                        } else {
+                            drag.animateTo(0f, Springs.bouncy())
+                        }
+                    },
+                )
+                .alpha(((appear - 0.3f) / 0.7f).coerceIn(0f, 1f)),
+        ) {
+            Box(
+                Modifier
+                    .padding(top = 6.dp)
+                    .align(Alignment.CenterHorizontally)
+                    .size(36.dp, 5.dp)
+                    .clip(capsule())
+                    .background(colors.labelTertiary),
+            )
+            if (spec.title != null || spec.leading != null || spec.trailing != null) {
+                Box(Modifier.fillMaxWidth().height(52.dp).padding(horizontal = 16.dp)) {
+                    Box(Modifier.align(Alignment.CenterStart)) { spec.leading?.invoke() }
+                    if (spec.title != null) {
+                        Text(spec.title, style = Type.headline, color = colors.label, modifier = Modifier.align(Alignment.Center))
+                    }
+                    Box(Modifier.align(Alignment.CenterEnd)) { spec.trailing?.invoke() }
+                }
+            } else {
+                Spacer(Modifier.height(12.dp))
+            }
+            Column(Modifier.fillMaxWidth().padding(start = 20.dp, end = 20.dp, bottom = 20.dp), content = spec.content)
+        }
+    }
+}
+
+// MARK: - Menu that morphs out of its button
+
+@Composable
+private fun BoxScope.MenuLayer(overlays: Overlays) {
+    val colors = Wallhop.colors
+    val density = LocalDensity.current
+    val haptics = rememberHaptics()
+    var shown by remember { mutableStateOf<MenuSpec?>(null) }
+    val progress = remember { Animatable(0f) }
+    LaunchedEffect(overlays.menu) {
+        val target = overlays.menu
+        if (target != null) {
+            shown = target
+            haptics.perform(Haptic.Light)
+            progress.animateTo(1f, spring(dampingRatio = 0.75f, stiffness = 350f))
+        } else if (shown != null) {
+            progress.animateTo(0f, spring(dampingRatio = 1f, stiffness = 600f))
+            shown = null
+        }
+    }
+    val spec = shown ?: return
+    BackHandler(enabled = overlays.menu != null) { overlays.dismissMenu() }
+
+    // Tapping anywhere else closes it; menus don't dim the screen.
+    val outside = remember { MutableInteractionSource() }
+    Box(Modifier.fillMaxSize().tappable(outside) { overlays.dismissMenu() })
+
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+        val p = progress.value
+        val anchor = with(density) {
+            androidx.compose.ui.geometry.Rect(spec.anchor.left.toDp().value, spec.anchor.top.toDp().value, spec.anchor.right.toDp().value, spec.anchor.bottom.toDp().value)
+        }
+        val menuWidth = 250.dp
+        val rowHeight = 48.dp
+        val menuHeight = rowHeight * spec.items.size + 12.dp
+        val width = lerp(anchor.width.dp, menuWidth, p)
+        val height = lerp(anchor.height.dp, menuHeight, p)
+        val radius = lerp((anchor.height / 2).dp, Radius.l, p.coerceIn(0f, 1f))
+        // Grow away from the nearest screen edge, keeping the button's corner fixed.
+        val growsLeft = anchor.center.x > maxWidth.value / 2
+        val x = if (growsLeft) anchor.right.dp - width else anchor.left.dp
+        val y = anchor.top.dp
+        Column(
+            Modifier
+                .offset(x = x, y = y)
+                .requiredSize(width, height)
+                .glass(RoundedRectangle(radius), GlassVariant.Regular, appear = { 0.6f + 0.4f * progress.value })
+                .padding(vertical = 6.dp)
+                .alpha(((p - 0.4f) / 0.6f).coerceIn(0f, 1f)),
+        ) {
+            spec.items.forEach { item ->
+                val source = remember { MutableInteractionSource() }
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .height(rowHeight)
+                        .tappable(source) {
+                            overlays.dismissMenu()
+                            item.onClick()
+                        }
+                        .padding(horizontal = 18.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(item.label, style = Type.body, color = if (item.destructive) colors.red else colors.label,
+                        modifier = Modifier.weight(1f))
+                    if (item.icon != null) {
+                        Icon(item.icon, null, tint = if (item.destructive) colors.red else colors.label, modifier = Modifier.size(20.dp))
+                    }
+                }
+            }
+        }
+    }
+}
+
+// MARK: - Alert
+
+@Composable
+private fun BoxScope.AlertLayer(overlays: Overlays) {
+    val colors = Wallhop.colors
+    var shown by remember { mutableStateOf<AlertSpec?>(null) }
+    if (overlays.alert != null) shown = overlays.alert
+    AnimatedVisibility(
+        overlays.alert != null,
+        modifier = Modifier.align(Alignment.Center),
+        enter = fadeIn(tween(1)),
+        exit = fadeOut(tween(250)),
+    ) {
+        val appear by transition.animateFloat({ if (targetState == EnterExitState.Visible) materialize else dematerialize }, label = "alert") {
+            if (it == EnterExitState.Visible) 1f else 0f
+        }
+        val spec = shown ?: return@AnimatedVisibility
+        Column(
+            Modifier
+                .graphicsLayer { val s = 1.08f - 0.08f * appear; scaleX = s; scaleY = s }
+                .width(290.dp)
+                .glass(rounded(Radius.xl), GlassVariant.Regular, appear = { appear })
+                .padding(20.dp)
+                .alpha(((appear - 0.3f) / 0.7f).coerceIn(0f, 1f)),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Text(spec.title, style = Type.headline, color = colors.label, textAlign = TextAlign.Center)
+            if (spec.message != null) {
+                Spacer(Modifier.height(6.dp))
+                Text(spec.message, style = Type.footnote, color = colors.labelSecondary, textAlign = TextAlign.Center)
+            }
+            Spacer(Modifier.height(18.dp))
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                spec.actions.forEach { action ->
+                    AlertButton(action) { overlays.dismissAlert(); action.onClick() }
+                }
+            }
+        }
+    }
+}
+
+/** The default action is a pale pill; the others are see-through (DESIGN.md §5.11). */
+@Composable
+private fun AlertButton(action: AlertAction, onClick: () -> Unit) {
+    val colors = Wallhop.colors
+    val source = remember { MutableInteractionSource() }
+    val background = when {
+        action.default && action.destructive -> colors.red
+        action.default -> Wallhop.home.pale
+        else -> colors.label.copy(alpha = 0.1f)
+    }
+    val label = when {
+        action.default && action.destructive -> Color.White
+        action.default -> Wallhop.home.onPale
+        action.destructive -> colors.red
+        else -> colors.label
+    }
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .height(48.dp)
+            .clip(capsule())
+            .background(background)
+            .tappable(source, onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(action.label, style = Type.headline, color = label)
+    }
+}
+
+// MARK: - Action sheet
+
+@Composable
+private fun BoxScope.ActionSheetLayer(overlays: Overlays) {
+    val colors = Wallhop.colors
+    var shown by remember { mutableStateOf<ActionSheetSpec?>(null) }
+    if (overlays.actionSheet != null) shown = overlays.actionSheet
+    BackHandler(enabled = overlays.actionSheet != null) { overlays.dismissActionSheet() }
+    AnimatedVisibility(
+        overlays.actionSheet != null,
+        modifier = Modifier.align(Alignment.BottomCenter),
+        enter = slideInVertically(Springs.smooth()) { it / 3 },
+        exit = slideOutVertically(Springs.smooth()) { it },
+    ) {
+        val appear by transition.animateFloat({ if (targetState == EnterExitState.Visible) materialize else dematerialize }, label = "actions") {
+            if (it == EnterExitState.Visible) 1f else 0f
+        }
+        val spec = shown ?: return@AnimatedVisibility
+        Column(
+            Modifier.fillMaxWidth().navigationBarsPadding().padding(10.dp).alpha(((appear - 0.2f) / 0.8f).coerceIn(0f, 1f)),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Column(Modifier.fillMaxWidth().glass(rounded(Radius.xl), GlassVariant.Regular, appear = { appear }).padding(8.dp)) {
+                if (spec.message != null) {
+                    Text(spec.message, style = Type.footnote, color = colors.labelSecondary, textAlign = TextAlign.Center,
+                        modifier = Modifier.fillMaxWidth().padding(12.dp))
+                }
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    spec.actions.forEach { action ->
+                        AlertButton(action.copy(default = false)) { overlays.dismissActionSheet(); action.onClick() }
+                    }
+                }
+            }
+            val source = remember { MutableInteractionSource() }
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .height(56.dp)
+                    .glass(capsule(), GlassVariant.Regular, appear = { appear })
+                    .tappable(source) { overlays.dismissActionSheet() },
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(spec.cancel, style = Type.headline, color = colors.tint)
+            }
+        }
+    }
+}
+
+// MARK: - Toast
+
+@Composable
+private fun BoxScope.ToastLayer(overlays: Overlays) {
+    val colors = Wallhop.colors
+    val haptics = rememberHaptics()
+    var shown by remember { mutableStateOf<ToastSpec?>(null) }
+    val current = overlays.toast
+    if (current != null) shown = current
+    LaunchedEffect(current?.id) {
+        if (current != null) {
+            if (current.tint == colors.red) haptics.perform(Haptic.Failure)
+            delay(2_500)
+            overlays.clearToast(current.id)
+        }
+    }
+    AnimatedVisibility(
+        current != null,
+        modifier = Modifier.align(Alignment.TopCenter),
+        enter = slideInVertically(Springs.bouncy()) { -it } ,
+        exit = slideOutVertically(Springs.smooth()) { -it } + fadeOut(tween(200)),
+    ) {
+        val appear by transition.animateFloat({ if (targetState == EnterExitState.Visible) materialize else dematerialize }, label = "toast") {
+            if (it == EnterExitState.Visible) 1f else 0f
+        }
+        val spec = shown ?: return@AnimatedVisibility
+        Row(
+            Modifier
+                .statusBarsPadding()
+                .padding(top = 8.dp)
+                .widthIn(max = 360.dp)
+                .alpha(appear.coerceIn(0f, 1f))
+                .clip(capsule())
+                .background(Wallhop.home.pale)
+                .padding(horizontal = 18.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            // Pale pill, dark text (like the reference's buttons); errors keep their red icon.
+            if (spec.icon != null) Icon(spec.icon, null, tint = if (spec.tint == colors.red) colors.red else Wallhop.home.onPale, modifier = Modifier.size(20.dp))
+            Text(spec.text, style = Type.subheadline.copy(fontWeight = FontWeight.SemiBold), color = Wallhop.home.onPale)
+        }
+    }
+}

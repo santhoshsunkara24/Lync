@@ -1,0 +1,28 @@
+# Mac
+mac/.build/
+.DS_Store
+
+# Android
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/.idea/
+*.iml
+mac/build/
+android/.kotlin/
+
+# Signing: the upload key and its password live outside the repo (see docs/PLAY_STORE.md)
+*.jks
+*.keystore
+keystore.properties
+*-upload.properties
+
+# Scratch output and early logo explorations (the final brand is in brand/kit)
+scratch-snap/
+brand/*
+!brand/kit/
+!brand/redesign/
+brand/redesign/*
+!brand/redesign/final/
+brand/kit/out/AppIcon.iconset/
