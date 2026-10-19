@@ -117,6 +117,12 @@ final class AppModel: ObservableObject {
     @Published private(set) var toast: Toast?
     /// The paired phone (id) whose Forget button is waiting for confirmation in Settings.
     @Published var confirmingForget: String?
+    /// Bumped when files are dropped on the notch or icon: the drop card pulses before it goes.
+    @Published private(set) var dropPulse = 0
+    /// Bumped when files are dragged over while no phone is connected: the card shakes.
+    @Published private(set) var dropShake = 0
+    /// Keeps the drop card up for its pulse after the drag ends.
+    private var dropPulsing = false
     private var toastToken = 0
     /// Notifications cleared with "Clear all", dismissed on the phone once Undo has expired.
     private var pendingClear: (notifications: [PhoneNotification], work: DispatchWorkItem)?
@@ -641,8 +647,27 @@ final class AppModel: ObservableObject {
         let card = dropHintCard
         if entered {
             show(card, for: connectedPhone == nil ? 2.5 : nil)
-        } else if live == card {
+            if connectedPhone == nil {
+                // After the card has come out of the notch.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) { [weak self] in
+                    guard let self, self.live == card else { return }
+                    self.dropShake += 1
+                }
+            }
+        } else if live == card, !dropPulsing {
             hideLive()
+        }
+    }
+
+    /// Files were dropped and will be sent: a quick pulse on the card, then it goes back up.
+    func dropAccepted() {
+        let card = dropHintCard
+        dropPulse += 1
+        dropPulsing = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.22) { [weak self] in
+            guard let self else { return }
+            self.dropPulsing = false
+            if self.live == card { self.hideLive() }
         }
     }
 

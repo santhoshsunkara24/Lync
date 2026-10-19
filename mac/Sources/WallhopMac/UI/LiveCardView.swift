@@ -46,9 +46,7 @@ struct LiveCardView: View {
         HStack(spacing: 14) {
             iconTile("lock.fill", tint: WTheme.success)
             VStack(alignment: .leading, spacing: 2) {
-                Text(spaced(code))
-                    .font(.wh(26, .semibold).monospacedDigit())
-                    .tracking(1)
+                RollingCode(code: code, font: .wh(26, .semibold).monospacedDigit(), tracking: 1)
                 Text(sender.isEmpty ? "Verification code" : sender)
                     .font(.wh(12, .medium))
                     .foregroundStyle(.white.opacity(0.6))
@@ -88,8 +86,23 @@ struct LiveCardView: View {
         return HStack(spacing: 14) {
             if files.isEmpty {
                 iconTile("exclamationmark.triangle.fill", tint: WTheme.danger)
+                    .modifier(ShakeOnAppear())
             } else {
+                // The transfer finished: a check pops onto the files.
                 ThumbnailStack(urls: files)
+                    .overlay(alignment: .bottomTrailing) {
+                        if !interrupted {
+                            Image(systemName: "checkmark")
+                                .font(.system(size: 8, weight: .heavy))
+                                .foregroundStyle(WTheme.ink)
+                                .frame(width: 16, height: 16)
+                                .background(Circle().fill(WTheme.success))
+                                .overlay(Circle().strokeBorder(Color.black, lineWidth: 1.5))
+                                .offset(x: 4, y: 4)
+                                .modifier(PopIn(delay: 0.05))
+                                .accessibilityHidden(true)
+                        }
+                    }
             }
             VStack(alignment: .leading, spacing: 2) {
                 Text(interrupted ? "Transfer interrupted" : files.isEmpty ? "Transfer failed" : "Copied to clipboard")
@@ -144,9 +157,9 @@ struct LiveCardView: View {
                 }
             }
             HStack {
-                Text(spaced(model.pairingRequest?.code ?? "······"))
-                    .font(.wh(28, .semibold).monospacedDigit())
-                    .tracking(2)
+                RollingCode(code: model.pairingRequest?.code ?? "······", font: .wh(28, .semibold).monospacedDigit(),
+                            tracking: 2, from: .top)
+                    .id(model.pairingRequest?.code ?? "")
                 Spacer()
                 Button("Decline") { model.decidePairing(false) }
                     .buttonStyle(WPill(prominent: false, compact: true))
@@ -206,7 +219,7 @@ struct ProgressRing: View {
                 .trim(from: 0, to: max(0.02, progress))
                 .stroke(Color.white, style: StrokeStyle(lineWidth: 3, lineCap: .round))
                 .rotationEffect(.degrees(-90))
-                .animation(.easeOut(duration: 0.2), value: progress)
+                .animation(WMotion.animation(WMotion.smooth), value: progress)
         }
         .frame(width: 22, height: 22)
     }
@@ -254,7 +267,7 @@ private struct NotificationCard: View {
                         .frame(width: 22, height: 22)
                         .background(Circle().fill(Color.white.opacity(0.12)))
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(WShapePress(shape: Circle()))
                 .help("Clear on phone")
                 .accessibilityLabel("Clear on phone")
             }
@@ -395,7 +408,7 @@ private struct CircleButton: View {
                 .frame(width: 38, height: 38)
                 .background(Circle().fill(tint))
         }
-        .buttonStyle(.plain)
+        .buttonStyle(WShapePress(shape: Circle()))
         .help(help)
         .accessibilityLabel(help)
     }

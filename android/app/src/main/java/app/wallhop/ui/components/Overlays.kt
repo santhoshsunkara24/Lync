@@ -6,7 +6,6 @@ import androidx.compose.animation.EnterExitState
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.MutableTransitionState
 import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -68,6 +67,7 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.lerp
 import app.wallhop.ui.design.GlassVariant
+import app.wallhop.ui.design.Durations
 import app.wallhop.ui.design.Haptic
 import app.wallhop.ui.design.Radius
 import app.wallhop.ui.design.Springs
@@ -75,6 +75,8 @@ import app.wallhop.ui.design.Type
 import app.wallhop.ui.design.Wallhop
 import app.wallhop.ui.design.capsule
 import app.wallhop.ui.design.glass
+import app.wallhop.ui.design.pressHighlight
+import app.wallhop.ui.design.pressScale
 import app.wallhop.ui.design.rememberHaptics
 import app.wallhop.ui.design.rounded
 import app.wallhop.ui.design.tappable
@@ -161,8 +163,15 @@ class Overlays {
 val LocalOverlays = staticCompositionLocalOf<Overlays?> { null }
 
 /** How glass materializes: refraction and light ramp up rather than a plain fade. */
-private val materialize = spring<Float>(dampingRatio = 0.8f, stiffness = 300f)
-private val dematerialize = spring<Float>(dampingRatio = 1f, stiffness = 500f)
+private val materialize = Springs.materialize<Float>()
+private val dematerialize = Springs.dematerialize<Float>()
+
+/** Slides for things entering and leaving; plain fades with Reduce Motion (DESIGN.md §7.3). */
+private fun slideUpIn(reduceMotion: Boolean, from: (Int) -> Int) =
+    if (reduceMotion) fadeIn(tween(Durations.Quick)) else slideInVertically(Springs.smooth(), from)
+
+private fun slideDownOut(reduceMotion: Boolean) =
+    if (reduceMotion) fadeOut(tween(Durations.Quick)) else slideOutVertically(Springs.smooth()) { it }
 
 @Composable
 fun BoxScope.OverlayHost(overlays: Overlays) {
@@ -196,6 +205,7 @@ fun BoxScope.OverlayHost(overlays: Overlays) {
 @Composable
 private fun BoxScope.SheetLayer(overlays: Overlays) {
     val colors = Wallhop.colors
+    val reduceMotion = Wallhop.a11y.reduceMotion
     var shown by remember { mutableStateOf<SheetSpec?>(null) }
     val visible = remember { MutableTransitionState(false) }
     LaunchedEffect(overlays.sheet) {
@@ -209,8 +219,8 @@ private fun BoxScope.SheetLayer(overlays: Overlays) {
     AnimatedVisibility(
         visibleState = visible,
         modifier = Modifier.align(Alignment.BottomCenter),
-        enter = slideInVertically(Springs.smooth()) { it / 2 },
-        exit = slideOutVertically(Springs.smooth()) { it },
+        enter = slideUpIn(reduceMotion) { it / 2 },
+        exit = slideDownOut(reduceMotion),
     ) {
         val appear by transition.animateFloat({ if (targetState == EnterExitState.Visible) materialize else dematerialize }, label = "sheet") {
             if (it == EnterExitState.Visible) 1f else 0f
@@ -278,6 +288,7 @@ private fun BoxScope.SheetLayer(overlays: Overlays) {
 @Composable
 private fun BoxScope.MenuLayer(overlays: Overlays) {
     val colors = Wallhop.colors
+    val reduceMotion = Wallhop.a11y.reduceMotion
     val density = LocalDensity.current
     val haptics = rememberHaptics()
     var shown by remember { mutableStateOf<MenuSpec?>(null) }
@@ -287,9 +298,9 @@ private fun BoxScope.MenuLayer(overlays: Overlays) {
         if (target != null) {
             shown = target
             haptics.perform(Haptic.Light)
-            progress.animateTo(1f, spring(dampingRatio = 0.75f, stiffness = 350f))
+            if (reduceMotion) progress.snapTo(1f) else progress.animateTo(1f, Springs.menu())
         } else if (shown != null) {
-            progress.animateTo(0f, spring(dampingRatio = 1f, stiffness = 600f))
+            if (reduceMotion) progress.snapTo(0f) else progress.animateTo(0f, Springs.dematerialize())
             shown = null
         }
     }
@@ -336,6 +347,7 @@ private fun BoxScope.MenuLayer(overlays: Overlays) {
                     Modifier
                         .fillMaxWidth()
                         .height(rowHeight)
+                        .pressHighlight(source)
                         .tappable(source) {
                             overlays.dismissMenu()
                             item.onClick()
@@ -359,6 +371,7 @@ private fun BoxScope.MenuLayer(overlays: Overlays) {
 @Composable
 private fun BoxScope.AlertLayer(overlays: Overlays) {
     val colors = Wallhop.colors
+    val reduceMotion = Wallhop.a11y.reduceMotion
     var shown by remember { mutableStateOf<AlertSpec?>(null) }
     if (overlays.alert != null) shown = overlays.alert
     BackHandler(enabled = overlays.alert != null) {
@@ -378,7 +391,7 @@ private fun BoxScope.AlertLayer(overlays: Overlays) {
         val spec = shown ?: return@AnimatedVisibility
         Column(
             Modifier
-                .graphicsLayer { val s = 1.08f - 0.08f * appear; scaleX = s; scaleY = s }
+                .graphicsLayer { val s = if (reduceMotion) 1f else 1.08f - 0.08f * appear; scaleX = s; scaleY = s }
                 .width(270.dp)
                 .glass(rounded(Radius.xl), GlassVariant.Regular, appear = { appear })
                 .padding(20.dp)
@@ -420,6 +433,7 @@ private fun AlertButton(action: AlertAction, onClick: () -> Unit) {
         Modifier
             .fillMaxWidth()
             .height(48.dp)
+            .pressScale(source)
             .clip(capsule())
             .background(background)
             .tappable(source, onClick = onClick),
@@ -434,14 +448,15 @@ private fun AlertButton(action: AlertAction, onClick: () -> Unit) {
 @Composable
 private fun BoxScope.ActionSheetLayer(overlays: Overlays) {
     val colors = Wallhop.colors
+    val reduceMotion = Wallhop.a11y.reduceMotion
     var shown by remember { mutableStateOf<ActionSheetSpec?>(null) }
     if (overlays.actionSheet != null) shown = overlays.actionSheet
     BackHandler(enabled = overlays.actionSheet != null) { overlays.dismissActionSheet() }
     AnimatedVisibility(
         overlays.actionSheet != null,
         modifier = Modifier.align(Alignment.BottomCenter),
-        enter = slideInVertically(Springs.smooth()) { it / 3 },
-        exit = slideOutVertically(Springs.smooth()) { it },
+        enter = slideUpIn(reduceMotion) { it / 3 },
+        exit = slideDownOut(reduceMotion),
     ) {
         val appear by transition.animateFloat({ if (targetState == EnterExitState.Visible) materialize else dematerialize }, label = "actions") {
             if (it == EnterExitState.Visible) 1f else 0f
@@ -467,6 +482,7 @@ private fun BoxScope.ActionSheetLayer(overlays: Overlays) {
                 Modifier
                     .fillMaxWidth()
                     .height(56.dp)
+                    .pressScale(source)
                     .glass(capsule(), GlassVariant.Regular, appear = { appear })
                     .tappable(source) { overlays.dismissActionSheet() },
                 contentAlignment = Alignment.Center,
@@ -482,6 +498,7 @@ private fun BoxScope.ActionSheetLayer(overlays: Overlays) {
 @Composable
 private fun BoxScope.ToastLayer(overlays: Overlays) {
     val colors = Wallhop.colors
+    val reduceMotion = Wallhop.a11y.reduceMotion
     val haptics = rememberHaptics()
     var shown by remember { mutableStateOf<ToastSpec?>(null) }
     val current = overlays.toast
@@ -497,8 +514,10 @@ private fun BoxScope.ToastLayer(overlays: Overlays) {
     AnimatedVisibility(
         current != null,
         modifier = Modifier.align(Alignment.TopCenter),
-        enter = slideInVertically(Springs.bouncy()) { -it } ,
-        exit = slideOutVertically(Springs.smooth()) { -it } + fadeOut(tween(200)),
+        // Drops from the top with a little bounce; leaves back up (DESIGN.md §5.14).
+        enter = if (reduceMotion) fadeIn(tween(Durations.Quick)) else slideInVertically(Springs.bouncy()) { -it },
+        exit = if (reduceMotion) fadeOut(tween(Durations.Quick))
+            else slideOutVertically(Springs.smooth()) { -it } + fadeOut(tween(Durations.Fade)),
     ) {
         val appear by transition.animateFloat({ if (targetState == EnterExitState.Visible) materialize else dematerialize }, label = "toast") {
             if (it == EnterExitState.Visible) 1f else 0f
@@ -532,6 +551,7 @@ private fun BoxScope.ToastLayer(overlays: Overlays) {
                 Box(
                     Modifier
                         .heightIn(min = 44.dp)
+                        .pressScale(source)
                         .clip(capsule())
                         .background(Wallhop.home.onPale.copy(alpha = 0.1f))
                         .tappable(source) {

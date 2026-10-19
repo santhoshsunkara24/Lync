@@ -51,6 +51,9 @@ import app.wallhop.ui.components.GlassStage
 import app.wallhop.ui.components.LargeTitle
 import app.wallhop.ui.components.ScrollEdge
 import app.wallhop.ui.design.GlassVariant
+import app.wallhop.ui.design.LocalStagger
+import app.wallhop.ui.design.rememberStaggerClock
+import app.wallhop.ui.design.staggerIn
 import app.wallhop.ui.design.Springs
 import app.wallhop.ui.design.Type
 import app.wallhop.ui.design.Wallhop
@@ -96,13 +99,15 @@ fun Page(
             .fillMaxSize()
             .background(Brush.verticalGradient(0f to home.top, 0.34f to home.mid, 0.62f to colors.background)),
     ) {
+        // The page's first rows fade up in turn each time it comes on show.
+        androidx.compose.runtime.CompositionLocalProvider(LocalStagger provides rememberStaggerClock()) {
         LazyColumn(
             state = state,
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(start = start + 20.dp, end = end + 20.dp, top = statusBar + 14.dp, bottom = navBar + bottomClearance),
         ) {
             item(key = "title") {
-                Column(Modifier.fillMaxWidth().padding(bottom = 22.dp)) {
+                Column(Modifier.staggerIn(0).fillMaxWidth().padding(bottom = 22.dp)) {
                     if (leading != null) {
                         Row(Modifier.fillMaxWidth().padding(bottom = 18.dp), verticalAlignment = Alignment.CenterVertically) {
                             leading()
@@ -120,6 +125,7 @@ fun Page(
                 }
             }
             content()
+        }
         }
         // Content fades out under the status bar once scrolled, with the title small on top.
         val fade by animateFloatAsState(if (collapsed) 1f else 0f, Springs.smooth(), label = "edge")

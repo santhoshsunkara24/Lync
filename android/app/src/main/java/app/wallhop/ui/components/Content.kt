@@ -4,14 +4,8 @@ import app.wallhop.ui.design.WIcons
 import android.graphics.Bitmap
 import android.net.Uri
 import android.util.Size
-import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.slideInVertically
-import androidx.compose.animation.slideOutVertically
-import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -63,14 +57,17 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import app.wallhop.ui.design.Durations
 import app.wallhop.ui.design.Radius
+import app.wallhop.ui.design.RollingCode
+import app.wallhop.ui.design.floatIn
+import app.wallhop.ui.design.pressDim
 import app.wallhop.ui.design.Springs
 import app.wallhop.ui.design.Type
 import app.wallhop.ui.design.Wallhop
 import app.wallhop.ui.design.capsule
 import app.wallhop.ui.design.rounded
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import kotlin.math.abs
 
@@ -99,7 +96,7 @@ fun WTextField(
 ) {
     val colors = Wallhop.colors
     var focused by remember { mutableStateOf(false) }
-    val ring by animateFloatAsState(if (focused || error != null) 1f else 0f, tween(150), label = "ring")
+    val ring by animateFloatAsState(if (focused || error != null) 1f else 0f, tween(Durations.Quick), label = "ring")
     val ringColor = if (error != null) colors.red else colors.tint
     val shape = rounded(20.dp)
     Column(modifier.fillMaxWidth()) {
@@ -148,11 +145,13 @@ fun WTextField(
 /** The small (x) that empties a field, with a full 44 dp touch target. */
 @Composable
 private fun ClearButton(onClick: () -> Unit) {
+    val source = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
     Box(
         Modifier
             .size(44.dp)
+            .pressDim(source)
             .clip(capsule())
-            .clickable(interactionSource = null, indication = null, role = androidx.compose.ui.semantics.Role.Button, onClick = onClick)
+            .clickable(interactionSource = source, indication = null, role = androidx.compose.ui.semantics.Role.Button, onClick = onClick)
             .semantics { contentDescription = "Clear" },
         contentAlignment = Alignment.Center,
     ) {
@@ -186,34 +185,16 @@ fun SearchField(value: String, onValueChange: (String) -> Unit, modifier: Modifi
 }
 
 /**
- * A 6-digit code in two groups of three. On first show the digits roll in one after another
- * (DESIGN.md §5.16); with Reduce Motion they simply fade in.
+ * A 6-digit code in two groups of three. On first show the digits drop in one after another
+ * (DESIGN.md §5.16: 40 ms apart, spring.bouncy); with Reduce Motion they simply show.
  */
 @Composable
 fun CodeDisplay(code: String, modifier: Modifier = Modifier, color: Color = Wallhop.colors.label) {
-    val reduceMotion = Wallhop.a11y.reduceMotion
-    Row(modifier, horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
-        code.forEachIndexed { index, char ->
-            if (index == 3 && code.length == 6) Spacer(Modifier.width(14.dp))
-            var shown by remember(code) { mutableStateOf(if (reduceMotion) char else ' ') }
-            LaunchedEffect(code) {
-                if (!reduceMotion) {
-                    delay(60L * index)
-                    shown = char
-                }
-            }
-            AnimatedContent(
-                targetState = shown,
-                transitionSpec = {
-                    (slideInVertically(Springs.bouncy()) { it } + fadeIn()) togetherWith
-                        (slideOutVertically(Springs.bouncy()) { -it } + fadeOut())
-                },
-                label = "digit",
-            ) { digit ->
-                Text(digit.toString(), style = Type.code, color = color, textAlign = TextAlign.Center,
-                    modifier = Modifier.width(30.dp))
-            }
-        }
+    Box(modifier, contentAlignment = Alignment.Center) {
+        RollingCode(
+            spacedCode(code), Type.code, color,
+            fromTop = true, staggerMs = 40, spec = Springs.bouncy(), digitWidth = 30.dp, groupGap = 14.dp,
+        )
     }
 }
 
@@ -223,7 +204,8 @@ fun EmptyState(icon: ImageVector, title: String, message: String, modifier: Modi
     val colors = Wallhop.colors
     Column(modifier.fillMaxWidth().padding(vertical = 36.dp, horizontal = 24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
         Box(
-            Modifier.size(72.dp).clip(capsule()).background(Wallhop.home.pale.copy(alpha = 0.16f)),
+            // Floats up into place once, the first time it's seen.
+            Modifier.floatIn().size(72.dp).clip(capsule()).background(Wallhop.home.pale.copy(alpha = 0.16f)),
             contentAlignment = Alignment.Center,
         ) {
             Icon(icon, null, tint = Wallhop.home.pale, modifier = Modifier.size(30.dp))

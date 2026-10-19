@@ -374,6 +374,9 @@ private struct ThreadRow: View {
             }
         }
         .padding(.vertical, 4)
+        .padding(.horizontal, 6)
+        .rowHover(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .padding(.horizontal, -6)
     }
 }
 
@@ -383,6 +386,11 @@ private struct ConversationView: View {
     @EnvironmentObject var theme: ThemeStore
     @State private var draft = ""
     @FocusState private var composerFocused: Bool
+    /// How many messages were on screen before the latest change: only messages added to an
+    /// open conversation slide in, not a whole conversation loading.
+    @State private var shownCount = 0
+
+    private var appending: Bool { shownCount > 0 && model.messages.count > shownCount }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -402,9 +410,11 @@ private struct ConversationView: View {
                                 model.retry(message)
                             }
                             .id(message.id)
+                            .transition(WMotion.transition(.offset(y: 16).combined(with: .opacity)))
                         }
                     }
                     .padding(16)
+                    .animation(appending ? WMotion.animation(WMotion.smooth) : nil, value: model.messages.count)
                 }
                 .overlay {
                     if model.loadingThread && model.messages.isEmpty {
@@ -414,11 +424,13 @@ private struct ConversationView: View {
                             .font(.wh(13, .medium)).foregroundStyle(.secondary)
                     }
                 }
-                .onChange(of: model.messages.count) { _, _ in
-                    if let last = model.messages.last { withAnimation { proxy.scrollTo(last.id, anchor: .bottom) } }
+                .onChange(of: model.messages.count) { _, count in
+                    if let last = model.messages.last { withMotion(WMotion.smooth) { proxy.scrollTo(last.id, anchor: .bottom) } }
+                    shownCount = count
                 }
                 .onAppear {
                     if let last = model.messages.last { proxy.scrollTo(last.id, anchor: .bottom) }
+                    shownCount = model.messages.count
                 }
             }
             if case .failed(let error) = model.status {
@@ -497,7 +509,7 @@ private struct ConversationView: View {
                     .frame(width: 34, height: 34)
                     .background(Circle().fill(canSend ? theme.theme.pale : Color.white.opacity(0.12)))
             }
-            .buttonStyle(.plain)
+            .buttonStyle(WShapePress(shape: Circle()))
             .disabled(!canSend)
             .help("Send")
             .accessibilityLabel("Send")
@@ -546,7 +558,9 @@ private struct Bubble: View {
                         RoundedRectangle(cornerRadius: 18, style: .continuous)
                             .fill(message.outgoing ? theme.theme.pale : Color.white.opacity(0.1))
                     )
+                    // Sending: a little smaller and paler until the phone confirms it.
                     .opacity(message.pending ? 0.6 : 1)
+                    .scaleEffect(message.pending ? 0.98 : 1, anchor: .bottomTrailing)
                     .contextMenu {
                         if message.failed && message.outgoing {
                             Button("Try again", action: retry).disabled(!connected)
@@ -556,7 +570,7 @@ private struct Bubble: View {
                 HStack(spacing: 4) {
                     if message.failed {
                         Label("Not sent", systemImage: "exclamationmark.circle").foregroundStyle(WTheme.danger)
-                        Button("Try again", action: retry).buttonStyle(.plain).foregroundStyle(theme.theme.pale)
+                        Button("Try again", action: retry).buttonStyle(WPlainPress()).foregroundStyle(theme.theme.pale)
                             .disabled(!connected)
                     } else if message.pending {
                         Text("Sending…")

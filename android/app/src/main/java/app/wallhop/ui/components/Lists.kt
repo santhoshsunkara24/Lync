@@ -43,6 +43,10 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import app.wallhop.ui.design.AnimatedChangeText
+import app.wallhop.ui.design.Durations
+import app.wallhop.ui.design.Fades
+import app.wallhop.ui.design.Springs
 import app.wallhop.ui.design.Haptic
 import app.wallhop.ui.design.Radius
 import app.wallhop.ui.design.rememberHaptics
@@ -113,10 +117,17 @@ fun <T> androidx.compose.foundation.lazy.LazyListScope.insetSectionItems(
 ) {
     itemsIndexed(items, key = { _, item -> key(item) }) { index, item ->
         val colors = Wallhop.colors
+        val reduceMotion = Wallhop.a11y.reduceMotion
         val first = index == 0
         val last = index == items.lastIndex
         Column(
             Modifier
+                // Rows added or removed fade; the rest slide to their new places (DESIGN.md §7.2).
+                .animateItem(
+                    fadeInSpec = if (reduceMotion) null else Fades.fadeIn(),
+                    placementSpec = if (reduceMotion) null else Springs.smooth(),
+                    fadeOutSpec = if (reduceMotion) null else Fades.fadeOut(),
+                )
                 .fillMaxWidth()
                 .clip(SectionSliceShape(rounded(SectionRadius), roundTop = first, roundBottom = last))
                 .background(SectionSurface),
@@ -165,9 +176,13 @@ private class SectionSliceShape(
 fun ListRow(
     title: String,
     modifier: Modifier = Modifier,
+    /** Draws the title instead of plain text (e.g. a code rolling in); [title] still names the row. */
+    titleContent: (@Composable () -> Unit)? = null,
     subtitle: String? = null,
     leading: (@Composable () -> Unit)? = null,
     value: String? = null,
+    /** Roll [value] when it changes (numbers like "12 ms" or "4 apps"). */
+    animateValue: Boolean = false,
     trailing: (@Composable () -> Unit)? = null,
     chevron: Boolean = false,
     destructive: Boolean = false,
@@ -187,7 +202,7 @@ fun ListRow(
     val isSwitch = checked != null && onCheckedChange != null
     val highlight by animateColorAsState(
         if (pressed && (onClick != null || onLongClick != null || isSwitch)) colors.fill else Color.Transparent,
-        animationSpec = tween(if (pressed) 0 else 250),
+        animationSpec = tween(if (pressed) 0 else Durations.Highlight),
         label = "rowHighlight",
     )
     val currentLongClick by rememberUpdatedState(onLongClick)
@@ -245,20 +260,28 @@ fun ListRow(
     ) {
         leading?.invoke()
         Column(Modifier.weight(1f)) {
-            Text(
-                title,
-                style = Type.body.copy(fontWeight = androidx.compose.ui.text.font.FontWeight.Medium),
-                color = titleColor ?: if (destructive) colors.red else colors.label,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-            )
+            if (titleContent != null) {
+                titleContent()
+            } else {
+                Text(
+                    title,
+                    style = Type.body.copy(fontWeight = androidx.compose.ui.text.font.FontWeight.Medium),
+                    color = titleColor ?: if (destructive) colors.red else colors.label,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
             if (subtitle != null) {
                 Text(subtitle, style = Type.footnote, color = colors.labelSecondary, maxLines = 3,
                     overflow = TextOverflow.Ellipsis)
             }
         }
         if (value != null) {
-            Text(value, style = Type.callout, color = colors.labelSecondary, maxLines = 1)
+            if (animateValue) {
+                AnimatedChangeText(value, style = Type.callout, color = colors.labelSecondary, maxLines = 1)
+            } else {
+                Text(value, style = Type.callout, color = colors.labelSecondary, maxLines = 1)
+            }
         }
         trailing?.invoke()
         if (isSwitch) {

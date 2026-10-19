@@ -103,6 +103,7 @@ import app.wallhop.ui.components.TabItem
 import app.wallhop.ui.components.PillNavBar
 import app.wallhop.ui.components.TextAction
 import app.wallhop.ui.components.WTextField
+import app.wallhop.ui.design.Durations
 import app.wallhop.ui.design.Haptic
 import app.wallhop.ui.design.Springs
 import app.wallhop.ui.design.Wallhop
@@ -152,9 +153,27 @@ fun WallhopRoot(link: LinkManager, demo: Boolean = false) {
     var scanning by rememberSaveable { mutableStateOf(false) }
     // The last pairing attempt, for "Try again" when it fails.
     var retryPair by remember { mutableStateOf<(() -> Unit)?>(null) }
-    val screen = when (state) {
-        is LinkState.NotPaired, is LinkState.PairingFailed -> 0
-        is LinkState.Pairing -> 1
+    // Pairing just succeeded (the Mac said yes): the pairing screen stays a moment to show it.
+    // Cancelling also leaves Pairing (for Searching, if a Mac was already paired): not a success.
+    var lastPairing by remember { mutableStateOf<LinkState.Pairing?>(null) }
+    var pairingCancelled by remember { mutableStateOf(false) }
+    val pairedNow = lastPairing != null && !pairingCancelled && (state is LinkState.Searching || state is LinkState.Connected)
+    LaunchedEffect(state) {
+        when {
+            state is LinkState.Pairing -> lastPairing = state
+            pairedNow -> {
+                delay(1_300)
+                lastPairing = null
+            }
+            else -> {
+                lastPairing = null
+                pairingCancelled = false
+            }
+        }
+    }
+    val screen = when {
+        state is LinkState.NotPaired || state is LinkState.PairingFailed -> 0
+        state is LinkState.Pairing || pairedNow -> 1
         else -> 2
     }
     // The Mac says it no longer knows this phone. The pairing is kept (and retried) until the
@@ -191,7 +210,7 @@ fun WallhopRoot(link: LinkManager, demo: Boolean = false) {
             AnimatedContent(
                 targetState = screen,
                 modifier = Modifier.nestedScroll(minimizer),
-                transitionSpec = { fadeIn(tween(220)) togetherWith fadeOut(tween(180)) },
+                transitionSpec = { fadeIn(tween(Durations.Fade + 20)) togetherWith fadeOut(tween(Durations.Fade - 20)) },
                 label = "root",
             ) { screen ->
                 when (screen) {
@@ -218,7 +237,12 @@ fun WallhopRoot(link: LinkManager, demo: Boolean = false) {
                             onRetry = retryPair,
                         )
                     }
-                    1 -> (state as? LinkState.Pairing)?.let { PairingScreen(it) { link.cancelPairing() } }
+                    1 -> {
+                        // Held while this screen fades out, so it doesn't blank mid-transition.
+                        val held = remember { arrayOfNulls<LinkState.Pairing>(1) }
+                        ((state as? LinkState.Pairing) ?: lastPairing)?.let { held[0] = it }
+                        held[0]?.let { PairingScreen(it, onCancel = { pairingCancelled = true; link.cancelPairing() }, success = state !is LinkState.Pairing) }
+                    }
                     else -> Tabs(
                         link, state, setup, overlays, demo,
                         tab = tab, showApps = showApps, showLicences = showLicences,
@@ -235,7 +259,7 @@ fun WallhopRoot(link: LinkManager, demo: Boolean = false) {
                 visible = screen == 2,
                 modifier = Modifier.align(Alignment.BottomCenter),
                 enter = slideInVertically(Springs.smooth()) { it } + fadeIn(),
-                exit = fadeOut(tween(150)),
+                exit = fadeOut(tween(Durations.Quick)),
             ) {
                 PillNavBar(
                     tabs = listOf(
@@ -521,7 +545,7 @@ private fun Tabs(
             openSettings = { currentOnTab(2) },
             openActivity = { currentOnTab(1) },
             macDetails = { showMacDetails() },
-            entryActions = { entry -> showEntryActions(overlays, context, entry) { deleteEntry(it) } },
+            entryActions = { entry -> showEntryActions(overlays, context, entry, haptics) { deleteEntry(it) } },
             more = { anchor ->
                 overlays.showMenu(anchor, listOf(
                     MenuItem("Mac details", WIcons.Laptop) { showMacDetails() },
@@ -588,7 +612,7 @@ private fun Tabs(
         for (index in 0..2) {
             if (index !in visited) continue
             key(index) {
-                TabSlot(visible = index == tab && !showApps && !showLicences) {
+                TabSlot(index, tab, visible = index == tab && !showApps && !showLicences) {
                     when (index) {
                         0 -> HomeSlot(link, state, macName, !setup.essentialsDone, macActions, activity, demo)
                         1 -> ActivityTab(activity, overlays, onDelete = { deleteEntry(it) })
@@ -711,23 +735,30 @@ private fun openNotificationAccess(context: Context, overlays: Overlays, red: an
         .onFailure { overlays.toast("Couldn't open Settings. Allow Lync under Notification access.", WIcons.Warning, red) }
 }
 
-/** A kept-alive tab: fades and drifts in when selected; when hidden it isn't drawn or announced. */
+/**
+ * A kept-alive tab: cross-fades in when selected, drifting a little in the direction of travel
+ * (from the right when moving to a tab on the right). When hidden it isn't drawn or announced.
+ */
 @Composable
-private fun TabSlot(visible: Boolean, content: @Composable () -> Unit) {
+private fun TabSlot(index: Int, selected: Int, visible: Boolean, content: @Composable () -> Unit) {
     val reduceMotion = Wallhop.a11y.reduceMotion
     val shown by androidx.compose.animation.core.animateFloatAsState(
         if (visible) 1f else 0f,
-        if (reduceMotion) tween(0) else tween(if (visible) 200 else 120),
+        if (reduceMotion) tween(0) else tween(if (visible) Durations.Fade else Durations.Quick - 30),
         label = "tab",
     )
-    val drift = with(androidx.compose.ui.platform.LocalDensity.current) { 10.dp.toPx() }
+    // Which side this tab sits on, fixed while it's shown: a hidden tab right of the selected
+    // one waits on the right; once shown, it keeps the side it came in from.
+    val side = remember { intArrayOf(0) }
+    if (!visible) side[0] = (index - selected).coerceIn(-1, 1)
+    val drift = with(androidx.compose.ui.platform.LocalDensity.current) { 16.dp.toPx() }
     Box(
         Modifier
             .fillMaxSize()
             .zIndex(if (visible) 1f else 0f)
             .graphicsLayer {
                 alpha = shown
-                translationY = (1f - shown) * drift
+                translationX = (1f - shown) * drift * side[0]
             }
             .drawWithContent { if (shown > 0.001f) drawContent() }
             .then(if (visible) Modifier else Modifier.clearAndSetSemantics { }),

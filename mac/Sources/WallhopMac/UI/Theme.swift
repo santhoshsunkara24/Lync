@@ -99,6 +99,57 @@ enum WRadius {
     static let small: CGFloat = 10
 }
 
+/// Motion tokens (DESIGN.md: calm motion, physical response). Every animation in the app uses one
+/// of these springs, through `WMotion.animation(_:)` so Reduce Motion turns movement into a
+/// short fade.
+enum WMotion {
+    /// A finger (or click) going down: immediate, a little give.
+    static let press = Animation.spring(response: 0.22, dampingFraction: 0.7)
+    /// Hover, toggles, small state changes, closing things.
+    static let snappy = Animation.spring(response: 0.28, dampingFraction: 0.82)
+    /// Layout: pages, lists, the panel opening.
+    static let smooth = Animation.spring(response: 0.38, dampingFraction: 0.86)
+    /// Things arriving: live cards, toasts, a check popping in.
+    static let bouncy = Animation.spring(response: 0.42, dampingFraction: 0.68)
+    /// What Reduce Motion uses instead of any of the above.
+    static let reduced = Animation.easeOut(duration: 0.12)
+
+    /// True while System Settings › Accessibility › Display › Reduce motion is on (kept current).
+    static var reduceMotion: Bool { ReduceMotionObserver.shared.isOn }
+
+    /// `animation`, or a short fade when Reduce Motion is on.
+    static func animation(_ animation: Animation) -> Animation? {
+        reduceMotion ? reduced : animation
+    }
+
+    /// `transition`, or a plain fade when Reduce Motion is on.
+    static func transition(_ transition: AnyTransition) -> AnyTransition {
+        reduceMotion ? .opacity : transition
+    }
+}
+
+/// `withAnimation` with a motion token, respecting Reduce Motion.
+@discardableResult
+func withMotion<Result>(_ animation: Animation, _ body: () throws -> Result) rethrows -> Result {
+    try withAnimation(WMotion.animation(animation), body)
+}
+
+/// Caches `accessibilityDisplayShouldReduceMotion` and follows changes to it.
+private final class ReduceMotionObserver {
+    static let shared = ReduceMotionObserver()
+    private(set) var isOn: Bool
+    private var observer: NSObjectProtocol?
+
+    private init() {
+        isOn = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        observer = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            self?.isOn = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        }
+    }
+}
+
 /// Figtree, the phone app's font (SIL OFL, bundled in Resources).
 enum WFont {
     static func register() {
@@ -131,10 +182,7 @@ struct WPill: ButtonStyle {
             .padding(.horizontal, compact ? 12 : 16)
             .frame(height: compact ? 30 : 36)
             .background(Capsule().fill(destructive ? WTheme.danger : prominent ? theme.theme.pale : WTheme.chip))
-            .scaleEffect(configuration.isPressed ? 0.96 : 1)
-            .opacity(configuration.isPressed ? 0.85 : 1)
-            .contentShape(Capsule())
-            .animation(.spring(response: 0.25, dampingFraction: 0.7), value: configuration.isPressed)
+            .modifier(WInteractive(shape: Capsule(), pressed: configuration.isPressed))
     }
 }
 
@@ -147,8 +195,7 @@ struct WRound: ButtonStyle {
             .foregroundStyle(.white)
             .frame(width: size, height: size)
             .background(Circle().fill(WTheme.chip))
-            .scaleEffect(configuration.isPressed ? 0.92 : 1)
-            .contentShape(Circle())
+            .modifier(WInteractive(shape: Circle(), pressed: configuration.isPressed))
     }
 }
 

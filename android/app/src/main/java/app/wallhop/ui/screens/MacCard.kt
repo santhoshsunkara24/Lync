@@ -134,7 +134,20 @@ fun LiveMac(connected: Boolean, data: MacCardData, modifier: Modifier = Modifier
         transfer != null && transfer.phase == TransferPhase.Waiting -> NotchEvent(WIcons.Image, "Waiting…", 0f)
         else -> flash
     }
-    Box(modifier) { MiniMac(data.info, connected, event, hop = { hop.value }, hopUp = hopUp) }
+    // On connect the little Mac lifts a touch and settles, once.
+    val settle = remember { Animatable(0f) }
+    val wasConnected = remember { booleanArrayOf(connected) }
+    LaunchedEffect(connected) {
+        val justConnected = connected && !wasConnected[0]
+        wasConnected[0] = connected
+        if (justConnected && !reduceMotion && active) {
+            settle.animateTo(-1f, Springs.snappy())
+            settle.animateTo(0f, Springs.bouncy())
+        }
+    }
+    Box(modifier.graphicsLayer { translationY = settle.value * 5.dp.toPx() }) {
+        MiniMac(data.info, connected, event, hop = { hop.value }, hopUp = hopUp)
+    }
 }
 
 /**
@@ -376,10 +389,17 @@ private fun Notch(event: NotchEvent?, connected: Boolean, width: Dp, modifier: M
 private fun ProgressRing(progress: Float, modifier: Modifier) {
     val track = Color.White.copy(alpha = 0.25f)
     val tint = Wallhop.colors.green
+    // Progress arrives up to 10 times a second; the ring glides between updates.
+    val reduceMotion = Wallhop.a11y.reduceMotion
+    val shown by animateFloatAsState(
+        progress.coerceIn(0f, 1f),
+        if (reduceMotion) androidx.compose.animation.core.snap() else Springs.smooth(),
+        label = "notchRing",
+    )
     Canvas(modifier) {
         val stroke = size.minDimension * 0.18f
         drawCircle(track, radius = size.minDimension / 2 - stroke / 2, style = Stroke(stroke))
-        drawArc(tint, -90f, 360f * progress.coerceIn(0f, 1f), false, style = Stroke(stroke, cap = StrokeCap.Round),
+        drawArc(tint, -90f, 360f * shown, false, style = Stroke(stroke, cap = StrokeCap.Round),
             topLeft = Offset(stroke / 2, stroke / 2), size = Size(size.width - stroke, size.height - stroke))
     }
 }

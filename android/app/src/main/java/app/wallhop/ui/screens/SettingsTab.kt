@@ -38,7 +38,10 @@ import app.wallhop.ui.components.InsetSection
 import app.wallhop.ui.components.ListRow
 import app.wallhop.ui.components.SearchField
 import app.wallhop.ui.design.Wallhop
+import app.wallhop.ui.design.flashPulse
 import app.wallhop.ui.design.rounded
+import app.wallhop.ui.design.staggerIn
+import androidx.compose.foundation.layout.Column
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -91,156 +94,165 @@ fun SettingsTab(
     }
     Page(title = "Settings") {
         item(key = "mac") {
-            SectionHeader("On your Mac")
-            InsetSection(dividerInset = 57.dp) {
-                row {
-                    ListRow(
-                        title = "App notifications",
-                        leading = { IconTile(WIcons.BellRinging, colors.red) },
-                        value = if (mirroredCount == 0) "Off" else "$mirroredCount apps",
-                        chevron = true,
-                        onClick = openApps,
-                    )
-                }
-                row {
-                    ListRow(
-                        title = "Codes from messages",
-                        leading = { IconTile(WIcons.Lock, colors.green) },
-                        checked = setup.sms,
-                        onCheckedChange = toggle(Features.Key.Codes, actions.allowSms),
-                    )
-                }
-                row {
-                    ListRow(
-                        title = "Calls",
-                        leading = { IconTile(WIcons.Call, colors.green) },
-                        checked = setup.calls,
-                        onCheckedChange = toggle(Features.Key.Calls, actions.allowCalls),
-                    )
-                }
-                row {
-                    ListRow(
-                        title = "Texts",
-                        leading = { IconTile(WIcons.Chats, colors.green) },
-                        checked = setup.texts,
-                        onCheckedChange = toggle(Features.Key.Texts, actions.allowTexts),
-                    )
-                }
-            }
-            Text(
-                "Only one-time codes leave your messages. Call audio always stays on the phone.",
-                style = app.wallhop.ui.design.Type.footnote,
-                color = colors.labelSecondary,
-                modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 7.dp),
-            )
-            Spacer(Modifier.height(32.dp))
-        }
-        item(key = "connected") {
-            SectionHeader("Stay connected")
-            InsetSection(
-                dividerInset = 57.dp,
-                footer = "Notification access is the one thing Android only grants in its own settings. If its switch there is greyed out: App info › ⋮ › Allow restricted settings.",
-            ) {
-                row {
-                    ListRow(
-                        title = "Run in background",
-                        leading = { IconTile(WIcons.BatteryCharging, colors.orange) },
-                        subtitle = "Stay connected when Lync is closed",
-                        checked = setup.background,
-                        onCheckedChange = toggle(Features.Key.Background, actions.allowBackground),
-                    )
-                }
-                app.wallhop.core.KeepAlive.brand?.let { brand ->
-                    row {
-                        val context = LocalContext.current
-                        ListRow(
-                            title = "Keep running on ${brand.name}",
-                            subtitle = brand.steps,
-                            leading = { IconTile(WIcons.Lightning, colors.orange) },
-                            chevron = true,
-                            onClick = { app.wallhop.core.KeepAlive.open(context) },
-                        )
-                    }
-                }
-                row {
-                    ListRow(
-                        title = "Notifications",
-                        leading = { IconTile(WIcons.Bell, colors.red) },
-                        checked = setup.notifications,
-                        onCheckedChange = toggle(Features.Key.Notifications, actions.allowNotifications),
-                    )
-                }
-                row {
-                    ListRow(
-                        title = "Notification access",
-                        subtitle = "Codes in other apps, and app notifications",
-                        leading = { IconTile(WIcons.Shield, colors.indigo) },
-                        checked = setup.notificationAccess,
-                        onCheckedChange = toggle(Features.Key.AppNotifications, actions.openNotificationAccess),
-                    )
-                }
-            }
-            Spacer(Modifier.height(32.dp))
-        }
-        app.wallhop.glyph.Glyphs.hardware?.let { hardware ->
-            item(key = "glyph") { GlyphSection(hardware) }
-        }
-        if (macName != null) {
-            item(key = "pairedMac") {
-                SectionHeader("Mac")
+            Column(Modifier.staggerIn(1)) {
+                SectionHeader("On your Mac")
                 InsetSection(dividerInset = 57.dp) {
                     row {
                         ListRow(
-                            title = macName,
-                            subtitle = macStatus,
-                            leading = { IconTile(WIcons.Laptop, colors.gray) },
+                            title = "App notifications",
+                            leading = { IconTile(WIcons.BellRinging, colors.red) },
+                            value = if (mirroredCount == 0) "Off" else "$mirroredCount apps",
+                        animateValue = true,
                             chevron = true,
-                            onClick = actions.macDetails,
+                            onClick = openApps,
                         )
                     }
                     row {
                         ListRow(
-                            title = "Forget this Mac",
-                            leading = { IconTile(WIcons.LinkBreak, colors.red) },
-                            destructive = true,
-                            onClick = actions.forgetMac,
+                            title = "Codes from messages",
+                            leading = { IconTile(WIcons.Lock, colors.green) },
+                            checked = setup.sms,
+                            onCheckedChange = toggle(Features.Key.Codes, actions.allowSms),
+                        )
+                    }
+                    row {
+                        ListRow(
+                            title = "Calls",
+                            leading = { IconTile(WIcons.Call, colors.green) },
+                            checked = setup.calls,
+                            onCheckedChange = toggle(Features.Key.Calls, actions.allowCalls),
+                        )
+                    }
+                    row {
+                        ListRow(
+                            title = "Texts",
+                            leading = { IconTile(WIcons.Chats, colors.green) },
+                            checked = setup.texts,
+                            onCheckedChange = toggle(Features.Key.Texts, actions.allowTexts),
+                        )
+                    }
+                }
+                Text(
+                    "Only one-time codes leave your messages. Call audio always stays on the phone.",
+                    style = app.wallhop.ui.design.Type.footnote,
+                    color = colors.labelSecondary,
+                    modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 7.dp),
+                )
+                Spacer(Modifier.height(32.dp))
+            }
+        }
+        item(key = "connected") {
+            Column(Modifier.staggerIn(2)) {
+                SectionHeader("Stay connected")
+                InsetSection(
+                    dividerInset = 57.dp,
+                    footer = "Notification access is the one thing Android only grants in its own settings. If its switch there is greyed out: App info › ⋮ › Allow restricted settings.",
+                ) {
+                    row {
+                        ListRow(
+                            title = "Run in background",
+                            leading = { IconTile(WIcons.BatteryCharging, colors.orange) },
+                            subtitle = "Stay connected when Lync is closed",
+                            checked = setup.background,
+                            onCheckedChange = toggle(Features.Key.Background, actions.allowBackground),
+                        )
+                    }
+                    app.wallhop.core.KeepAlive.brand?.let { brand ->
+                        row {
+                            val context = LocalContext.current
+                            ListRow(
+                                title = "Keep running on ${brand.name}",
+                                subtitle = brand.steps,
+                                leading = { IconTile(WIcons.Lightning, colors.orange) },
+                                chevron = true,
+                                onClick = { app.wallhop.core.KeepAlive.open(context) },
+                            )
+                        }
+                    }
+                    row {
+                        ListRow(
+                            title = "Notifications",
+                            leading = { IconTile(WIcons.Bell, colors.red) },
+                            checked = setup.notifications,
+                            onCheckedChange = toggle(Features.Key.Notifications, actions.allowNotifications),
+                        )
+                    }
+                    row {
+                        ListRow(
+                            title = "Notification access",
+                            subtitle = "Codes in other apps, and app notifications",
+                            leading = { IconTile(WIcons.Shield, colors.indigo) },
+                            checked = setup.notificationAccess,
+                            onCheckedChange = toggle(Features.Key.AppNotifications, actions.openNotificationAccess),
                         )
                     }
                 }
                 Spacer(Modifier.height(32.dp))
             }
         }
+        app.wallhop.glyph.Glyphs.hardware?.let { hardware ->
+            item(key = "glyph") { Column(Modifier.staggerIn(3)) { GlyphSection(hardware) } }
+        }
+        if (macName != null) {
+            item(key = "pairedMac") {
+                Column(Modifier.staggerIn(4)) {
+                    SectionHeader("Mac")
+                    InsetSection(dividerInset = 57.dp) {
+                        row {
+                            ListRow(
+                                title = macName,
+                                subtitle = macStatus,
+                                leading = { IconTile(WIcons.Laptop, colors.gray) },
+                                chevron = true,
+                                onClick = actions.macDetails,
+                            )
+                        }
+                        row {
+                            ListRow(
+                                title = "Forget this Mac",
+                                leading = { IconTile(WIcons.LinkBreak, colors.red) },
+                                destructive = true,
+                                onClick = actions.forgetMac,
+                            )
+                        }
+                    }
+                    Spacer(Modifier.height(32.dp))
+                }
+            }
+        }
         item(key = "about") {
-            SectionHeader("About")
-            InsetSection(
-                dividerInset = 57.dp,
-                footer = "Everything travels encrypted between your phone and Mac over your own network. No account, no cloud.",
-            ) {
-                row {
-                    ListRow(
-                        title = "Version",
-                        leading = { IconTile(WIcons.Info, colors.gray) },
-                        value = BuildConfig.VERSION_NAME,
-                    )
-                }
-                row {
-                    ListRow(
-                        title = "Open-source licences",
-                        leading = { IconTile(WIcons.Scroll, colors.gray) },
-                        chevron = true,
-                        onClick = actions.openLicences,
-                    )
-                }
-                row {
-                    ListRow(
-                        title = "Privacy policy",
-                        leading = { IconTile(WIcons.Shield, colors.gray) },
-                        chevron = true,
-                        onClick = actions.openPrivacy,
-                    )
-                }
-                if (BuildConfig.STRESS_HOOKS) {
-                    row { ListRow(title = "Send a test code", onClick = actions.sendTestCode) }
+            Column(Modifier.staggerIn(5)) {
+                SectionHeader("About")
+                InsetSection(
+                    dividerInset = 57.dp,
+                    footer = "Everything travels encrypted between your phone and Mac over your own network. No account, no cloud.",
+                ) {
+                    row {
+                        ListRow(
+                            title = "Version",
+                            leading = { IconTile(WIcons.Info, colors.gray) },
+                            value = BuildConfig.VERSION_NAME,
+                        )
+                    }
+                    row {
+                        ListRow(
+                            title = "Open-source licences",
+                            leading = { IconTile(WIcons.Scroll, colors.gray) },
+                            chevron = true,
+                            onClick = actions.openLicences,
+                        )
+                    }
+                    row {
+                        ListRow(
+                            title = "Privacy policy",
+                            leading = { IconTile(WIcons.Shield, colors.gray) },
+                            chevron = true,
+                            onClick = actions.openPrivacy,
+                        )
+                    }
+                    if (BuildConfig.STRESS_HOOKS) {
+                        row { ListRow(title = "Send a test code", onClick = actions.sendTestCode) }
+                    }
                 }
             }
         }
@@ -325,7 +337,8 @@ fun AppsScreen(
             if (list.isNotEmpty()) {
                 item(key = "section-$header") { SectionHeader(header) }
                 // One lazy item per app: only the rows on screen are built and decode icons.
-                insetSectionItems(list, key = { "$header-${it.packageName}" }, dividerInset = 57.dp) { app ->
+                // Keyed by app alone, so switching one on slides it up into "On" rather than blinking.
+                insetSectionItems(list, key = { it.packageName }, dividerInset = 57.dp) { app ->
                     ListRow(
                         title = app.label,
                         leading = { AppIcon(app.packageName) },
@@ -412,10 +425,13 @@ private fun GlyphSection(hardware: app.wallhop.glyph.Glyphs.Hardware) {
             )
         }
         row {
+            var flashes by remember { androidx.compose.runtime.mutableIntStateOf(0) }
             ListRow(
                 title = "Try it",
-                leading = { IconTile(WIcons.Lightning, colors.gray) },
+                // The bolt flashes with the lights on the back.
+                leading = { Box(Modifier.flashPulse(flashes)) { IconTile(WIcons.Lightning, colors.gray) } },
                 onClick = {
+                    flashes++
                     app.wallhop.glyph.Glyphs.preview(context)
                     overlays?.toast("Look at the back of your phone")
                 },

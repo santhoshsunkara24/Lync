@@ -168,7 +168,7 @@ private fun TabsRow(
                         val tracker = VelocityTracker()
                         fun indexAt(x: Float) = (x / tabWidthPx).toInt().coerceIn(0, tabs.lastIndex)
                         hovered = indexAt(down.position.x)
-                        scope.launch { lift.animateTo(1f, spring(dampingRatio = 0.55f, stiffness = 600f)) }
+                        scope.launch { lift.animateTo(1f, Springs.gel()) }
                         scope.launch { position.animateTo(hovered * tabWidthPx, Springs.snappy()) }
                         var last = down.position
                         do {

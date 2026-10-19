@@ -6,7 +6,6 @@ import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
 import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -109,13 +108,13 @@ fun Modifier.trackGlassTouch(touch: GlassTouch, enabled: Boolean = true): Modifi
         awaitEachGesture {
             val down = awaitFirstDown(requireUnconsumed = false)
             touch.position = down.position
-            scope.launch { touch.press.animateTo(1f, spring(dampingRatio = 0.55f, stiffness = 600f)) }
-            scope.launch { touch.glow.animateTo(1f, tween(90)) }
+            scope.launch { touch.press.animateTo(1f, Springs.gel()) }
+            scope.launch { touch.glow.animateTo(1f, tween(Durations.Glow)) }
             do {
                 val event = awaitPointerEvent()
                 event.changes.firstOrNull()?.let { touch.position = it.position }
             } while (event.changes.any { it.pressed })
-            scope.launch { touch.press.animateTo(0f, spring(dampingRatio = 0.55f, stiffness = 600f)) }
+            scope.launch { touch.press.animateTo(0f, Springs.gel()) }
             scope.launch { touch.glow.animateTo(0f, tween(300)) }
         }
     }

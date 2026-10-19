@@ -74,6 +74,7 @@ import app.wallhop.ui.components.formatBytes
 import app.wallhop.ui.design.Haptic
 import app.wallhop.ui.design.Radius
 import app.wallhop.ui.design.Springs
+import app.wallhop.ui.design.shake
 import app.wallhop.ui.design.Type
 import app.wallhop.ui.design.Wallhop
 import app.wallhop.ui.design.WallhopTheme
@@ -349,6 +350,8 @@ private fun ShareSheet(
                 Spacer(Modifier.height(22.dp))
                 AnimatedContent(
                     targetState = outcome,
+                    // A failure shakes once, with the error haptic.
+                    modifier = Modifier.shake(outcome == Outcome.Failed),
                     transitionSpec = { (fadeIn() + scaleIn(Springs.bouncy(), initialScale = 0.9f)) togetherWith fadeOut() },
                     label = "outcome",
                 ) { result ->

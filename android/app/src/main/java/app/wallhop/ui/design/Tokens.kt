@@ -152,6 +152,14 @@ object Springs {
     fun <T> smooth(): SpringSpec<T> = spring(dampingRatio = 1f, stiffness = 160f)
     fun <T> bouncy(): SpringSpec<T> = spring(dampingRatio = 0.7f, stiffness = 250f)
     fun <T> instant(): SpringSpec<T> = spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessHigh)
+    /** Under-damped swell of glass under a finger (DESIGN.md §4, property 4). */
+    fun <T> gel(): SpringSpec<T> = spring(dampingRatio = 0.55f, stiffness = 600f)
+    /** Glass materializing: sheets, alerts, toasts appearing (DESIGN.md §4.2). */
+    fun <T> materialize(): SpringSpec<T> = spring(dampingRatio = 0.8f, stiffness = 300f)
+    /** Glass dematerializing: the same things going away. */
+    fun <T> dematerialize(): SpringSpec<T> = spring(dampingRatio = 1f, stiffness = 500f)
+    /** A button menu morphing out of its button (DESIGN.md §5.12). */
+    fun <T> menu(): SpringSpec<T> = spring(dampingRatio = 0.75f, stiffness = 350f)
 }
 
 /** System accessibility state that changes how things draw and move. */

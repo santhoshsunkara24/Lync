@@ -13,15 +13,25 @@ struct PairingQR: View {
     @State private var visible = false
     @State private var attempts = 0
     @State private var refresh = Timer.publish(every: 110, on: .main, in: .common).autoconnect()
+    /// Bumped for each new QR, so the old one turns into the new one.
+    @State private var generation = 0
 
     var body: some View {
         VStack(spacing: 10) {
-            Group {
+            ZStack {
                 if let image, !failed {
+                    // Fades and grows in when ready; "New code" turns the old one over into the new.
                     Image(nsImage: image)
                         .interpolation(.none)
                         .resizable()
                         .frame(width: 180, height: 180)
+                        .id(generation)
+                        .transition(WMotion.transition(.asymmetric(
+                            insertion: .modifier(active: QRFlip(angle: generation > 1 ? -40 : 0, scale: 0.92, opacity: 0),
+                                                 identity: QRFlip(angle: 0, scale: 1, opacity: 1)),
+                            removal: .modifier(active: QRFlip(angle: 40, scale: 0.92, opacity: 0),
+                                               identity: QRFlip(angle: 0, scale: 1, opacity: 1))
+                        )))
                 } else if failed {
                     VStack(spacing: 10) {
                         Image(systemName: "wifi.exclamationmark").font(.wh(26, .medium)).foregroundStyle(WTheme.ink.opacity(0.6))
@@ -33,8 +43,11 @@ struct PairingQR: View {
                     .frame(width: 180, height: 180)
                 } else {
                     ProgressView().controlSize(.small).frame(width: 180, height: 180)
+                        .transition(.opacity)
                 }
             }
+            .animation(WMotion.animation(WMotion.smooth), value: generation)
+            .animation(WMotion.animation(WMotion.smooth), value: failed)
             .padding(10)
             .background(RoundedRectangle(cornerRadius: WRadius.field, style: .continuous).fill(Color.white))
             .accessibilityLabel(failed ? "No pairing code" : "Pairing QR code")
@@ -81,6 +94,20 @@ struct PairingQR: View {
         }
         failed = false
         image = Self.qr(url.absoluteString)
+        generation += 1
+    }
+
+    /// Part of a turn around the vertical axis, with a fade: the old QR flipping over into the new one.
+    private struct QRFlip: ViewModifier {
+        let angle: Double
+        let scale: CGFloat
+        let opacity: Double
+        func body(content: Content) -> some View {
+            content
+                .rotation3DEffect(.degrees(angle), axis: (x: 0, y: 1, z: 0), perspective: 0.4)
+                .scaleEffect(scale)
+                .opacity(opacity)
+        }
     }
 
     static func qr(_ text: String) -> NSImage? {

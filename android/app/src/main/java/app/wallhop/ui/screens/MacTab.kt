@@ -78,6 +78,42 @@ import app.wallhop.ui.design.Ink
 import app.wallhop.ui.design.WIcons
 import app.wallhop.ui.design.Wallhop
 import app.wallhop.ui.design.pressScale
+import app.wallhop.ui.design.AnimatedChangeText
+import app.wallhop.ui.design.Durations
+import app.wallhop.ui.design.Fades
+import app.wallhop.ui.design.LocalStagger
+import app.wallhop.ui.design.RollingCode
+import app.wallhop.ui.design.Springs
+import app.wallhop.ui.design.confirm
+import app.wallhop.ui.design.pressDim
+import app.wallhop.ui.design.rememberAnimatedRows
+import app.wallhop.ui.design.rememberHaptics
+import app.wallhop.ui.design.rememberStaggerClock
+import app.wallhop.ui.design.shake
+import app.wallhop.ui.design.staggerIn
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.SizeTransform
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.Canvas
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
 import app.wallhop.ui.design.tappable
 import kotlinx.coroutines.delay
 
@@ -156,26 +192,24 @@ fun MacTab(
             .fillMaxSize()
             .background(Brush.verticalGradient(0f to home.top, 0.46f to home.mid, 0.72f to Ink, 1f to Ink)),
     ) {
+        CompositionLocalProvider(LocalStagger provides rememberStaggerClock()) {
         LazyColumn(
             Modifier.fillMaxSize().windowInsetsPadding(sides),
             contentPadding = PaddingValues(top = statusBar + 18.dp, bottom = navBar + 112.dp),
         ) {
             item(key = "header") {
-                Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp), verticalAlignment = Alignment.CenterVertically) {
+                Row(Modifier.itemMotion(this, 0).fillMaxWidth().padding(horizontal = 20.dp), verticalAlignment = Alignment.CenterVertically) {
                     Text("Home", style = Title, color = Color.White, modifier = Modifier.weight(1f))
                     RoundButton(WIcons.More, "More", Color.White.copy(alpha = 0.16f), onClick = actions.more)
                 }
             }
             item(key = "mac-title") {
-                SectionTitle(
-                    "Your Mac",
-                    when {
-                        !connected -> "Looking for your Mac…"
-                        card.info.locked -> "Connected · Mac is locked"
-                        else -> "Connected over Wi‑Fi" + (card.latencyMs?.let { " · $it ms" } ?: "")
-                    },
+                MacStatusTitle(
+                    connected = connected,
+                    locked = card.info.locked,
+                    latencyMs = card.latencyMs,
                     onClick = actions.macDetails,
-                    modifier = Modifier.padding(top = 22.dp),
+                    modifier = Modifier.itemMotion(this, 1).padding(top = 22.dp),
                 )
             }
             item(key = "cards") {
@@ -191,11 +225,12 @@ fun MacTab(
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
                     // One height for the row, so every card lines up top and bottom: the tallest
                     // card's content, which grows with a two-line Mac name or a larger font.
-                    modifier = Modifier.padding(top = 16.dp).height(cardRowHeight(macName, meta, heroWidth, transfer, card.latest)),
+                    modifier = Modifier.itemMotion(this, 2).padding(top = 16.dp).height(cardRowHeight(macName, meta, heroWidth, transfer, card.latest)),
                 ) {
-                    if (transfer != null) item(key = "transfer") { TransferCard(transfer, home, actions) }
-                    item(key = "mac") { MacHero(macName, connected, meta, card, home, actions, heroWidth, needsMac(actions.sendClipboard)) }
-                    card.latest?.let { latest -> item(key = "latest") { LatestCard(latest, home, actions) } }
+                    // A transfer card arriving pushes the others along rather than jumping them.
+                    if (transfer != null) item(key = "transfer") { Box(Modifier.itemMotion(this, -1)) { TransferCard(transfer, home, actions) } }
+                    item(key = "mac") { Box(Modifier.itemMotion(this, -1)) { MacHero(macName, connected, meta, card, home, actions, heroWidth, needsMac(actions.sendClipboard)) } }
+                    card.latest?.let { latest -> item(key = "latest") { Box(Modifier.itemMotion(this, -1)) { LatestCard(latest, home, actions) } } }
                 }
             }
             item(key = "send-title") {
@@ -203,14 +238,14 @@ fun MacTab(
                     "Send to Mac",
                     if (connected) null else "Your Mac isn't connected. Photos and files go across once it's back.",
                     onClick = null,
-                    modifier = Modifier.padding(top = 26.dp),
+                    modifier = Modifier.itemMotion(this, 3).padding(top = 26.dp),
                 )
             }
             item(key = "send") {
                 LazyRow(
                     contentPadding = PaddingValues(horizontal = 20.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    modifier = Modifier.padding(top = 12.dp),
+                    modifier = Modifier.itemMotion(this, 4).padding(top = 12.dp),
                 ) {
                     item { Chip(WIcons.Image, "Photos", true, actions.sendPhotos) }
                     item { Chip(WIcons.File, "Files", true, actions.sendFiles) }
@@ -220,16 +255,21 @@ fun MacTab(
             }
             if (card.recent.isNotEmpty()) {
                 item(key = "recent-title") {
-                    SectionTitle("Recent", null, onClick = actions.openActivity, modifier = Modifier.padding(top = 26.dp))
+                    SectionTitle("Recent", null, onClick = actions.openActivity, modifier = Modifier.itemMotion(this, 5).padding(top = 26.dp))
                 }
                 item(key = "recent") {
+                    // The newest entry opens up at the top; the oldest folds away at the bottom.
+                    val reduceMotion = Wallhop.a11y.reduceMotion
+                    val rows = rememberAnimatedRows(card.recent) { it.id }
                     app.wallhop.ui.components.InsetSection(
-                        modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 12.dp),
+                        modifier = Modifier.itemMotion(this, 6).padding(start = 20.dp, end = 20.dp, top = 12.dp),
                         dividerInset = 64.dp,
                     ) {
-                        card.recent.forEach { entry ->
+                        rows.forEach { entry ->
                             row {
-                                ActivityRow(entry, onLongClick = { actions.entryActions(entry) }, onClick = { actions.entryActions(entry) })
+                                AnimatedVisibility(entry.visible, enter = rowEnter(reduceMotion), exit = rowExit(reduceMotion)) {
+                                    ActivityRow(entry.item, onLongClick = { actions.entryActions(entry.item) }, onClick = { actions.entryActions(entry.item) })
+                                }
                             }
                         }
                     }
@@ -241,11 +281,129 @@ fun MacTab(
                         "Finish setup",
                         "Codes, calls and texts reach your Mac once these are allowed.",
                         onClick = actions.openSettings,
-                        modifier = Modifier.padding(top = 26.dp),
+                        modifier = Modifier.itemMotion(this, 7).padding(top = 26.dp),
                     )
                 }
             }
         }
+        }
+    }
+}
+
+/**
+ * A Home item's motion: added or removed items fade while the rest slide (spring.smooth), and
+ * the first [index]es fade up in turn when Home comes on show. -1: no stagger.
+ */
+@Composable
+private fun Modifier.itemMotion(scope: androidx.compose.foundation.lazy.LazyItemScope, index: Int): Modifier {
+    val reduceMotion = Wallhop.a11y.reduceMotion
+    val placed = with(scope) { this@itemMotion.animateItem(
+        fadeInSpec = if (reduceMotion) null else Fades.fadeIn(),
+        placementSpec = if (reduceMotion) null else Springs.smooth(),
+        fadeOutSpec = if (reduceMotion) null else Fades.fadeOut(),
+    ) }
+    return if (index < 0) placed else placed.staggerIn(index)
+}
+
+/**
+ * "Your Mac ›" and how it's connected. The line under it slides up as the state changes, after
+ * a small dot: grey and softly pulsing while looking, popping green when the Mac connects.
+ */
+@Composable
+private fun MacStatusTitle(connected: Boolean, locked: Boolean, latencyMs: Int?, onClick: () -> Unit, modifier: Modifier = Modifier) {
+    val source = remember { MutableInteractionSource() }
+    val reduceMotion = Wallhop.a11y.reduceMotion
+    val rise = with(LocalDensity.current) { 6.dp.roundToPx() }
+    val status = when {
+        !connected -> 0
+        locked -> 1
+        else -> 2
+    }
+    Column(
+        modifier
+            .fillMaxWidth()
+            .pressDim(source, 0.7f)
+            .tappable(source, onClick = onClick)
+            .padding(horizontal = 20.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text("Your Mac", style = Section, color = Color.White)
+            Icon(WIcons.ChevronRight, null, tint = Color.White, modifier = Modifier.size(16.dp))
+        }
+        Row(Modifier.padding(top = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+            StatusDot(connected)
+            Spacer(Modifier.width(7.dp))
+            AnimatedContent(
+                targetState = status,
+                transitionSpec = {
+                    if (reduceMotion) {
+                        fadeIn(tween(Durations.Quick)) togetherWith fadeOut(tween(Durations.Quick))
+                    } else {
+                        (slideInVertically(Springs.snappy()) { rise } + fadeIn(Fades.fadeIn())) togetherWith
+                            (slideOutVertically(Springs.snappy()) { -rise } + fadeOut(Fades.fadeOut())) using
+                            SizeTransform(clip = false)
+                    }
+                },
+                contentAlignment = Alignment.CenterStart,
+                label = "macStatus",
+            ) { shown ->
+                val color = Color.White.copy(alpha = 0.78f)
+                when (shown) {
+                    0 -> Text("Looking for your Mac…", style = Body, color = color)
+                    1 -> Text("Connected · Mac is locked", style = Body, color = color)
+                    else -> Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("Connected over Wi‑Fi", style = Body, color = color, maxLines = 1,
+                            overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+                        // Only the number rolls as the response time changes.
+                        if (latencyMs != null) AnimatedChangeText(" · $latencyMs ms", style = Body, color = color, maxLines = 1)
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * The connection dot. While looking it breathes once every 1.6 s (only then, and only while
+ * Home is on screen); when the Mac connects it turns green with a single pop.
+ */
+@Composable
+private fun StatusDot(connected: Boolean) {
+    val reduceMotion = Wallhop.a11y.reduceMotion
+    val active = LocalScreenActive.current
+    val green = Wallhop.colors.green
+    val color by animateColorAsState(if (connected) green else Color.White.copy(alpha = 0.55f), Springs.smooth(), label = "dot")
+    val pulse = remember { Animatable(0f) }
+    val pop = remember { Animatable(1f) }
+    val wasConnected = remember { booleanArrayOf(connected) }
+    LaunchedEffect(connected, active, reduceMotion) {
+        val justConnected = connected && !wasConnected[0]
+        wasConnected[0] = connected
+        if (connected) {
+            pulse.snapTo(0f)
+            if (justConnected && !reduceMotion && active) {
+                pop.animateTo(1.4f, tween(120))
+                pop.animateTo(1f, Springs.bouncy())
+            }
+            return@LaunchedEffect
+        }
+        if (reduceMotion || !active) {
+            pulse.snapTo(0f)
+            return@LaunchedEffect
+        }
+        while (true) {
+            pulse.snapTo(0f)
+            pulse.animateTo(1f, tween(900, easing = androidx.compose.animation.core.LinearOutSlowInEasing))
+            kotlinx.coroutines.delay(700)
+        }
+    }
+    Canvas(Modifier.size(14.dp)) {
+        val r = 3.5.dp.toPx() * pop.value
+        val p = pulse.value
+        if (p > 0f && p < 1f) {
+            drawCircle(color.copy(alpha = 0.45f * (1f - p)), radius = 3.5.dp.toPx() * (1f + 1f * p))
+        }
+        drawCircle(color, radius = r)
     }
 }
 
@@ -324,7 +482,7 @@ private fun SectionTitle(title: String, subtitle: String?, onClick: (() -> Unit)
     Column(
         modifier
             .fillMaxWidth()
-            .then(if (onClick != null) Modifier.tappable(source, onClick = onClick) else Modifier)
+            .then(if (onClick != null) Modifier.pressDim(source, 0.7f).tappable(source, onClick = onClick) else Modifier)
             .padding(horizontal = 20.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -365,7 +523,8 @@ private fun MacHero(
             Text(kind(name, info.laptop), style = Overline, color = Color.White.copy(alpha = 0.72f))
             Text(name, style = CardTitle, color = Color.White, maxLines = 2, overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.padding(top = 6.dp))
-            Text(meta, style = Meta, color = Color.White.copy(alpha = 0.7f), maxLines = 2, overflow = TextOverflow.Ellipsis,
+            // Battery and "on for …" roll when they change.
+            AnimatedChangeText(meta, style = Meta, color = Color.White.copy(alpha = 0.7f), maxLines = 2, overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.padding(top = 6.dp))
             Spacer(Modifier.weight(1f))
             Row(Modifier.padding(top = 14.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -380,14 +539,31 @@ private fun MacHero(
 @Composable
 private fun LatestCard(entry: ActivityEntry, home: HomeColors, actions: MacActions) {
     val context = LocalContext.current
-    val overlays = LocalOverlays.current
+    val haptics = rememberHaptics()
     val isCode = entry.kind == ActivityEntry.Kind.Otp
+    // "Copy" turns into "Copied" with a check for a moment.
+    var copied by remember(entry.id) { mutableStateOf(false) }
+    LaunchedEffect(copied) {
+        if (copied) {
+            kotlinx.coroutines.delay(1_600)
+            copied = false
+        }
+    }
     CardBox(width = SmallCardWidth, color = home.peek, modifier = Modifier.fillMaxHeight()) {
         Column(Modifier.fillMaxHeight().padding(16.dp)) {
             Text(latestLabel(entry), style = Overline, color = Color.White.copy(alpha = 0.8f))
             Spacer(Modifier.weight(1f))
             if (isCode) {
-                Text(spacedCode(entry.title).replace(" ", "\n"), style = CodeStyle, color = Color.White)
+                // A new code rolls in like an odometer, digit by digit (an old one just shows).
+                val fresh = remember(entry.id) { System.currentTimeMillis() - entry.time < 15_000 }
+                val groups = spacedCode(entry.title).split(' ')
+                Column(Modifier.clearAndSetSemantics { contentDescription = spacedCode(entry.title) }) {
+                    var offset = 0L
+                    groups.forEach { group ->
+                        RollingCode(group, CodeStyle, Color.White, animate = fresh, delayOffsetMs = offset)
+                        offset += group.length * 30L
+                    }
+                }
             } else {
                 Text(entry.title, style = TransferTitle, color = Color.White, maxLines = 3, overflow = TextOverflow.Ellipsis)
             }
@@ -395,10 +571,17 @@ private fun LatestCard(entry: ActivityEntry, home: HomeColors, actions: MacActio
                 overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 8.dp))
             Spacer(Modifier.weight(1f))
             if (isCode) {
-                PillButton(WIcons.Clipboard, "Copy", home.peekPale, home.onPeekPale, true, onClick = {
-                    copyCode(context, entry.title)
-                    overlays?.toast("Code copied", WIcons.CheckCircle)
-                }, modifier = Modifier.fillMaxWidth())
+                PillButton(
+                    if (copied) WIcons.CheckCircle else WIcons.Clipboard, if (copied) "Copied" else "Copy",
+                    home.peekPale, home.onPeekPale, true,
+                    onClick = {
+                        copyCode(context, entry.title)
+                        haptics.confirm()
+                        copied = true
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    morph = true,
+                )
             } else {
                 PillButton(WIcons.Activity, "Activity", home.peekPale, home.onPeekPale, true, actions.openActivity, Modifier.fillMaxWidth())
             }
@@ -412,10 +595,18 @@ private fun TransferCard(transfer: TransferState, home: HomeColors, actions: Mac
     val title = LinkManager.summary(transfer.items)
     val failed = transfer.phase == TransferPhase.Failed
     val done = transfer.phase == TransferPhase.Done || failed
-    CardBox(width = SmallCardWidth, color = home.card, modifier = Modifier.fillMaxHeight()) {
+    // A failed send gives the card a short shake (the error haptic plays with it).
+    CardBox(width = SmallCardWidth, color = home.card, modifier = Modifier.fillMaxHeight().shake(failed)) {
         Column(Modifier.fillMaxHeight().padding(16.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                if (failed) Icon(WIcons.Warning, null, tint = Wallhop.colors.red, modifier = Modifier.size(14.dp))
+                when {
+                    failed -> Icon(WIcons.Warning, null, tint = Wallhop.colors.red, modifier = Modifier.size(14.dp))
+                    // Fills as it sends, then becomes a check with a pop.
+                    transfer.phase != TransferPhase.Waiting -> app.wallhop.ui.components.ProgressCheck(
+                        transfer.progress, done = transfer.phase == TransferPhase.Done,
+                        modifier = Modifier.size(14.dp), color = Wallhop.colors.green,
+                    )
+                }
                 Text(transferStatus(transfer), style = Overline, color = Color.White.copy(alpha = 0.72f))
             }
             Spacer(Modifier.weight(1f))
@@ -457,8 +648,11 @@ private fun CardBox(width: Dp, color: Color, modifier: Modifier = Modifier, cont
 private fun PillButton(
     icon: ImageVector, label: String, container: Color, content: Color, enabled: Boolean,
     onClick: () -> Unit, modifier: Modifier = Modifier,
+    /** Cross-fade icon (with a little overshoot) and label when they change, e.g. Copy → Copied. */
+    morph: Boolean = false,
 ) {
     val source = remember { MutableInteractionSource() }
+    val reduceMotion = Wallhop.a11y.reduceMotion
     Row(
         modifier
             .height(48.dp)
@@ -471,9 +665,31 @@ private fun PillButton(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.Center,
     ) {
-        Icon(icon, null, tint = content, modifier = Modifier.size(18.dp))
-        Spacer(Modifier.width(8.dp))
-        Text(label, style = Label, color = content, maxLines = 1)
+        if (!morph) {
+            Icon(icon, null, tint = content, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(8.dp))
+            Text(label, style = Label, color = content, maxLines = 1)
+        } else {
+            AnimatedContent(
+                targetState = icon,
+                transitionSpec = {
+                    if (reduceMotion) fadeIn(tween(Durations.Quick)) togetherWith fadeOut(tween(Durations.Quick))
+                    else (fadeIn(Fades.fadeIn()) + scaleIn(Springs.bouncy(), initialScale = 0.5f)) togetherWith
+                        (fadeOut(Fades.fadeOut()) + scaleOut(Springs.snappy(), targetScale = 0.5f))
+                },
+                label = "pillIcon",
+            ) { shown -> Icon(shown, null, tint = content, modifier = Modifier.size(18.dp)) }
+            Spacer(Modifier.width(8.dp))
+            AnimatedContent(
+                targetState = label,
+                transitionSpec = { fadeIn(Fades.fadeIn()) togetherWith fadeOut(Fades.fadeOut()) using SizeTransform(clip = false) },
+                label = "pillLabel",
+            ) { shown ->
+                // Announced, so TalkBack users hear "Copied" too.
+                Text(shown, style = Label, color = content, maxLines = 1,
+                    modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite })
+            }
+        }
     }
 }
 
@@ -566,6 +782,7 @@ fun MacDetails(
                         title = "Response time",
                         leading = { app.wallhop.ui.components.IconTile(WIcons.Gauge, colors.indigo) },
                         value = "$latencyMs ms",
+                        animateValue = true,
                     )
                 }
             }
@@ -576,6 +793,7 @@ fun MacDetails(
                     title = "Battery",
                     leading = { app.wallhop.ui.components.IconTile(WIcons.BatteryCharging, colors.orange) },
                     value = "${info.battery}%" + if (info.charging) ", charging" else "",
+                    animateValue = true,
                 )
             }
         }

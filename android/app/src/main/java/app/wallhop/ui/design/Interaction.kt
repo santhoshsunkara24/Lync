@@ -3,7 +3,10 @@ package app.wallhop.ui.design
 import android.os.Build
 import android.view.HapticFeedbackConstants
 import android.view.View
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
@@ -11,6 +14,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.semantics.Role
@@ -40,6 +44,33 @@ fun Modifier.pressScale(source: MutableInteractionSource, pressedScale: Float = 
     return graphicsLayer { scaleX = scale; scaleY = scale }
 }
 
+/**
+ * Row-style press (DESIGN.md §5.5): the background lights to [color] the instant a finger lands
+ * and fades back over 250 ms on release. For rows and menu items, where scaling would look odd.
+ */
+@Composable
+fun Modifier.pressHighlight(source: MutableInteractionSource, color: Color = Wallhop.colors.fill): Modifier {
+    val pressed by source.collectIsPressedAsState()
+    val highlight by animateColorAsState(
+        if (pressed) color else color.copy(alpha = 0f),
+        animationSpec = tween(if (pressed) 0 else Durations.Highlight),
+        label = "pressHighlight",
+    )
+    return background(highlight)
+}
+
+/** Text-like press: dims while held, for titles and small glyph buttons. */
+@Composable
+fun Modifier.pressDim(source: MutableInteractionSource, pressedAlpha: Float = 0.55f): Modifier {
+    val pressed by source.collectIsPressedAsState()
+    val alpha by animateFloatAsState(
+        if (pressed) pressedAlpha else 1f,
+        animationSpec = if (pressed) tween(0) else tween(Durations.Highlight),
+        label = "pressDim",
+    )
+    return graphicsLayer { this.alpha = alpha }
+}
+
 /** Clickable with no ripple; pair with [pressScale] or a pressed background. */
 @Composable
 fun Modifier.tappable(
@@ -49,7 +80,7 @@ fun Modifier.tappable(
     onClick: () -> Unit,
 ): Modifier = clickable(interactionSource = source, indication = null, enabled = enabled, role = role, onClick = onClick)
 
-/** Haptic events from DESIGN.md §8. */
+/** Haptic events from DESIGN.md §8. Shorthands (tick, confirm, reject, longPress) are in Motion.kt. */
 enum class Haptic { Selection, Light, Medium, Success, Failure }
 
 class Haptics(private val view: View) {

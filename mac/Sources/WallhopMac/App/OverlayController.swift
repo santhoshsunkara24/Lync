@@ -135,31 +135,56 @@ final class PlacementState: ObservableObject {
     @Published var placement: OverlayPlacement = .pill
 }
 
-/// Draws the card in the right shape for the placement and animates it in and out.
+/// Draws the card in the right shape for the placement and animates it in and out: out of the
+/// notch (bouncy) and back up into it (snappy). Going from one card to another keeps the shape,
+/// springs it to the new size and crossfades what's inside.
 private struct OverlayRoot: View {
     @ObservedObject var model: AppModel
     @ObservedObject var placement: PlacementState
     @EnvironmentObject var theme: ThemeStore
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var hovering = false
+    /// 0…1: the quick bump when files are dropped on the notch.
+    @State private var pulse: CGFloat = 0
 
     var body: some View {
         VStack(spacing: 0) {
             if let card = model.live {
                 cardView(card)
+                    // Files dragged over the notch: it swells a little while they're held there.
+                    .scaleEffect(swells(card) ? 1.03 : 1, anchor: .top)
+                    .scaleEffect(1 + 0.05 * pulse, anchor: .top)
+                    .brightness(0.08 * pulse)
+                    .shake(model.dropShake)
                     .transition(transition)
-                    .id(cardKey(card))
             }
             Spacer(minLength: 0)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .animation(reduceMotion ? .easeOut(duration: 0.15) : .spring(response: 0.38, dampingFraction: 0.82), value: model.live)
+        .animation(WMotion.animation(WMotion.smooth), value: model.live)
+        .onChange(of: model.dropPulse) { _, _ in
+            guard !WMotion.reduceMotion else { return }
+            withAnimation(WMotion.press) { pulse = 1 }
+            withAnimation(WMotion.snappy.delay(0.1)) { pulse = 0 }
+        }
+    }
+
+    /// The "Drop to send" card, with a phone to send to.
+    private func swells(_ card: LiveCard) -> Bool {
+        model.connectedPhone != nil && model.isDropHint(card) && !WMotion.reduceMotion
     }
 
     @ViewBuilder
     private func cardView(_ card: LiveCard) -> some View {
-        let content = LiveCardView(model: model, card: card)
-            .frame(width: OverlayController.cardWidth - 36, alignment: .leading)
+        // A new kind of card crossfades inside the same shape; the old one stops taking up room
+        // at once so the shape springs straight to the new size.
+        let content = ZStack(alignment: .topLeading) {
+            LiveCardView(model: model, card: card)
+                .frame(width: OverlayController.cardWidth - 36, alignment: .leading)
+                .id(cardKey(card))
+                .transition(contentSwap)
+        }
+        // Clip what's fading out to the card, with room for buttons' hover and focus rings.
+        .padding(4).clipped().padding(-4)
 
         switch placement.placement {
         case .notch(let notchHeight):
@@ -199,16 +224,29 @@ private struct OverlayRoot: View {
     }
 
     private var transition: AnyTransition {
-        if reduceMotion { return .opacity }
+        if WMotion.reduceMotion { return .opacity.animation(WMotion.reduced) }
         switch placement.placement {
         case .notch:
+            // Expands out of the notch; shrinks back up into it.
             return .asymmetric(
-                insertion: .scale(scale: 0.45, anchor: .top).combined(with: .opacity),
-                removal: .scale(scale: 0.45, anchor: .top).combined(with: .opacity)
+                insertion: .scale(scale: 0.9, anchor: .top).combined(with: .opacity).animation(WMotion.bouncy),
+                removal: .scale(scale: 0.6, anchor: .top).combined(with: .opacity).animation(WMotion.snappy)
             )
         case .pill, .menuBar:
-            return .move(edge: .top).combined(with: .opacity)
+            return .asymmetric(
+                insertion: .scale(scale: 0.9, anchor: .top).combined(with: .opacity).animation(WMotion.bouncy),
+                removal: .scale(scale: 0.9, anchor: .top).combined(with: .opacity).animation(WMotion.snappy)
+            )
         }
+    }
+
+    private var contentSwap: AnyTransition {
+        let removal = AnyTransition.collapsingHeight.combined(with: .opacity).animation(.easeOut(duration: 0.12))
+        if WMotion.reduceMotion { return .asymmetric(insertion: .opacity.animation(WMotion.reduced), removal: removal) }
+        return .asymmetric(
+            insertion: .opacity.combined(with: .offset(y: -4)).animation(WMotion.smooth.delay(0.06)),
+            removal: removal
+        )
     }
 
     private func hover(_ inside: Bool) {
@@ -242,7 +280,7 @@ private struct OverlayRoot: View {
                     .background(Circle().fill(Color(white: 0.25)))
                     .overlay(Circle().strokeBorder(Color.white.opacity(0.15), lineWidth: 0.5))
             }
-            .buttonStyle(.plain)
+            .buttonStyle(WShapePress(shape: Circle()))
             .help("Dismiss")
             .accessibilityLabel("Dismiss")
             .transition(.opacity)

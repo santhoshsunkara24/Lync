@@ -57,8 +57,19 @@ final class StatusItemController: NSObject {
         // needs attention. Dimmed while no phone is connected.
         let image = attention ? Self.markWithDot : Self.mark
         image?.accessibilityDescription = attention ? "Lync, needs attention" : "Lync"
-        item.button?.image = image
-        item.button?.appearsDisabled = !connected && !attention
+        guard let button = item.button else { return }
+        let disabled = !connected && !attention
+        // A short crossfade when the icon changes (the dot coming or going, connecting).
+        if button.image != nil, button.image !== image || button.appearsDisabled != disabled {
+            button.wantsLayer = true
+            let fade = CATransition()
+            fade.type = .fade
+            fade.duration = WMotion.reduceMotion ? 0.12 : 0.25
+            fade.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            button.layer?.add(fade, forKey: "iconFade")
+        }
+        button.image = image
+        button.appearsDisabled = disabled
     }
 
     private static let mark: NSImage? = {
@@ -137,9 +148,12 @@ final class FileDropHandler {
     }
 
     func perform(_ info: NSDraggingInfo) -> Bool {
-        model.dropHover(false)
         let (files, folders) = Self.read(info)
-        guard model.connectedPhone != nil, !files.isEmpty else { return false }
+        guard model.connectedPhone != nil, !files.isEmpty else {
+            model.dropHover(false)
+            return false
+        }
+        model.dropAccepted()
         model.sendFilesToPhone(files, skippedFolders: folders)
         return true
     }

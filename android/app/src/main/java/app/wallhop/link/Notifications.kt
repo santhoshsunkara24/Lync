@@ -47,6 +47,8 @@ object Notifications {
             is LinkState.Connected -> "Connected to ${state.macName}"
             is LinkState.Searching -> "Looking for ${state.macName}"
             is LinkState.Pairing -> "Pairing with ${state.macName}"
+            // Keys are kept and the phone keeps trying, so this isn't "not paired".
+            is LinkState.Forgotten -> "${state.macName} doesn't recognise this phone"
             else -> "Not paired with a Mac"
         }
         return NotificationCompat.Builder(context, CHANNEL_LINK)

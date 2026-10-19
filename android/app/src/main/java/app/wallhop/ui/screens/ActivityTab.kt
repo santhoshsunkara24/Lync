@@ -48,6 +48,14 @@ import app.wallhop.ui.components.SegmentedControl
 import app.wallhop.ui.components.copyCode
 import app.wallhop.ui.components.spacedCode
 import app.wallhop.ui.design.Haptic
+import app.wallhop.ui.design.Haptics
+import app.wallhop.ui.design.RollingCode
+import app.wallhop.ui.design.confirm
+import app.wallhop.ui.design.rememberAnimatedRows
+import app.wallhop.ui.design.staggerIn
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
 import app.wallhop.ui.design.Springs
 import app.wallhop.ui.design.Type
 import app.wallhop.ui.design.Wallhop
@@ -96,6 +104,7 @@ fun ActivityTab(activity: List<ActivityEntry>, overlays: Overlays, onDelete: (St
 
     Page(title = "Activity", state = list) {
         item(key = "filter") {
+            Column(Modifier.staggerIn(1)) {
             SegmentedControl(
                 filters,
                 selected = pager.targetPage,
@@ -104,12 +113,13 @@ fun ActivityTab(activity: List<ActivityEntry>, overlays: Overlays, onDelete: (St
                 haptic = false,
             )
             Spacer(Modifier.height(24.dp))
+            }
         }
         item(key = "pages") {
             // The history is capped at 30 entries, so each page is a plain column.
             HorizontalPager(
                 pager,
-                modifier = Modifier.heightIn(min = pagesMin),
+                modifier = Modifier.staggerIn(2).heightIn(min = pagesMin),
                 verticalAlignment = Alignment.Top,
                 pageSpacing = 16.dp,
                 beyondViewportPageCount = 1,
@@ -132,6 +142,11 @@ private fun matches(entry: ActivityEntry, filter: Int) = when (filter) {
 @Composable
 private fun ActivityPage(entries: List<ActivityEntry>, filter: Int, overlays: Overlays, onDelete: (String) -> Unit) {
     val context = LocalContext.current
+    val haptics = rememberHaptics()
+    val reduceMotion = Wallhop.a11y.reduceMotion
+    val groups = entries.groupBy { dayLabel(context, it.time) }
+    // Days already here when the page opened; a day that turns up later animates its first row in.
+    val initialDays = remember { groups.keys.toSet() }
     Column(Modifier.fillMaxWidth()) {
         if (entries.isEmpty()) {
             EmptyState(
@@ -145,13 +160,17 @@ private fun ActivityPage(entries: List<ActivityEntry>, filter: Int, overlays: Ov
                 },
             )
         }
-        entries.groupBy { dayLabel(context, it.time) }.forEach { (day, items) ->
+        groups.forEach { (day, items) ->
             key(day) {
                 SectionHeader(day)
+                // New entries open up into place; deleted ones fold away (DESIGN.md §7.2).
+                val rows = rememberAnimatedRows(items, enterInitially = day !in initialDays) { it.id }
                 InsetSection(dividerInset = 57.dp) {
-                    items.forEach { entry ->
+                    rows.forEach { entry ->
                         row {
-                            ActivityRow(entry, onLongClick = { showEntryActions(overlays, context, entry, onDelete) })
+                            AnimatedVisibility(entry.visible, enter = rowEnter(reduceMotion), exit = rowExit(reduceMotion)) {
+                                ActivityRow(entry.item, onLongClick = { showEntryActions(overlays, context, entry.item, haptics, onDelete) })
+                            }
                         }
                     }
                 }
@@ -162,13 +181,20 @@ private fun ActivityPage(entries: List<ActivityEntry>, filter: Int, overlays: Ov
 }
 
 /** Copy code / Delete for one entry; the same on Home and in Activity. */
-internal fun showEntryActions(overlays: Overlays, context: android.content.Context, entry: ActivityEntry, onDelete: (String) -> Unit) {
+internal fun showEntryActions(
+    overlays: Overlays,
+    context: android.content.Context,
+    entry: ActivityEntry,
+    haptics: Haptics? = null,
+    onDelete: (String) -> Unit,
+) {
     overlays.showActionSheet(ActionSheetSpec(
         message = null,
         actions = buildList {
             if (entry.kind == ActivityEntry.Kind.Otp) {
                 add(AlertAction("Copy code") {
                     copyCode(context, entry.title)
+                    haptics?.confirm()
                     overlays.toast("Code copied", WIcons.CheckCircle)
                 })
             }
@@ -189,8 +215,19 @@ internal fun ActivityRow(entry: ActivityEntry, onLongClick: () -> Unit, onClick:
         ActivityEntry.Kind.FromMac -> WIcons.Laptop to colors.gray
         ActivityEntry.Kind.Call -> WIcons.CallMissed to colors.red
     }
+    val title = if (entry.kind == ActivityEntry.Kind.Otp) spacedCode(entry.title) else entry.title
+    // A code that just arrived rolls in digit by digit; older ones simply show.
+    val fresh = remember(entry.id) { System.currentTimeMillis() - entry.time < 15_000 }
     ListRow(
-        title = if (entry.kind == ActivityEntry.Kind.Otp) spacedCode(entry.title) else entry.title,
+        title = title,
+        titleContent = if (entry.kind == ActivityEntry.Kind.Otp && fresh) {
+            {
+                RollingCode(
+                    title, Type.body.copy(fontWeight = androidx.compose.ui.text.font.FontWeight.Medium), colors.label,
+                    modifier = Modifier.clearAndSetSemantics { contentDescription = title },
+                )
+            }
+        } else null,
         subtitle = entry.detail,
         leading = { IconTile(icon, color) },
         trailing = {

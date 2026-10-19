@@ -3,7 +3,11 @@ package app.wallhop.ui.screens
 import app.wallhop.ui.design.WIcons
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
@@ -32,7 +36,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.scale
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -53,7 +57,13 @@ import app.wallhop.ui.components.Overlays
 import app.wallhop.ui.components.TextAction
 import app.wallhop.ui.components.WButton
 import app.wallhop.ui.components.WTextField
+import app.wallhop.ui.design.DrawnCheck
+import app.wallhop.ui.design.Fades
 import app.wallhop.ui.design.Radius
+import app.wallhop.ui.design.confirm
+import app.wallhop.ui.design.rememberAnimatedRows
+import app.wallhop.ui.design.rememberHaptics
+import app.wallhop.ui.design.staggerIn
 import app.wallhop.ui.design.Springs
 import app.wallhop.ui.design.Type
 import app.wallhop.ui.design.Wallhop
@@ -101,60 +111,74 @@ fun ConnectScreen(
         }
     }
 
+    val reduceMotion = Wallhop.a11y.reduceMotion
+    val macRows = rememberAnimatedRows(macs) { "${it.host}:${it.port}" }
     Page(
         title = "Connect your Mac",
         subtitle = "Open Lync on your Mac and keep both on the same Wi-Fi. Pair once and they stay connected.",
         bottomClearance = 32.dp,
     ) {
         item(key = "hero") {
-            HeroIllustration(active = true)
-            Spacer(Modifier.height(28.dp))
+            Column(Modifier.staggerIn(1)) {
+                HeroIllustration(active = true)
+                Spacer(Modifier.height(28.dp))
+            }
         }
         item(key = "scan") {
-            // The quickest way: scan the code in the Mac's menu bar panel.
-            WButton("Pair with QR code", onScan, modifier = Modifier.fillMaxWidth(), style = ButtonStyle.Filled, icon = WIcons.QrCode)
-            Spacer(Modifier.height(28.dp))
+            Column(Modifier.staggerIn(2)) {
+                // The quickest way: scan the code in the Mac's menu bar panel.
+                WButton("Pair with QR code", onScan, modifier = Modifier.fillMaxWidth(), style = ButtonStyle.Filled, icon = WIcons.QrCode)
+                Spacer(Modifier.height(28.dp))
+            }
         }
         item(key = "macs") {
-            SectionHeader("Macs on this Wi-Fi") { ActivityIndicator(size = 14.dp) }
-            InsetSection(dividerInset = 57.dp) {
-                if (macs.isEmpty()) {
-                    row {
-                        ListRow(
-                            title = "Looking for Macs…",
-                            subtitle = if (searchingLong) "Make sure Lync is open on your Mac and both are on the same Wi-Fi."
-                                else "Make sure Lync is open on your Mac. Look for the phone icon in the menu bar.",
-                            leading = { IconTile(WIcons.Laptop, colors.gray) },
-                        )
-                    }
-                    if (searchingLong) {
+            Column(Modifier.staggerIn(3)) {
+                SectionHeader("Macs on this Wi-Fi") { ActivityIndicator(size = 14.dp) }
+                InsetSection(dividerInset = 57.dp) {
+                    if (macRows.isEmpty()) {
                         row {
                             ListRow(
-                                title = "Enter the Mac's address",
-                                leading = { IconTile(WIcons.Wifi, colors.indigo) },
-                                chevron = true,
-                                onClick = { enterAddress() },
+                                title = "Looking for Macs…",
+                                subtitle = if (searchingLong) "Make sure Lync is open on your Mac and both are on the same Wi-Fi."
+                                    else "Make sure Lync is open on your Mac. Look for the phone icon in the menu bar.",
+                                leading = { IconTile(WIcons.Laptop, colors.gray) },
                             )
                         }
-                    }
-                } else {
-                    macs.forEach { mac ->
-                        row {
-                            ListRow(
-                                title = mac.name,
-                                subtitle = mac.host,
-                                leading = { IconTile(WIcons.Laptop, colors.gray) },
-                                chevron = true,
-                                onClick = { onPair(mac.host, mac.port, mac.name) },
-                            )
+                        if (searchingLong) {
+                            row {
+                                ListRow(
+                                    title = "Enter the Mac's address",
+                                    leading = { IconTile(WIcons.Wifi, colors.indigo) },
+                                    chevron = true,
+                                    onClick = { enterAddress() },
+                                )
+                            }
+                        }
+                    } else {
+                        // Macs come and go as they're found; each one slides in or out.
+                        macRows.forEach { entry ->
+                            val mac = entry.item
+                            row {
+                                AnimatedVisibility(entry.visible, enter = rowEnter(reduceMotion), exit = rowExit(reduceMotion)) {
+                                    ListRow(
+                                        title = mac.name,
+                                        subtitle = mac.host,
+                                        leading = { IconTile(WIcons.Laptop, colors.gray) },
+                                        chevron = true,
+                                        onClick = { onPair(mac.host, mac.port, mac.name) },
+                                    )
+                                }
+                            }
                         }
                     }
                 }
             }
         }
         item(key = "manual") {
-            Row(Modifier.fillMaxWidth().padding(top = 12.dp), horizontalArrangement = Arrangement.Center) {
-                TextAction("Enter the Mac's address instead", onClick = { enterAddress() })
+            Column(Modifier.staggerIn(4)) {
+                Row(Modifier.fillMaxWidth().padding(top = 12.dp), horizontalArrangement = Arrangement.Center) {
+                    TextAction("Enter the Mac's address instead", onClick = { enterAddress() })
+                }
             }
         }
     }
@@ -274,12 +298,18 @@ fun HeroIllustration(active: Boolean, modifier: Modifier = Modifier) {
     }
 }
 
-/** The 6-digit code to compare with the Mac (DESIGN.md §6.3). */
+/**
+ * The 6-digit code to compare with the Mac (DESIGN.md §6.3). With [success] the Mac said yes:
+ * the capsule turns green and a check draws in, just before the app moves on to the tabs.
+ */
 @Composable
-fun PairingScreen(state: LinkState.Pairing, onCancel: () -> Unit) {
+fun PairingScreen(state: LinkState.Pairing, onCancel: () -> Unit, success: Boolean = false) {
     val colors = Wallhop.colors
+    val reduceMotion = Wallhop.a11y.reduceMotion
+    val haptics = rememberHaptics()
+    LaunchedEffect(success) { if (success) haptics.confirm() }
     // Back stops the pairing rather than leaving it running behind the home screen.
-    BackHandler(onBack = onCancel)
+    BackHandler(enabled = !success, onBack = onCancel)
     GlassStage(
         modifier = Modifier.fillMaxSize(),
         background = colors.background,
@@ -291,23 +321,36 @@ fun PairingScreen(state: LinkState.Pairing, onCancel: () -> Unit) {
             ) {
                 AnimatedContent(
                     targetState = state.code,
-                    transitionSpec = { fadeIn() togetherWith fadeOut() },
+                    transitionSpec = { fadeIn(Fades.fadeIn()) togetherWith fadeOut(Fades.fadeOut()) },
                     label = "pairing",
                 ) { code ->
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         if (code == null) {
-                            HopDots(active = true, modifier = Modifier.size(width = 140.dp, height = 10.dp))
+                            // QR pairing: no code to compare, so success is just the check.
+                            Box(Modifier.size(width = 140.dp, height = 44.dp), contentAlignment = Alignment.Center) {
+                                if (success) DrawnCheck(colors.green, Modifier.size(44.dp), strokeWidth = 4.dp)
+                                else HopDots(active = true, modifier = Modifier.size(width = 140.dp, height = 10.dp))
+                            }
                             Spacer(Modifier.height(28.dp))
-                            Text("Connecting to ${state.macName}…", style = Type.title2, color = colors.label, textAlign = TextAlign.Center)
+                            Text(
+                                if (success) "Paired with ${state.macName}" else "Connecting to ${state.macName}…",
+                                style = Type.title2, color = colors.label, textAlign = TextAlign.Center,
+                            )
                         } else {
                             Text("Pairing code", style = Type.title1, color = colors.label)
                             Spacer(Modifier.height(24.dp))
-                            val appear by animateFloatAsState(1f, Springs.bouncy(), label = "codeAppear")
+                            // The capsule settles in as the digits drop, and goes green on success.
+                            val appear = remember { Animatable(if (reduceMotion) 1f else 0.92f) }
+                            LaunchedEffect(Unit) { appear.animateTo(1f, Springs.bouncy()) }
+                            val capsuleColor by animateColorAsState(
+                                if (success) colors.green.copy(alpha = 0.28f) else colors.backgroundElevated,
+                                Springs.smooth(), label = "capsule",
+                            )
                             Box(
                                 Modifier
-                                    .scale(appear)
+                                    .graphicsLayer { scaleX = appear.value; scaleY = appear.value }
                                     .clip(capsule())
-                                    .background(colors.backgroundElevated)
+                                    .background(capsuleColor)
                                     .padding(horizontal = 28.dp, vertical = 16.dp),
                             ) {
                                 CodeDisplay(code)
@@ -320,9 +363,24 @@ fun PairingScreen(state: LinkState.Pairing, onCancel: () -> Unit) {
                                 textAlign = TextAlign.Center,
                             )
                             Spacer(Modifier.height(28.dp))
-                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                ActivityIndicator(size = 16.dp)
-                                Text("Waiting for your Mac", style = Type.footnote, color = colors.labelSecondary)
+                            AnimatedContent(
+                                targetState = success,
+                                transitionSpec = { fadeIn(Fades.fadeIn()) togetherWith fadeOut(Fades.fadeOut()) },
+                                label = "pairingStatus",
+                            ) { paired ->
+                                Row(
+                                    Modifier.height(24.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                ) {
+                                    if (paired) {
+                                        DrawnCheck(colors.green, Modifier.size(22.dp))
+                                        Text("Paired", style = Type.headline, color = colors.green)
+                                    } else {
+                                        ActivityIndicator(size = 16.dp)
+                                        Text("Waiting for your Mac", style = Type.footnote, color = colors.labelSecondary)
+                                    }
+                                }
                             }
                         }
                     }
@@ -333,6 +391,7 @@ fun PairingScreen(state: LinkState.Pairing, onCancel: () -> Unit) {
             WButton(
                 "Cancel",
                 onClick = onCancel,
+                enabled = !success,
                 style = ButtonStyle.Glass,
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
@@ -343,3 +402,10 @@ fun PairingScreen(state: LinkState.Pairing, onCancel: () -> Unit) {
         },
     )
 }
+
+/** A row joining a plain list: it opens up and fades in; leaving reverses it (DESIGN.md §7.2). */
+internal fun rowEnter(reduceMotion: Boolean) =
+    if (reduceMotion) fadeIn(Fades.fadeIn()) else expandVertically(Springs.smooth()) + fadeIn(Fades.fadeIn())
+
+internal fun rowExit(reduceMotion: Boolean) =
+    if (reduceMotion) fadeOut(Fades.fadeOut()) else shrinkVertically(Springs.smooth()) + fadeOut(Fades.fadeOut())

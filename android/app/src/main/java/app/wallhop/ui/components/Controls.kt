@@ -47,6 +47,7 @@ import app.wallhop.ui.design.Springs
 import app.wallhop.ui.design.Type
 import app.wallhop.ui.design.Wallhop
 import app.wallhop.ui.design.capsule
+import app.wallhop.ui.design.pressScale
 import app.wallhop.ui.design.rememberHaptics
 import app.wallhop.ui.design.tappable
 import kotlin.math.PI
@@ -74,8 +75,11 @@ fun WSwitch(
 ) {
     val home = Wallhop.home
     val haptics = rememberHaptics()
+    val reduceMotion = Wallhop.a11y.reduceMotion
     val source = interactionSource ?: remember { MutableInteractionSource() }
     val pressed by source.collectIsPressedAsState()
+    // Under a finger the thumb also stretches sideways, toward the middle (DESIGN.md §5.6).
+    val stretch by animateDpAsState(if (pressed && enabled && !reduceMotion) 6.dp else 0.dp, Springs.snappy(), label = "thumbStretch")
     val track by animateColorAsState(if (checked) home.pale else Color.Transparent, Springs.snappy(), label = "track")
     val outline by animateColorAsState(if (checked) home.pale else Color.White.copy(alpha = 0.45f), Springs.snappy(), label = "outline")
     val thumbColor by animateColorAsState(if (checked) home.onPale else Color.White.copy(alpha = 0.6f), Springs.snappy(), label = "thumb")
@@ -109,11 +113,13 @@ fun WSwitch(
             ),
         contentAlignment = Alignment.CenterStart,
     ) {
-        // Thumb centre runs from 16 dp to 36 dp.
+        // Thumb centre runs from 16 dp to 36 dp; a stretch grows it toward the other end.
+        val thumbWidth = thumb + stretch
+        val centre = 16.dp + 20.dp * travel + stretch / 2 * (1f - 2f * travel)
         Box(
             Modifier
-                .offset(x = 16.dp + 20.dp * travel - thumb / 2)
-                .size(thumb)
+                .offset(x = centre - thumbWidth / 2)
+                .size(thumbWidth, thumb)
                 .clip(capsule())
                 .background(thumbColor),
         )
@@ -162,6 +168,7 @@ fun SegmentedControl(
                     Modifier
                         .weight(1f)
                         .fillMaxHeight()
+                        .pressScale(source, 0.95f)
                         .clip(capsule())
                         .tappable(source, role = Role.Tab) {
                             if (index != selected) {
@@ -244,6 +251,57 @@ fun ProgressBar(progress: Float?, modifier: Modifier = Modifier, color: Color = 
                     .width(maxWidth * 0.4f)
                     .clip(capsule())
                     .background(color),
+            )
+        }
+    }
+}
+
+/**
+ * A small progress ring for transfers (DESIGN.md §5.13). Updates arrive up to 10 times a
+ * second; the ring glides between them on spring.smooth. When [done], it fills, then turns
+ * into a check with a pop.
+ */
+@Composable
+fun ProgressCheck(
+    progress: Float,
+    done: Boolean,
+    modifier: Modifier = Modifier,
+    color: Color = Wallhop.colors.green,
+    track: Color = Color.White.copy(alpha = 0.25f),
+) {
+    val reduceMotion = Wallhop.a11y.reduceMotion
+    val shown by animateFloatAsState(
+        if (done) 1f else progress.coerceIn(0f, 1f),
+        if (reduceMotion) androidx.compose.animation.core.snap() else Springs.smooth(),
+        label = "ring",
+    )
+    // The check waits for the ring to close, then pops in as the ring fades.
+    val check by animateFloatAsState(
+        if (done && (shown > 0.97f || reduceMotion)) 1f else 0f,
+        if (reduceMotion) androidx.compose.animation.core.snap() else Springs.bouncy(),
+        label = "check",
+    )
+    Box(modifier, contentAlignment = Alignment.Center) {
+        Canvas(Modifier.fillMaxSize().graphicsLayer { alpha = (1f - check).coerceIn(0f, 1f) }) {
+            val stroke = size.minDimension * 0.18f
+            val inset = stroke / 2
+            val arc = androidx.compose.ui.geometry.Size(size.width - stroke, size.height - stroke)
+            drawCircle(track, radius = size.minDimension / 2 - inset, style = androidx.compose.ui.graphics.drawscope.Stroke(stroke))
+            drawArc(
+                color, -90f, 360f * shown, false,
+                topLeft = Offset(inset, inset), size = arc,
+                style = androidx.compose.ui.graphics.drawscope.Stroke(stroke, cap = StrokeCap.Round),
+            )
+        }
+        if (check > 0.01f) {
+            androidx.compose.material3.Icon(
+                app.wallhop.ui.design.WIcons.CheckCircle, null, tint = color,
+                modifier = Modifier.fillMaxSize().graphicsLayer {
+                    val s = 0.6f + 0.4f * check
+                    scaleX = s
+                    scaleY = s
+                    alpha = check.coerceIn(0f, 1f)
+                },
             )
         }
     }

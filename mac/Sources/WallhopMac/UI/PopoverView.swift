@@ -17,11 +17,30 @@ struct PanelView: View {
     @ObservedObject var theme: ThemeStore
     /// Notch mode draws a black band at the top so the panel grows out of the notch.
     var fromNotch: Bool
+    /// The page on screen. Follows `model.panelPage` a frame later, once `forward` is set, so
+    /// the page leaving slides the right way too.
+    @State private var page: PanelPage
+    /// Going deeper (Home › Settings › Add a phone) pushes from the trailing edge; back pops.
+    @State private var forward = true
+    @Environment(\.panelRevealed) private var revealed
+
+    init(model: AppModel, theme: ThemeStore, fromNotch: Bool) {
+        self.model = model
+        self.theme = theme
+        self.fromNotch = fromNotch
+        _page = State(initialValue: model.panelPage)
+    }
 
     var body: some View {
         VStack(spacing: 0) {
             if fromNotch { Color.clear.frame(height: max(model.notchHeight, 0)) }
-            content
+            // Pages overlap while one slides out and the next slides in; the panel springs to the
+            // new page's height.
+            ZStack(alignment: .top) {
+                content
+                    .id(page)
+                    .transition(pageTransition)
+            }
         }
         .frame(width: 380)
         .background(background)
@@ -29,11 +48,14 @@ struct PanelView: View {
             if let toast = model.toast {
                 ToastView(model: model, toast: toast)
                     .padding(.bottom, 16)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                    .transition(WMotion.transition(.asymmetric(
+                        insertion: .move(edge: .bottom).combined(with: .opacity).animation(WMotion.bouncy),
+                        removal: .offset(y: 10).combined(with: .opacity).animation(.easeOut(duration: 0.18)))))
                     .id(toast.id)
             }
         }
-        .animation(.spring(response: 0.3, dampingFraction: 0.85), value: model.toast)
+        .animation(WMotion.animation(WMotion.bouncy), value: model.toast)
+        .onChange(of: model.panelPage) { _, next in turn(to: next) }
         .environmentObject(theme)
         .foregroundStyle(.white)
         .font(.wh(13))
@@ -50,10 +72,37 @@ struct PanelView: View {
         )
     }
 
+    private var pageTransition: AnyTransition {
+        let insertion: AnyTransition = .move(edge: forward ? .trailing : .leading).combined(with: .opacity)
+        let removal: AnyTransition = AnyTransition.move(edge: forward ? .leading : .trailing)
+            .combined(with: .opacity).combined(with: .collapsingHeight)
+        if WMotion.reduceMotion { return .asymmetric(insertion: .opacity, removal: AnyTransition.opacity.combined(with: .collapsingHeight)) }
+        return .asymmetric(insertion: insertion, removal: removal)
+    }
+
+    private func turn(to next: PanelPage) {
+        guard next != page else { return }
+        // Closed or still opening (or closing): no slide, just show it.
+        guard model.panelOpen, revealed else {
+            page = next
+            return
+        }
+        forward = Self.depth(next) > Self.depth(page)
+        DispatchQueue.main.async { withMotion(WMotion.smooth) { page = next } }
+    }
+
+    private static func depth(_ page: PanelPage) -> Int {
+        switch page {
+        case .home: return 0
+        case .settings: return 1
+        case .addPhone: return 2
+        }
+    }
+
     @ViewBuilder private var content: some View {
-        switch model.panelPage {
-        case .settings: SettingsPage(model: model)
-        case .addPhone: AddPhonePage(model: model)
+        switch page {
+        case .settings: SettingsPage(model: model).revealSection(0)
+        case .addPhone: AddPhonePage(model: model).revealSection(0)
         case .home:
             if !model.isPaired && model.pairingRequest == nil {
                 OnboardingPage(model: model)
@@ -76,7 +125,7 @@ struct ToastView: View {
             Text(toast.message).font(.wh(12, .semibold)).lineLimit(1)
             if let title = toast.actionTitle {
                 Button(title) { model.runToastAction() }
-                    .buttonStyle(.plain)
+                    .buttonStyle(WPlainPress())
                     .font(.wh(12, .semibold))
                     .foregroundStyle(theme.theme.pale)
                     .padding(.leading, 4)
@@ -98,44 +147,79 @@ struct ToastView: View {
 private struct HomePage: View {
     @ObservedObject var model: AppModel
     @EnvironmentObject var theme: ThemeStore
+    /// 0…1, a single glow on the phone's name when it connects.
+    @State private var glow: CGFloat = 0
+
+    private var listTransition: AnyTransition {
+        WMotion.transition(.asymmetric(insertion: .move(edge: .top).combined(with: .opacity),
+                                       removal: .opacity.combined(with: .scale(scale: 0.96))))
+    }
 
     var body: some View {
         MaybeScroll {
             VStack(alignment: .leading, spacing: 0) {
-                header
+                header.revealSection(0)
                 if model.pairingRequest != nil {
-                    PairingCard(model: model).padding(.top, 16)
+                    PairingCard(model: model).padding(.top, 16).revealSection(1)
+                        .transition(WMotion.transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .top))))
                 }
-                sendRow.padding(.top, 18)
+                sendRow.padding(.top, 18).revealSection(1)
                 if let outgoing = model.outgoing {
                     ProgressView(value: outgoing.progress)
                         .progressViewStyle(.linear)
                         .tint(theme.theme.pale)
+                        .animation(WMotion.animation(WMotion.smooth), value: outgoing.progress)
                         .padding(.top, 12)
+                        .transition(.opacity)
                 }
-                if let code = model.latestCode {
-                    LatestCodeCard(model: model, code: code).padding(.top, 18)
+                Group {
+                    if let code = model.latestCode {
+                        LatestCodeCard(model: model, code: code).padding(.top, 18)
+                            .transition(WMotion.transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .top))))
+                    }
+                    if let playing = model.nowPlaying {
+                        NowPlayingCard(model: model, playing: playing).padding(.top, 14)
+                            .transition(.opacity)
+                    }
                 }
-                if let playing = model.nowPlaying {
-                    NowPlayingCard(model: model, playing: playing).padding(.top, 14)
-                }
+                .revealSection(2)
                 if !model.notifications.isEmpty {
-                    SectionTitle("Notifications", action: ("Clear all", { model.dismissAllNotifications() })).padding(.top, 22)
                     Group {
+                        SectionTitle("Notifications", action: ("Clear all", { model.dismissAllNotifications() })).padding(.top, 22)
                         VStack(spacing: 0) {
                             ForEach(Array(model.notifications.prefix(6).enumerated()), id: \.element.id) { index, notification in
-                                if index > 0 { Divider().overlay(Color.white.opacity(0.08)).padding(.leading, 56) }
-                                NotificationRow(model: model, notification: notification)
+                                VStack(spacing: 0) {
+                                    if index > 0 { Divider().overlay(Color.white.opacity(0.08)).padding(.leading, 56) }
+                                    NotificationRow(model: model, notification: notification)
+                                }
+                                .transition(listTransition)
                             }
                         }
+                        .background(RoundedRectangle(cornerRadius: WRadius.group, style: .continuous).fill(WTheme.surface))
+                        .clipShape(RoundedRectangle(cornerRadius: WRadius.group, style: .continuous))
+                        .padding(.top, 10)
                     }
-                    .background(RoundedRectangle(cornerRadius: WRadius.group, style: .continuous).fill(WTheme.surface))
-                    .padding(.top, 10)
+                    .transition(.opacity)
+                    .revealSection(3)
                 }
-                SectionTitle("Recent", action: model.activity.isEmpty ? nil : ("Clear", { model.clearActivity() })).padding(.top, 22)
-                RecentList(model: model).padding(.top, 10)
+                Group {
+                    SectionTitle("Recent", action: model.activity.isEmpty ? nil : ("Clear", { model.clearActivity() })).padding(.top, 22)
+                    RecentList(model: model).padding(.top, 10)
+                }
+                .revealSection(4)
             }
             .padding(20)
+            .onChange(of: model.connectedPhone?.id) { old, new in
+                guard new != nil, old == nil, model.panelOpen, !WMotion.reduceMotion else { return }
+                withAnimation(.easeOut(duration: 0.25)) { glow = 1 }
+                withAnimation(.easeInOut(duration: 0.9).delay(0.25)) { glow = 0 }
+            }
+            // Rows coming and going (and Undo bringing them back) move the rest smoothly.
+            .animation(WMotion.animation(WMotion.smooth), value: model.notifications.map(\.key))
+            .animation(WMotion.animation(WMotion.smooth), value: model.activity.map(\.id))
+            .animation(WMotion.animation(WMotion.smooth), value: model.latestCode?.code)
+            .animation(WMotion.animation(WMotion.smooth), value: model.pairingRequest != nil)
+            .animation(WMotion.animation(WMotion.smooth), value: model.outgoing == nil)
         }
         .frame(maxHeight: 600)
         .fixedSize(horizontal: false, vertical: true)
@@ -146,10 +230,21 @@ private struct HomePage: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text(model.connectedPhone == nil ? "Your phone" : "Connected")
                     .font(.wh(12, .semibold)).tracking(0.1).foregroundStyle(WTheme.secondary)
+                    .contentTransition(.opacity)
                 Text(model.connectedPhone?.name ?? model.pairedPhones.first?.name ?? "Your phone")
                     .font(.wh(24, .medium)).lineLimit(1)
-                Text(statusLine).font(.wh(13, .medium)).foregroundStyle(WTheme.secondary)
-                    .lineLimit(model.listening ? 1 : 2).fixedSize(horizontal: false, vertical: true)
+                    // One soft glow when the phone connects.
+                    .shadow(color: theme.theme.pale.opacity(0.7 * glow), radius: 14)
+                    .scaleEffect(1 + 0.015 * glow, anchor: .leading)
+                HStack(spacing: 6) {
+                    Text(statusLine).font(.wh(13, .medium)).foregroundStyle(WTheme.secondary)
+                        .lineLimit(model.listening ? 1 : 2).fixedSize(horizontal: false, vertical: true)
+                        .contentTransition(.numericText())
+                    if looking && model.panelOpen {
+                        LookingDots().foregroundStyle(WTheme.secondary).transition(.opacity)
+                    }
+                }
+                .animation(WMotion.animation(WMotion.smooth), value: statusLine)
                 if model.listenFailed && model.connectedPhone == nil {
                     Button("Try again") { model.retryListening() }
                         .buttonStyle(WPill(compact: true)).padding(.top, 6)
@@ -170,6 +265,9 @@ private struct HomePage: View {
                 .accessibilityLabel("Settings")
         }
     }
+
+    /// Listening, no phone yet: the only state with a running indicator.
+    private var looking: Bool { model.listening && model.connectedPhone == nil }
 
     private var statusLine: String {
         if model.connectedPhone != nil {
@@ -210,7 +308,7 @@ private struct SectionTitle: View {
             Text(title).font(.wh(18, .medium))
             Spacer()
             if let action {
-                Button(action.0, action: action.1).buttonStyle(.plain).font(.wh(12, .semibold)).foregroundStyle(WTheme.secondary)
+                Button(action.0, action: action.1).buttonStyle(WPlainPress()).font(.wh(12, .semibold)).foregroundStyle(WTheme.secondary)
             }
         }
     }
@@ -226,7 +324,7 @@ private struct LatestCodeCard: View {
         HStack(alignment: .center, spacing: 12) {
             VStack(alignment: .leading, spacing: 6) {
                 Text("Latest code").font(.wh(12, .semibold)).tracking(0.1).foregroundStyle(.white.opacity(0.8))
-                Text(spaced(code.code)).font(.wh(30, .semibold).monospacedDigit()).tracking(2)
+                RollingCode(code: code.code, font: .wh(30, .semibold).monospacedDigit(), tracking: 2).id(code.code)
                 Text((code.sender.isEmpty ? "Verification code" : code.sender) + " · on your clipboard")
                     .font(.wh(12, .medium)).foregroundStyle(.white.opacity(0.8)).lineLimit(1)
             }
@@ -247,7 +345,7 @@ struct PeekPill: ButtonStyle {
             .foregroundStyle(theme.theme.onPeekPale)
             .padding(.horizontal, 16).frame(height: 36)
             .background(Capsule().fill(theme.theme.peekPale))
-            .scaleEffect(configuration.isPressed ? 0.96 : 1)
+            .modifier(WInteractive(shape: Capsule(), pressed: configuration.isPressed))
     }
 }
 
@@ -279,10 +377,11 @@ private struct NowPlayingCard: View {
                 .help("Previous").accessibilityLabel("Previous")
             Button { model.media("toggle") } label: {
                 Image(systemName: playing.playing ? "pause.fill" : "play.fill")
+                    .contentTransition(.symbolEffect(.replace))
                     .font(.wh(15, .semibold)).foregroundStyle(theme.theme.onPale)
                     .frame(width: 42, height: 42).background(Circle().fill(theme.theme.pale))
             }
-            .buttonStyle(.plain)
+            .buttonStyle(WShapePress(shape: Circle()))
             .help(playing.playing ? "Pause" : "Play")
             .accessibilityLabel(playing.playing ? "Pause" : "Play")
             Button { model.media("next") } label: { Image(systemName: "forward.fill") }.buttonStyle(WRound(size: 32))
@@ -327,6 +426,7 @@ private struct NotificationRow: View {
         }
         .padding(12)
         .contentShape(Rectangle())
+        .rowHover()
         .onHover { hovering = $0 }
         // Keyboard: Tab to the row shows its buttons; Return replies.
         .focusable()
@@ -363,14 +463,21 @@ private struct RecentList: View {
             }
             .frame(maxWidth: .infinity).padding(.vertical, 22).padding(.horizontal, 20)
             .background(RoundedRectangle(cornerRadius: WRadius.group, style: .continuous).fill(WTheme.surface))
+            .transition(.opacity)
         } else {
             VStack(spacing: 0) {
                 ForEach(Array(model.activity.prefix(12).enumerated()), id: \.element.id) { index, item in
-                    if index > 0 { Divider().overlay(Color.white.opacity(0.08)).padding(.leading, 56) }
-                    RecentRow(model: model, item: item)
+                    VStack(spacing: 0) {
+                        if index > 0 { Divider().overlay(Color.white.opacity(0.08)).padding(.leading, 56) }
+                        RecentRow(model: model, item: item)
+                    }
+                    .transition(WMotion.transition(.asymmetric(insertion: .move(edge: .top).combined(with: .opacity),
+                                                               removal: .opacity.combined(with: .scale(scale: 0.96)))))
                 }
             }
             .background(RoundedRectangle(cornerRadius: WRadius.group, style: .continuous).fill(WTheme.surface))
+            .clipShape(RoundedRectangle(cornerRadius: WRadius.group, style: .continuous))
+            .transition(.opacity)
         }
     }
 }
@@ -381,10 +488,17 @@ private struct RecentRow: View {
     let item: ActivityItem
     /// Bumped by a click on a code or text row: its Copy button copies and says "Copied".
     @State private var copyTrigger = 0
+    /// Bumped when a transfer in this row fails while it's on screen: the icon shakes once.
+    @State private var failShakes = 0
+
+    private var failed: Bool {
+        if case .files(let batch) = item.payload { return batch.finished && batch.files.isEmpty }
+        return false
+    }
 
     var body: some View {
         HStack(spacing: 12) {
-            leading.frame(width: 32)
+            leading.frame(width: 32).shake(failShakes)
             VStack(alignment: .leading, spacing: 2) {
                 title
                 Text(subtitle).font(.wh(12, .medium)).foregroundStyle(WTheme.secondary).lineLimit(1)
@@ -394,6 +508,8 @@ private struct RecentRow: View {
         }
         .padding(12)
         .contentShape(Rectangle())
+        .rowHover()
+        .onChange(of: failed) { _, now in if now { failShakes += 1 } }
         .onTapGesture { if copyable { copyTrigger += 1 } }
         .modifier(FileDrag(url: files.first))
         .contextMenu {
@@ -527,7 +643,8 @@ private struct PairingCard: View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Pair with \(model.pairingRequest?.phoneName ?? "your phone")?")
                 .font(.wh(12, .semibold)).tracking(0.1).foregroundStyle(WTheme.secondary).lineLimit(1)
-            Text(spaced(model.pairingRequest?.code ?? "")).font(.wh(30, .semibold).monospacedDigit()).tracking(3)
+            RollingCode(code: model.pairingRequest?.code ?? "", font: .wh(30, .semibold).monospacedDigit(), tracking: 3, from: .top)
+                .id(model.pairingRequest?.code ?? "")
             Text("Check your phone shows the same code.").font(.wh(12, .medium)).foregroundStyle(WTheme.secondary)
             HStack(spacing: 8) {
                 Button("Pair") { model.decidePairing(true) }.buttonStyle(WPill()).keyboardShortcut(.defaultAction)
@@ -554,7 +671,8 @@ private struct OnboardingPage: View {
                 Button { model.panelPage = .settings } label: { Image(systemName: "gearshape") }.buttonStyle(WRound(size: 34))
                     .help("Settings").accessibilityLabel("Settings")
             }
-            PairingQR(model: model)
+            .revealSection(0)
+            PairingQR(model: model).revealSection(1)
             VStack(alignment: .leading, spacing: 10) {
                 step(1, "Install Lync on your Android phone")
                 step(2, "Join the same Wi‑Fi as this Mac")
@@ -563,6 +681,7 @@ private struct OnboardingPage: View {
             .padding(14)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(RoundedRectangle(cornerRadius: WRadius.group, style: .continuous).fill(WTheme.surface))
+            .revealSection(2)
         }
         .padding(20)
     }
@@ -626,8 +745,9 @@ private struct SettingsPage: View {
                                 .foregroundStyle(on ? theme.theme.onPale : .white)
                                 .frame(maxWidth: .infinity).frame(height: 40)
                                 .background(Capsule().fill(on ? theme.theme.pale : WTheme.chip))
+                                .animation(WMotion.animation(WMotion.snappy), value: on)
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(WShapePress(shape: Capsule()))
                         .disabled(!available)
                         .opacity(available ? 1 : 0.4)
                     }
@@ -667,14 +787,17 @@ private struct SettingsPage: View {
 
                 group("Phones") {
                     ForEach(model.pairedPhones) { phone in
-                        if model.confirmingForget == phone.id {
-                            forgetConfirmation(phone)
-                        } else {
-                            row(phone.name) {
-                                Button("Forget") { model.confirmingForget = phone.id }
-                                    .buttonStyle(WPill(prominent: false, compact: true))
+                        Group {
+                            if model.confirmingForget == phone.id {
+                                forgetConfirmation(phone)
+                            } else {
+                                row(phone.name) {
+                                    Button("Forget") { model.confirmingForget = phone.id }
+                                        .buttonStyle(WPill(prominent: false, compact: true))
+                                }
                             }
                         }
+                        .transition(.opacity)
                         divider
                     }
                     row("Add a phone") {
@@ -698,6 +821,10 @@ private struct SettingsPage: View {
                 .padding(.top, 22)
             }
             .padding(20)
+            // Forget's confirmation opens in place; muted apps come and go.
+            .animation(WMotion.animation(WMotion.smooth), value: model.confirmingForget)
+            .animation(WMotion.animation(WMotion.smooth), value: model.mutedApps.count)
+            .animation(WMotion.animation(WMotion.smooth), value: model.pairedPhones.map(\.id))
         }
         .frame(maxHeight: 600)
         .fixedSize(horizontal: false, vertical: true)
@@ -708,6 +835,7 @@ private struct SettingsPage: View {
             Text(title).font(.wh(14, .semibold))
             VStack(spacing: 0) { content() }
                 .background(RoundedRectangle(cornerRadius: WRadius.group, style: .continuous).fill(WTheme.surface))
+                .clipShape(RoundedRectangle(cornerRadius: WRadius.group, style: .continuous))
         }
         .padding(.top, 22)
     }
@@ -743,6 +871,7 @@ private struct SettingsPage: View {
         }
         .padding(.horizontal, 14)
         .frame(minHeight: 48)
+        .rowHover()
     }
 }
 
@@ -761,7 +890,7 @@ struct WSwitch: View {
                     .padding(.horizontal, isOn ? 4 : 7)
             }
             .frame(width: 44, height: 26)
-            .animation(.spring(response: 0.25, dampingFraction: 0.8), value: isOn)
+            .animation(WMotion.animation(WMotion.snappy), value: isOn)
         }
         .buttonStyle(.plain)
         .accessibilityAddTraits(.isToggle)
@@ -799,6 +928,8 @@ struct CopyButton<S: ButtonStyle>: View {
     let action: () -> Void
     @State private var copied: Bool
     @State private var resetToken = 0
+    /// Bumped on each copy: the checkmark bounces once.
+    @State private var bounces = 0
 
     init(iconOnly: Bool = false, style: S, startCopied: Bool = false, trigger: Int = 0, action: @escaping () -> Void) {
         self.iconOnly = iconOnly
@@ -811,29 +942,43 @@ struct CopyButton<S: ButtonStyle>: View {
     var body: some View {
         Group {
             if copied && iconOnly {
-                Button(action: copy) { Label("Copied", systemImage: "checkmark") }
-                    .buttonStyle(WPill(prominent: false, compact: true))
-                    .transition(.scale(scale: 0.8).combined(with: .opacity))
+                Button(action: copy) {
+                    Label { Text("Copied") } icon: { check }
+                }
+                .buttonStyle(WPill(prominent: false, compact: true))
+                .transition(WMotion.transition(.scale(scale: 0.8).combined(with: .opacity)))
             } else if iconOnly {
                 Button(action: copy) { Image(systemName: "doc.on.doc") }.buttonStyle(style)
-                    .transition(.scale(scale: 0.8).combined(with: .opacity))
+                    .transition(WMotion.transition(.scale(scale: 0.8).combined(with: .opacity)))
             } else {
                 Button(action: copy) {
-                    Label(copied ? "Copied" : "Copy", systemImage: copied ? "checkmark" : "doc.on.doc")
-                        .contentTransition(.symbolEffect(.replace))
+                    Label {
+                        // The label crossfades; the icon morphs into a check and bounces.
+                        Text(copied ? "Copied" : "Copy").contentTransition(.interpolate)
+                    } icon: {
+                        Image(systemName: copied ? "checkmark" : "doc.on.doc")
+                            .contentTransition(.symbolEffect(.replace))
+                            .symbolEffect(.bounce, value: bounces)
+                    }
                 }
                 .buttonStyle(style)
             }
         }
         .help(copied ? "Copied" : "Copy")
         .accessibilityLabel(copied ? "Copied" : "Copy")
-        .animation(.spring(response: 0.3, dampingFraction: 0.8), value: copied)
+        .animation(WMotion.animation(WMotion.snappy), value: copied)
         .onChange(of: trigger) { _, _ in copy() }
+    }
+
+    private var check: some View {
+        Image(systemName: "checkmark").symbolEffect(.bounce, value: bounces)
     }
 
     private func copy() {
         action()
         copied = true
+        // A beat later, so the checkmark is on screen when it bounces.
+        if !WMotion.reduceMotion { DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) { bounces += 1 } }
         resetToken += 1
         let token = resetToken
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
