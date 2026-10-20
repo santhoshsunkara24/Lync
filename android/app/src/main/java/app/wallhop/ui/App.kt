@@ -94,10 +94,14 @@ import app.wallhop.ui.screens.MacDetails
 import app.wallhop.ui.screens.openAppDetails
 import app.wallhop.ui.screens.openLink
 import app.wallhop.ui.screens.showEntryActions
+import app.wallhop.ui.screens.tapEntry
+import app.wallhop.ui.screens.GuidedSetup
+import app.wallhop.ui.screens.SetupSteps
 import app.wallhop.ui.components.FloatingTabBar
 import app.wallhop.ui.components.GlassStage
 import app.wallhop.ui.components.MenuItem
 import app.wallhop.ui.components.OverlayHost
+import app.wallhop.ui.components.ReceivedPopup
 import app.wallhop.ui.components.Overlays
 import app.wallhop.ui.components.TabItem
 import app.wallhop.ui.components.PillNavBar
@@ -147,6 +151,14 @@ fun WallhopRoot(link: LinkManager, demo: Boolean = false) {
     }
 
     var tab by rememberSaveable { mutableIntStateOf(0) }
+    // A notification asked for a tab (e.g. Activity for files from the Mac).
+    val requestedTab by AppNav.tab.collectAsStateWithLifecycle()
+    LaunchedEffect(requestedTab) {
+        requestedTab?.let { tab = it; AppNav.tab.value = null }
+    }
+    // Files that just arrived from the Mac while Lync is open: the popup above everything.
+    var received by remember { mutableStateOf<app.wallhop.link.ReceivedBatch?>(null) }
+    LaunchedEffect(link) { link.received.collect { received = it } }
     var showApps by rememberSaveable { mutableStateOf(false) }
     var showLicences by rememberSaveable { mutableStateOf(false) }
     var minimized by remember { mutableStateOf(false) }
@@ -209,7 +221,8 @@ fun WallhopRoot(link: LinkManager, demo: Boolean = false) {
         content = {
             AnimatedContent(
                 targetState = screen,
-                modifier = Modifier.nestedScroll(minimizer),
+                // While a sheet, alert or menu is up, TalkBack only sees that.
+                modifier = Modifier.nestedScroll(minimizer).then(if (overlays.modal) Modifier.clearAndSetSemantics { } else Modifier),
                 transitionSpec = { fadeIn(tween(Durations.Fade + 20)) togetherWith fadeOut(tween(Durations.Fade - 20)) },
                 label = "root",
             ) { screen ->
@@ -263,7 +276,7 @@ fun WallhopRoot(link: LinkManager, demo: Boolean = false) {
             ) {
                 PillNavBar(
                     tabs = listOf(
-                        TabItem("Mac", WIcons.Laptop),
+                        TabItem("Home", WIcons.Laptop),
                         TabItem("Activity", WIcons.Activity),
                         TabItem("Settings", WIcons.Settings, badge = !setup.essentialsDone),
                     ),
@@ -272,9 +285,11 @@ fun WallhopRoot(link: LinkManager, demo: Boolean = false) {
                     modifier = Modifier
                         .navigationBarsPadding()
                         .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal))
-                        .padding(bottom = 12.dp),
+                        .padding(bottom = 12.dp)
+                        .then(if (overlays.modal) Modifier.clearAndSetSemantics { } else Modifier),
                 )
             }
+            ReceivedPopup(received, onDismiss = { received = null }, bottom = if (screen == 2) 88.dp else 16.dp)
             OverlayHost(overlays)
         },
     )
@@ -327,37 +342,56 @@ private fun Tabs(
     val currentOnPermissionChange by rememberUpdatedState(onPermissionChange)
     val currentSetup by rememberUpdatedState(setup)
 
-    // Permission requests. [asking] is the feature waiting for Android's answer.
+    // Permission requests. [asking] is the feature waiting for Android's answer; [askingFor] the
+    // permissions asked, required ones first, then "|" and the optional ones.
     val asking = rememberSaveable { mutableStateOf<String?>(null) }
     val askingFor = rememberSaveable { mutableStateOf("") }
-    fun answered(granted: Boolean) {
+    // The guided setup moves on once Android has answered.
+    val afterAnswer = remember { mutableStateOf<((Boolean) -> Unit)?>(null) }
+    fun granted(permission: String) = ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
+    val asked = remember { context.getSharedPreferences("permissions", Context.MODE_PRIVATE) }
+    /** A permission Android won't ask for again (denied twice, or "Don't ask again"): the first such, or null. */
+    fun blocked(permissions: List<String>): String? = permissions.firstOrNull { permission ->
+        activityHost != null && asked.getBoolean(permission, false) && !granted(permission) &&
+            !ActivityCompat.shouldShowRequestPermissionRationale(activityHost, permission)
+    }
+    fun answered() {
         val key = asking.value?.let { runCatching { Features.Key.valueOf(it) }.getOrNull() }
-        val permissions = askingFor.value.split(',').filter { it.isNotEmpty() }
+        val (requiredText, optionalText) = askingFor.value.split('|').let { it.getOrElse(0) { "" } to it.getOrElse(1) { "" } }
+        val required = requiredText.split(',').filter { it.isNotEmpty() }
+        val optional = optionalText.split(',').filter { it.isNotEmpty() }
         asking.value = null
-        if (!granted && key != null) {
+        // Only the required ones decide: Contacts, say, is a nice extra for Calls and Texts.
+        val ok = required.all(::granted)
+        if (!ok && key != null) {
             // Denied: the switch goes off, so the setup badge doesn't nag about it.
             Features.set(context, key, false)
-            val asked = context.getSharedPreferences("permissions", Context.MODE_PRIVATE)
-            val blocked = activityHost != null && permissions.any { permission ->
-                asked.getBoolean(permission, false) &&
-                    ContextCompat.checkSelfPermission(context, permission) != PackageManager.PERMISSION_GRANTED &&
-                    !ActivityCompat.shouldShowRequestPermissionRationale(activityHost, permission)
-            }
-            if (blocked) showBlockedAlert(overlays, context, key)
+            val missing = required.firstOrNull { !granted(it) }.orEmpty()
+            val stuck = blocked(required.filter { asked.getBoolean(it, false) })
+            if (stuck != null) showBlockedAlert(overlays, context, key, stuck)
+            else overlays.toast(app.wallhop.core.Wording.deniedToast(key, missing), WIcons.Warning)
         }
-        context.getSharedPreferences("permissions", Context.MODE_PRIVATE).edit {
-            permissions.forEach { putBoolean(it, true) }
-        }
+        asked.edit { (required + optional).forEach { putBoolean(it, true) } }
         currentOnPermissionChange()
+        afterAnswer.value?.invoke(ok)
+        afterAnswer.value = null
     }
-    val single = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { answered(it) }
-    val multiple = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
-        answered(result.isNotEmpty() && result.values.all { it })
-    }
-    fun request(key: Features.Key, vararg permissions: String) {
+    val multiple = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { answered() }
+    fun request(key: Features.Key, required: Array<String>, optional: Array<String> = emptyArray()) {
+        Features.set(context, key, true)
+        val missingRequired = required.filterNot(::granted)
+        val missingOptional = optional.filterNot(::granted)
+        if (missingRequired.isEmpty() && missingOptional.isEmpty()) {
+            currentOnPermissionChange()
+            afterAnswer.value?.invoke(true)
+            afterAnswer.value = null
+            return
+        }
         asking.value = key.name
-        askingFor.value = permissions.joinToString(",")
-        if (permissions.size == 1) single.launch(permissions[0]) else multiple.launch(arrayOf(*permissions))
+        askingFor.value = required.joinToString(",") + "|" + optional.joinToString(",")
+        // Optional ones Android won't ask about again are left out, so they can't block the rest.
+        val ask = missingRequired + missingOptional.filter { blocked(listOf(it)) == null }
+        runCatching { multiple.launch(ask.toTypedArray()) }.onFailure { answered() }
     }
     // Android's "allow in background?" dialog. Some phones close it at once without showing it;
     // then the app's battery page is the way, so a tap never does nothing.
@@ -366,6 +400,22 @@ private fun Tabs(
         currentOnPermissionChange()
         val instant = android.os.SystemClock.elapsedRealtime() - batteryAskedAt < 800
         if (instant && !isBackgroundAllowed(context)) openAppBatterySettings(context)
+        afterAnswer.value?.invoke(isBackgroundAllowed(context))
+        afterAnswer.value = null
+    }
+    fun askBackground() {
+        Features.set(context, Features.Key.Background, true)
+        LinkService.start(context)
+        if (isBackgroundAllowed(context)) {
+            currentOnPermissionChange()
+            afterAnswer.value?.invoke(true)
+            afterAnswer.value = null
+            return
+        }
+        batteryAskedAt = android.os.SystemClock.elapsedRealtime()
+        runCatching {
+            battery.launch(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, "package:${context.packageName}".toUri()))
+        }.onFailure { openAppBatterySettings(context) }
     }
     // The last picker used, so a failed transfer with nothing to resend can reopen it.
     var lastPicker by remember { mutableIntStateOf(0) }
@@ -389,7 +439,7 @@ private fun Tabs(
     fun report(ok: Boolean, what: String) {
         if (ok) {
             haptics.perform(Haptic.Success)
-            overlays.toast("$what sent to your Mac", WIcons.CheckCircle, currentColors.green)
+            overlays.toast(if (what == "Link") "Opened on your Mac" else app.wallhop.core.Wording.READY, WIcons.CheckCircle, currentColors.green)
         } else {
             overlays.toast("Couldn't reach your Mac", WIcons.Warning, currentColors.red)
         }
@@ -416,17 +466,41 @@ private fun Tabs(
         }
     }
 
-    fun deleteEntry(id: String) {
-        deleting += id
-        overlays.toast("Deleted", action = ToastAction("Undo") { deleting -= id })
+    /** Hides entries at once, with Undo; they're removed for good when the toast has gone. */
+    fun deleteEntries(ids: List<String>, message: String) {
+        if (ids.isEmpty()) return
+        deleting += ids
+        overlays.toast(message, action = ToastAction("Undo") { deleting -= ids.toSet() })
         scope.launch {
-            delay(5_500) // A little longer than the toast, so Undo is always in time.
-            if (id in deleting) {
-                link.removeActivity(id)
-                deleting -= id
-            }
+            // A little longer than the toast (which lasts as long as accessibility settings ask), so Undo is always in time.
+            delay(app.wallhop.ui.components.toastDuration(context, hasAction = true) + 500)
+            val gone = ids.filter { it in deleting }
+            link.removeActivity(gone)
+            deleting -= gone.toSet()
         }
     }
+    fun deleteEntry(id: String) = deleteEntries(listOf(id), "Deleted")
+
+    fun clearOlderThanAWeek() {
+        val old = app.wallhop.core.Wording.olderThan(activity, System.currentTimeMillis(), 7) { it.time }
+        if (old.isEmpty()) {
+            overlays.toast("Nothing older than a week")
+            return
+        }
+        overlays.showAlert(AlertSpec(
+            title = "Clear older than a week?",
+            message = "${old.size} ${if (old.size == 1) "entry" else "entries"} from before last week will be removed from Activity.",
+            actions = listOf(
+                AlertAction("Clear", destructive = true, default = true) { deleteEntries(old.map { it.id }, "Cleared ${old.size}") },
+                AlertAction("Cancel"),
+            ),
+        ))
+    }
+
+    fun entryActions(entry: app.wallhop.link.ActivityEntry) = showEntryActions(overlays, context, entry, haptics, { deleteEntry(it) }) { sent ->
+        LinkService.sendFiles(context, sent.uris.map(android.net.Uri::parse))
+    }
+    fun entryTap(entry: app.wallhop.link.ActivityEntry) = tapEntry(overlays, context, entry, haptics) { entryActions(it) }
 
     fun showTextSheet() {
         textSheetOpen.value = true
@@ -462,7 +536,7 @@ private fun Tabs(
             val focus = remember { FocusRequester() }
             LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
             WTextField(
-                draft.value, { draft.value = it }, "It lands on your Mac's clipboard",
+                draft.value, { draft.value = it }, "It's ready to paste on your Mac",
                 singleLine = false, minLines = 5, label = "Text for your Mac", focusRequester = focus,
             )
         }
@@ -497,24 +571,69 @@ private fun Tabs(
         }
     }
 
+    /**
+     * A feature that needs permissions: Android won't ask again → straight to "Allow X in
+     * Settings" (no disclosure first, it would lead nowhere); otherwise the disclosure, then Android.
+     */
+    fun ask(key: Features.Key, title: String, message: String, required: Array<String>, optional: Array<String> = emptyArray()) {
+        val stuck = blocked(required.toList())
+        if (stuck != null) {
+            Features.set(context, key, false)
+            currentOnPermissionChange()
+            showBlockedAlert(overlays, context, key, stuck)
+            return
+        }
+        disclose(key, title, message) { request(key, required, optional) }
+    }
+
+    // Notification access is a trip to Android's settings. When the user comes back without it on a
+    // sideloaded Android 13+ install, Android's "restricted setting" block is the likely reason.
+    val accessPending = rememberSaveable { mutableStateOf(false) }
+    fun openAccessList() {
+        Features.set(context, Features.Key.AppNotifications, true)
+        accessPending.value = true
+        openNotificationAccess(context, overlays, currentColors.red)
+    }
+    LifecycleResumeEffect(Unit) {
+        val granted = NotificationManagerCompat.getEnabledListenerPackages(context).contains(context.packageName)
+        if (accessPending.value && !granted && app.wallhop.core.KeepAlive.restrictedSettingsLikely(context)) {
+            overlays.showAlert(AlertSpec(
+                title = "Allow restricted settings",
+                message = "Android blocks this for apps installed from a file. Open App info, tap ⋮ (top right) › Allow restricted settings, then come back and allow Lync in Notification access.",
+                actions = listOf(
+                    AlertAction("Open App info", default = true) { app.wallhop.core.KeepAlive.openAppInfo(context) },
+                    AlertAction("Not now"),
+                ),
+            ))
+        }
+        accessPending.value = false
+        onPauseOrDispose { }
+    }
+
     fun requestNotificationAccess() = disclose(
         Features.Key.AppNotifications,
-        "Notification access",
+        "Phone notifications on Mac",
         "Lync reads notifications from the apps you choose and shows them only on your paired Mac. They never go anywhere else, and you can turn this off at any time.",
-        extra = if (!app.wallhop.core.KeepAlive.restrictedSettingsLikely(context)) null else {
-            {
-                // Installed from an APK on Android 13+: Android greys out the switch until this is allowed.
-                Spacer(Modifier.height(12.dp))
-                Text(
-                    "If Lync's switch there is greyed out: open App info › ⋮ (top right) › Allow restricted settings, then come back.",
-                    style = Type.footnote, color = Wallhop.colors.labelSecondary,
-                )
-                Spacer(Modifier.height(12.dp))
-                WButton("Open App info", { app.wallhop.core.KeepAlive.openAppInfo(context) },
-                    style = ButtonStyle.Glass, modifier = Modifier.fillMaxWidth())
-            }
-        },
-    ) { openNotificationAccess(context, overlays, currentColors.red) }
+        extra = { NotificationAccessSteps(context) },
+    ) { openAccessList() }
+
+    // The guided setup: after pairing (once) and from "Finish setup".
+    val showSetup = rememberSaveable { mutableStateOf(false) }
+    val setupIndex = rememberSaveable { mutableIntStateOf(0) }
+    val setupPrefs = remember { context.getSharedPreferences("setup", Context.MODE_PRIVATE) }
+    fun openSetup() {
+        setupIndex.intValue = 0
+        showSetup.value = true
+    }
+    fun closeSetup() {
+        showSetup.value = false
+        setupPrefs.edit { putBoolean("guided_done", true) }
+        currentOnTab(0)
+    }
+    fun nextStep() {
+        if (setupIndex.intValue + 1 >= SetupSteps.size) closeSetup() else setupIndex.intValue++
+    }
+    LaunchedEffect(Unit) { if (!demo && !setupPrefs.getBoolean("guided_done", false)) openSetup() }
 
     val macActions = remember {
         MacActions(
@@ -539,18 +658,30 @@ private fun Tabs(
             },
             dismissTransfer = { link.clearFinishedTransfer() },
             retryTransfer = { transfer ->
-                link.clearFinishedTransfer()
-                if (transfer.items.isNotEmpty()) LinkService.sendFiles(context, transfer.items.map { it.uri }) else launchPicker(lastPicker)
+                LinkService.start(context)
+                if (!link.retryTransfer(transfer.id)) {
+                    link.clearFinishedTransfer()
+                    launchPicker(lastPicker)
+                }
             },
             openSettings = { currentOnTab(2) },
             openActivity = { currentOnTab(1) },
             macDetails = { showMacDetails() },
-            entryActions = { entry -> showEntryActions(overlays, context, entry, haptics) { deleteEntry(it) } },
+            entryActions = { entry -> entryActions(entry) },
+            entryTap = { entry -> entryTap(entry) },
             more = { anchor ->
                 overlays.showMenu(anchor, listOf(
                     MenuItem("Mac details", WIcons.Laptop) { showMacDetails() },
                     MenuItem("Forget this Mac", WIcons.LinkBreak, destructive = true) { confirmForget() },
                 ))
+            },
+            finishSetup = { openSetup() },
+            stopRinging = { app.wallhop.extras.PhoneFinder.stop(context) },
+            pairAgain = { link.dismissPairingProblem() },
+            retryConnect = {
+                link.start()
+                link.poke()
+                overlays.toast("Looking for your Mac…")
             },
         )
     }
@@ -558,34 +689,34 @@ private fun Tabs(
     val settingsActions = remember {
         SettingsActions(
             allowSms = {
-                disclose(Features.Key.Codes, "Codes from messages",
+                ask(Features.Key.Codes, "Codes",
                     "Lync reads incoming texts only to find one-time codes, and sends just the code to your paired Mac.",
-                ) { request(Features.Key.Codes, Manifest.permission.RECEIVE_SMS) }
+                    arrayOf(Manifest.permission.RECEIVE_SMS))
             },
             allowCalls = {
-                disclose(Features.Key.Calls, "Calls",
-                    "Lync shows who's calling on your paired Mac, so you can answer there; call details only go to your Mac.",
-                ) { request(Features.Key.Calls, *CallControl.permissions) }
+                ask(Features.Key.Calls, "Calls",
+                    "Lync shows who's calling on your paired Mac, so you can answer there; call details only go to your Mac. Contacts is optional: without it you'll see numbers.",
+                    CallControl.required, CallControl.optional)
             },
             allowTexts = {
-                disclose(Features.Key.Texts, "Texts",
-                    "Lync reads and sends your text messages so you can use them on your paired Mac; they only go to your Mac.",
-                ) { request(Features.Key.Texts, *SmsStore.permissions) }
+                ask(Features.Key.Texts, "Texts",
+                    "Lync reads and sends your text messages so you can use them on your paired Mac; they only go to your Mac. Contacts is optional.",
+                    SmsStore.required, SmsStore.optional)
             },
             allowNotifications = {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                    request(Features.Key.Notifications, Manifest.permission.POST_NOTIFICATIONS)
+                    val stuck = blocked(listOf(Manifest.permission.POST_NOTIFICATIONS))
+                    if (stuck != null) {
+                        Features.set(context, Features.Key.Notifications, false)
+                        currentOnPermissionChange()
+                        showBlockedAlert(overlays, context, Features.Key.Notifications, stuck)
+                    } else {
+                        request(Features.Key.Notifications, arrayOf(Manifest.permission.POST_NOTIFICATIONS))
+                    }
                 }
             },
             openNotificationAccess = { requestNotificationAccess() },
-            allowBackground = {
-                if (!isBackgroundAllowed(context)) {
-                    batteryAskedAt = android.os.SystemClock.elapsedRealtime()
-                    runCatching {
-                        battery.launch(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, "package:${context.packageName}".toUri()))
-                    }.onFailure { openAppBatterySettings(context) }
-                }
-            },
+            allowBackground = { askBackground() },
             setFeature = { key, on ->
                 Features.set(context, key, on)
                 if (key == Features.Key.Background && on) LinkService.start(context)
@@ -596,6 +727,8 @@ private fun Tabs(
             macDetails = { showMacDetails() },
             openLicences = { currentOnShowLicences(true) },
             openPrivacy = { openLink(context, PRIVACY_URL) },
+            finishSetup = { openSetup() },
+            addTile = { addClipboardTile(context, overlays) },
         )
     }
 
@@ -615,12 +748,18 @@ private fun Tabs(
                 TabSlot(index, tab, visible = index == tab && !showApps && !showLicences) {
                     when (index) {
                         0 -> HomeSlot(link, state, macName, !setup.essentialsDone, macActions, activity, demo)
-                        1 -> ActivityTab(activity, overlays, onDelete = { deleteEntry(it) })
+                        1 -> ActivityTab(
+                            activity, overlays,
+                            onDelete = { deleteEntry(it) },
+                            onTap = { entryTap(it) },
+                            onActions = { entryActions(it) },
+                            onClearOld = { clearOlderThanAWeek() },
+                        )
                         else -> SettingsTab(
                             setup, link.pairedMac?.name,
                             macStatus = when (state) {
                                 is LinkState.Connected -> "Connected"
-                                is LinkState.Searching -> "Looking for your Mac…"
+                                is LinkState.Searching -> "Not connected"
                                 is LinkState.Forgotten -> "Your Mac no longer recognises this phone"
                                 else -> null
                             },
@@ -655,7 +794,101 @@ private fun Tabs(
         ) {
             LicencesScreen(overlays, onBack = { onShowLicences(false) })
         }
+        androidx.compose.animation.AnimatedVisibility(
+            visible = showSetup.value,
+            modifier = Modifier.zIndex(3f),
+            enter = fadeIn(tween(Durations.Fade)),
+            exit = fadeOut(tween(Durations.Quick)),
+        ) {
+            // Steps already done are passed over.
+            LaunchedEffect(setupIndex.intValue, setup) {
+                while (setupIndex.intValue < SetupSteps.size && SetupSteps[setupIndex.intValue].key.let { it in setup.granted && Features.on(context, it) }) {
+                    setupIndex.intValue++
+                }
+                if (setupIndex.intValue >= SetupSteps.size) closeSetup()
+            }
+            GuidedSetup(
+                index = setupIndex.intValue,
+                onTurnOn = { step ->
+                    afterAnswer.value = { nextStep() }
+                    when (step.key) {
+                        Features.Key.Codes -> request(step.key, arrayOf(Manifest.permission.RECEIVE_SMS))
+                        Features.Key.Calls -> request(step.key, CallControl.required, CallControl.optional)
+                        Features.Key.Texts -> request(step.key, SmsStore.required, SmsStore.optional)
+                        Features.Key.Notifications -> if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                            request(step.key, arrayOf(Manifest.permission.POST_NOTIFICATIONS))
+                        } else {
+                            Features.set(context, step.key, true)
+                            afterAnswer.value = null
+                            nextStep()
+                        }
+                        Features.Key.Background -> askBackground()
+                        Features.Key.AppNotifications -> {
+                            // Comes back here; the step moves on once access is on (see the effect above).
+                            afterAnswer.value = null
+                            openAccessList()
+                        }
+                        else -> nextStep()
+                    }
+                },
+                onSkip = { step ->
+                    Features.set(context, step.key, false)
+                    currentOnPermissionChange()
+                    nextStep()
+                },
+                onClose = { closeSetup() },
+                extra = { step -> if (step.key == Features.Key.AppNotifications) NotificationAccessSteps(context) },
+            )
+        }
     }
+}
+
+/** The order that works, including Android 13's restricted-setting detour for sideloaded installs. */
+@Composable
+private fun NotificationAccessSteps(context: Context) {
+    val restricted = remember { app.wallhop.core.KeepAlive.restrictedSettingsLikely(context) }
+    app.wallhop.ui.screens.SetupHelp(buildList {
+        add("Open the Notification access list.")
+        add("Tap Lync and allow it.")
+        if (restricted) {
+            add("If Android says it's a restricted setting: open App info › ⋮ › Allow restricted settings.")
+            add("Come back to the list and allow Lync.")
+        }
+    })
+    if (restricted) {
+        Spacer(Modifier.height(12.dp))
+        WButton("Open App info", { app.wallhop.core.KeepAlive.openAppInfo(context) },
+            style = ButtonStyle.Glass, modifier = Modifier.fillMaxWidth())
+    }
+}
+
+/** Adds the "Clipboard to Mac" Quick Settings tile: Android 13 asks in one tap; before that, how to. */
+private fun addClipboardTile(context: Context, overlays: Overlays) {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        val manager = context.getSystemService(android.app.StatusBarManager::class.java)
+        val added = runCatching {
+            manager.requestAddTileService(
+                android.content.ComponentName(context, app.wallhop.extras.ClipboardTileService::class.java),
+                "Clipboard to Mac",
+                android.graphics.drawable.Icon.createWithResource(context, app.wallhop.R.drawable.ic_stat_wallhop),
+                ContextCompat.getMainExecutor(context),
+            ) { result ->
+                when (result) {
+                    android.app.StatusBarManager.TILE_ADD_REQUEST_RESULT_TILE_ALREADY_ADDED ->
+                        overlays.toast("The tile is already in Quick Settings")
+                    android.app.StatusBarManager.TILE_ADD_REQUEST_RESULT_TILE_ADDED ->
+                        overlays.toast("Added to Quick Settings", WIcons.CheckCircle)
+                    else -> Unit
+                }
+            }
+        }.isSuccess
+        if (added) return
+    }
+    overlays.showAlert(AlertSpec(
+        title = "Add the clipboard tile",
+        message = "Swipe down twice from the top of the screen, tap the pencil (Edit), then drag “Clipboard to Mac” into your tiles.",
+        actions = listOf(AlertAction("Got it", default = true)),
+    ))
 }
 
 /** Home, with the things that change often (transfer progress, the Mac's battery) read here only. */
@@ -683,7 +916,8 @@ private fun HomeSlot(
         // The newest entry has its own card beside the Mac, so Recent starts with the one after it.
         app.wallhop.ui.screens.MacCardData(macInfo, latency, connectedSince, activity.firstOrNull(), transfer, activity.drop(1).take(4))
     }
-    MacTab(state, macName, transfer, needsSetup, actions = actions, card = card)
+    val ringing by app.wallhop.extras.PhoneFinder.ringing.collectAsStateWithLifecycle()
+    MacTab(state, macName, transfer, needsSetup, actions = actions, card = card, ringing = ringing)
 }
 
 /** Haptics when a transfer ends; a finished one clears itself after a moment. */
@@ -708,13 +942,14 @@ private fun TransferEffects(link: LinkManager) {
 
 private const val PRIVACY_URL = "https://github.com/santhoshsunkara24/Lync/blob/main/docs/PRIVACY.md"
 
-/** Android said no and won't ask again: explain, and offer Lync's page in Settings. */
-private fun showBlockedAlert(overlays: Overlays, context: Context, key: Features.Key) {
-    val (permission, feature) = when (key) {
-        Features.Key.Codes -> "SMS" to "codes from messages"
-        Features.Key.Calls -> "Phone" to "calls"
-        Features.Key.Texts -> "SMS" to "texts"
-        Features.Key.Notifications -> "Notifications" to "Lync's notifications"
+/** Android said no and won't ask again: explain, naming the permission that's blocked, and offer Lync's page in Settings. */
+private fun showBlockedAlert(overlays: Overlays, context: Context, key: Features.Key, blockedPermission: String) {
+    val permission = app.wallhop.core.Wording.permissionName(blockedPermission)
+    val feature = when (key) {
+        Features.Key.Codes -> "Codes"
+        Features.Key.Calls -> "Calls"
+        Features.Key.Texts -> "Texts"
+        Features.Key.Notifications -> "alerts on this phone"
         else -> return
     }
     overlays.showAlert(AlertSpec(
@@ -772,14 +1007,14 @@ private fun demoActivity(): List<app.wallhop.link.ActivityEntry> {
     val now = System.currentTimeMillis()
     val hour = 3_600_000L
     return listOf(
-        app.wallhop.link.ActivityEntry("1", app.wallhop.link.ActivityEntry.Kind.Otp, "482913", "From HDFC Bank · sent to your Mac", now - 120_000),
-        app.wallhop.link.ActivityEntry("2", app.wallhop.link.ActivityEntry.Kind.FilesSent, "3 photos", "Copied on your Mac", now - hour),
+        app.wallhop.link.ActivityEntry("1", app.wallhop.link.ActivityEntry.Kind.Otp, "482913", "From HDFC Bank · ready to paste", now - 120_000),
+        app.wallhop.link.ActivityEntry("2", app.wallhop.link.ActivityEntry.Kind.FilesSent, "3 photos", "Ready to paste on your Mac", now - hour),
         app.wallhop.link.ActivityEntry("3", app.wallhop.link.ActivityEntry.Kind.Call, "Missed call", "Mom", now - 2 * hour),
         app.wallhop.link.ActivityEntry("4", app.wallhop.link.ActivityEntry.Kind.TextSent, "Link opened on your Mac", "https://www.nothing.tech", now - 3 * hour),
-        app.wallhop.link.ActivityEntry("5", app.wallhop.link.ActivityEntry.Kind.Otp, "771204", "From Swiggy · sent to your Mac", now - 26 * hour),
+        app.wallhop.link.ActivityEntry("5", app.wallhop.link.ActivityEntry.Kind.Otp, "771204", "From Swiggy · ready to paste", now - 26 * hour),
         app.wallhop.link.ActivityEntry("6", app.wallhop.link.ActivityEntry.Kind.FromMac, "2 files from your Mac", "Saved to Downloads › Lync", now - 27 * hour),
-        app.wallhop.link.ActivityEntry("7", app.wallhop.link.ActivityEntry.Kind.FilesSent, "Invoice.pdf", "Copied on your Mac", now - 28 * hour),
-        app.wallhop.link.ActivityEntry("8", app.wallhop.link.ActivityEntry.Kind.Otp, "903311", "From Google · sent to your Mac", now - 30 * hour),
+        app.wallhop.link.ActivityEntry("7", app.wallhop.link.ActivityEntry.Kind.FilesSent, "Invoice.pdf", "Ready to paste on your Mac", now - 28 * hour),
+        app.wallhop.link.ActivityEntry("8", app.wallhop.link.ActivityEntry.Kind.Otp, "903311", "From Google · ready to paste", now - 30 * hour),
         app.wallhop.link.ActivityEntry("9", app.wallhop.link.ActivityEntry.Kind.Call, "Missed call", "+91 98765 43210", now - 50 * hour),
     )
 }
@@ -789,8 +1024,8 @@ fun readSetup(context: Context): Setup {
     val power = context.getSystemService(PowerManager::class.java)
     val permitted = mapOf(
         Features.Key.Codes to granted(Manifest.permission.RECEIVE_SMS),
-        Features.Key.Calls to (granted(Manifest.permission.READ_PHONE_STATE) && granted(Manifest.permission.ANSWER_PHONE_CALLS)),
-        Features.Key.Texts to (granted(Manifest.permission.READ_SMS) && granted(Manifest.permission.SEND_SMS)),
+        Features.Key.Calls to CallControl.required.all(::granted),
+        Features.Key.Texts to SmsStore.required.all(::granted),
         Features.Key.Notifications to
             (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU || granted(Manifest.permission.POST_NOTIFICATIONS)),
         Features.Key.AppNotifications to NotificationManagerCompat.getEnabledListenerPackages(context).contains(context.packageName),
@@ -806,9 +1041,9 @@ fun readSetup(context: Context): Setup {
         notificationAccess = on(Features.Key.AppNotifications),
         background = on(Features.Key.Background),
         granted = permitted.filterValues { it }.keys,
-        // Notification access is optional, as before.
-        essentialsDone = permitted.filterKeys { it != Features.Key.AppNotifications }
-            .all { (key, ok) -> ok || !Features.on(context, key) },
+        // Done when nothing the user wants (switch on) is still waiting for Android. Skipping a
+        // step in the guided setup turns its switch off, so it stops asking.
+        essentialsDone = permitted.all { (key, ok) -> ok || !Features.on(context, key) },
     )
 }
 

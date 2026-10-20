@@ -40,7 +40,13 @@ final class PanelController {
         hosting.layer?.backgroundColor = .clear
         // The window is sized by `resize(to:)`, sometimes a moment after the content changes.
         hosting.sizingOptions = []
-        panel.contentView = hosting
+        // The whole open panel takes dropped files too.
+        let container = PanelDropView(drop: FileDropHandler(model: model, source: "panel"))
+        hosting.frame = container.bounds
+        hosting.autoresizingMask = [.width, .height]
+        container.addSubview(hosting)
+        panel.contentView = container
+        panel.setAccessibilityLabel("Lync")
 
         model.$panelOpen.removeDuplicates().sink { [weak self] open in
             open ? self?.present() : self?.dismiss()
@@ -50,8 +56,10 @@ final class PanelController {
         }.store(in: &cancellables)
     }
 
-    func open(byHover: Bool) {
-        if model.panelOpen { if !byHover { openedByHover = false }; return }
+    /// `user`: opened by the user (click, shortcut, menu), not by Lync itself at first launch.
+    func open(byHover: Bool, user: Bool = true) {
+        if user { model.noteUserOpenedPanel() }
+        if model.panelOpen { if !byHover { openedByHover = false }; panel.makeKey(); return }
         openedByHover = byHover
         model.openPanel()
     }
@@ -157,8 +165,16 @@ final class PanelController {
         removeMonitors()
         // Esc goes back from Settings or Add a phone, then closes.
         if let keys = NSEvent.addLocalMonitorForEvents(matching: .keyDown, handler: { [weak self] event in
-            guard let self, event.keyCode == 53, self.model.replyingTo == nil else { return event }
-            if self.model.confirmingForget != nil {
+            guard let self, event.window === self.panel else { return event }
+            // ⌘C with no text field focused copies the latest code.
+            if event.keyCode == 8, event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command,
+               !(self.panel.firstResponder is NSText) {
+                return self.model.copyLatestCode() ? nil : event
+            }
+            guard event.keyCode == 53, self.model.replyingTo == nil else { return event }
+            if self.model.inlineReplyKey != nil {
+                self.model.inlineReplyKey = nil
+            } else if self.model.confirmingForget != nil {
                 self.model.confirmingForget = nil
             } else if self.model.panelPage != .home {
                 self.model.panelPage = .home
@@ -175,7 +191,8 @@ final class PanelController {
         // Opened by hover: close a moment after the pointer leaves the panel and the notch.
         outsideSince = nil
         leaveTimer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { [weak self] _ in
-            guard let self, self.openedByHover, self.inNotch, self.model.replyingTo == nil else { return }
+            guard let self, self.openedByHover, self.inNotch, self.model.replyingTo == nil,
+                  self.model.inlineReplyKey == nil else { return }
             let inside = self.panel.frame.insetBy(dx: -8, dy: -8).contains(NSEvent.mouseLocation)
             if inside { self.outsideSince = nil; return }
             if let since = self.outsideSince {
@@ -201,6 +218,7 @@ final class PanelController {
 private struct PanelRoot: View {
     @ObservedObject var model: AppModel
     @ObservedObject var theme: ThemeStore
+    @ObservedObject private var motion = ReduceMotionObserver.shared
     let onSize: (CGSize) -> Void
     /// Follows `model.panelOpen`, animated.
     @State private var shown = false
@@ -242,8 +260,27 @@ private struct PanelRoot: View {
     }
 }
 
+/// Holds the panel's SwiftUI content and takes files dropped anywhere on the open panel.
+private final class PanelDropView: NSView {
+    private let drop: FileDropHandler
+
+    init(drop: FileDropHandler) {
+        self.drop = drop
+        super.init(frame: NSRect(x: 0, y: 0, width: 380, height: 400))
+        registerForDraggedTypes([.fileURL])
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
+
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation { drop.entered(sender) }
+    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation { drop.entered(sender, update: true) }
+    override func draggingExited(_ sender: NSDraggingInfo?) { drop.exited() }
+    override func draggingEnded(_ sender: NSDraggingInfo) { drop.exited() }
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool { drop.perform(sender) }
+}
+
 /// An invisible strip over the notch: a click opens the panel; drop files to send them;
-/// right-click for the menu.
+/// right-click for the menu. VoiceOver sees it as a "Lync" button that opens the panel.
 final class NotchSensor {
     private let window: NSPanel
     private let view: SensorView
@@ -293,9 +330,18 @@ private final class SensorView: NSView {
         self.makeMenu = menu
         super.init(frame: .zero)
         registerForDraggedTypes([.fileURL])
+        setAccessibilityElement(true)
+        setAccessibilityRole(.button)
+        setAccessibilityLabel("Lync")
+        setAccessibilityHelp("Opens Lync. Drop files here to send them to your phone.")
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
+
+    override func accessibilityPerformPress() -> Bool {
+        onClick()
+        return true
+    }
 
     func resetTracking() {
         trackingAreas.forEach(removeTrackingArea)
@@ -323,6 +369,7 @@ private final class SensorView: NSView {
     }
 
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation { drop.entered(sender) }
+    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation { drop.entered(sender, update: true) }
     override func draggingExited(_ sender: NSDraggingInfo?) { drop.exited() }
     override func draggingEnded(_ sender: NSDraggingInfo) { drop.exited() }
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool { drop.perform(sender) }

@@ -153,9 +153,10 @@ fun TextAction(text: String, onClick: () -> Unit, bold: Boolean = false, enabled
         text,
         style = if (bold) Type.headline else Type.body,
         color = (color ?: Wallhop.colors.tint).copy(alpha = if (!enabled) DisabledAlpha else if (pressed > 0f) 0.5f else 1f),
+        // A 48 dp target at least, growing with the font.
         modifier = Modifier
             .tappable(source, enabled = enabled, onClick = onClick)
-            .height(44.dp)
-            .padding(horizontal = 4.dp, vertical = 11.dp),
+            .defaultMinSize(minWidth = 48.dp, minHeight = 48.dp)
+            .padding(horizontal = 4.dp, vertical = 13.dp),
     )
 }

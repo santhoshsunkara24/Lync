@@ -30,8 +30,25 @@ CTFontManagerRegisterFontsForURL(URL(fileURLWithPath: "Resources/Figtree.ttf") a
     print("rendered \(name)")
 }
 
+@MainActor func overlay(_ model: AppModel, notch: Bool = true) -> some View {
+    let placement = PlacementState()
+    placement.placement = notch ? .notch(notchHeight: 32) : .pill
+    placement.notchWidth = 190
+    return OverlayRoot(model: model, placement: placement)
+        .frame(width: 448, height: 220)
+        .background(Color(white: 0.55))
+        .environmentObject(model.themeStore)
+}
+
 @MainActor func run() {
     PanelSnapshots.active = true
+    // Contrast self check (Theme.swift): every phone hue keeps white text ≥ 4.5:1, codes too.
+    let problems = WTheme.contrastProblems()
+    if problems.isEmpty { print("contrast check: OK") } else { problems.forEach { print("contrast check FAILED: \($0)") } }
+    // A clean start each run: nothing paired, nothing in Recent.
+    for name in ["recent.json", "paired-phones.json"] {
+        try? FileManager.default.removeItem(atPath: NSTemporaryDirectory() + "wallhop-snapshots/" + name)
+    }
     if CommandLine.arguments.contains("--copy") {
         let store = ThemeStore()
         let row = HStack(spacing: 12) {
@@ -89,6 +106,11 @@ CTFontManagerRegisterFontsForURL(URL(fileURLWithPath: "Resources/Figtree.ttf") a
     render("4c_add_phone", PanelView(model: model, theme: model.themeStore, fromNotch: false).fixedSize())
     model.panelPage = .home
 
+    // Files held over the open panel.
+    model.dropHover(true, source: "panel")
+    render("3b_panel_drop", PanelView(model: model, theme: model.themeStore, fromNotch: false).fixedSize())
+    model.dropHover(false, source: "panel")
+
     // Feedback while the panel is open: a toast at the bottom (one with Undo).
     model.panelOpen = true
     model.feedback("Clipboard sent to your phone")
@@ -116,6 +138,17 @@ CTFontManagerRegisterFontsForURL(URL(fileURLWithPath: "Resources/Figtree.ttf") a
     send(.pairingRequested(request))
     send(.call(PhoneCall(id: "c1", state: .ringing, number: "+44 7700 900123", name: "Alex Morgan", sim: "SIM 1")))
 
+    // Contacts search under "To:" in Texts, and the phone saying it can't search.
+    let texts = MessagesModel(server: server)
+    texts.showContactResults([ContactMatch(name: "Anna Lindqvist", number: "+46 70 123 45 67"),
+                              ContactMatch(name: "Anna (work)", number: "+46 8 555 010 20"),
+                              ContactMatch(name: "Annabel Ortiz", number: "+1 415 555 0134")])
+    render("9b_contacts_search", ContactResults(model: texts, highlighted: .constant(1)) { _ in }
+        .frame(width: 520).padding(.vertical, 12).background(WTheme.ink).foregroundStyle(.white).environmentObject(model.themeStore))
+    texts.showContactResults([], unavailable: true)
+    render("9c_contacts_unavailable", ContactResults(model: texts, highlighted: .constant(nil)) { _ in }
+        .frame(width: 520).padding(.vertical, 12).background(WTheme.ink).foregroundStyle(.white).environmentObject(model.themeStore))
+
     // Live moments, drawn the way the notch shows them.
     for (name, card) in [("7c_live_pairing", LiveCard.pairing(request.id)),
                          ("7d_live_call", LiveCard.call("c1")),
@@ -134,11 +167,56 @@ CTFontManagerRegisterFontsForURL(URL(fileURLWithPath: "Resources/Figtree.ttf") a
             .foregroundStyle(.white)
         render(name, content)
     }
+    // The pairing request and the call from the cards above are done with.
+    model.decidePairing(false)
+    send(.call(PhoneCall(id: "c1", state: .ended, number: nil, name: nil, sim: nil)))
+    // First run: where Lync lives.
+    model.show(.info(symbol: "laptopcomputer", title: "Lync lives in the notch — click it", subtitle: "Or press ⌥⌘L from anywhere"), for: nil)
+    render("10c_overlay_first_run_hint", overlay(model))
+    model.hideLive()
+    model.hideLive()
+    // Quiet moments.
+    model.show(.quiet(symbol: "iphone.radiowaves.left.and.right", text: "Nothing Phone (3a) Pro connected"), for: nil)
+    render("10d_overlay_quiet_connected", overlay(model))
+    model.hideLive()
+    // Files dragged somewhere on the Mac: the glow, then the drop zone near the notch.
+    model.fileDragBegan(files: [photo, photo, photo])
+    render("10e_overlay_drag_glow", overlay(model))
+    render("10f_overlay_drag_glow_pill", overlay(model, notch: false))
+    model.fileDragNear(true)
+    render("10g_overlay_drop_zone", overlay(model))
+    model.fileDragNear(false)
+    model.fileDragEnded()
+    // Menu bar mode: the same moments drop down from the menu bar icon.
+    let menuBar = PlacementState()
+    menuBar.placement = .menuBar
+    model.fileDragBegan(files: [photo])
+    model.fileDragNear(true)
+    render("10i_menubar_drop_zone", OverlayRoot(model: model, placement: menuBar).frame(width: 448, height: 220)
+        .background(Color(white: 0.55)).environmentObject(model.themeStore))
+    model.fileDragNear(false)
+    model.fileDragEnded()
+    model.hideLive()
+    // The phone went away: the panel says so.
+    send(.disconnected(phone))
+    render("10h_home_offline", PanelView(model: model, theme: model.themeStore, fromNotch: true).fixedSize())
+    send(.connected(phone, host: "192.168.0.12"))
+    send(.call(PhoneCall(id: "c1", state: .ringing, number: "+44 7700 900123", name: "Alex Morgan", sim: "SIM 1")))
+
+    // The real overlay: a code that arrived during the call waits, then shows once the call ends.
+    model.show(.call("c1"), for: nil)
+    send(.otp(code: "550127", sender: "Bank", app: "SMS"))
+    render("10a_overlay_call_with_code_waiting", overlay(model))
+    send(.call(PhoneCall(id: "c1", state: .ended, number: nil, name: nil, sim: nil)))
+    // Queued cards show a beat later; render then.
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) { MainActor.assumeIsolated {
+    print("queued code shown after call: \(model.live == .otp(code: "550127", sender: "Bank")) live=\(String(describing: model.live))")
     // Saving moves the files from the inbox into Downloads; only in the temp copy here.
     board.clearContents()
     board.writeObjects(savedItems)
     print("clipboard restored")
     exit(0)
+    } }
 }
 
 DispatchQueue.main.async { MainActor.assumeIsolated { run() } }

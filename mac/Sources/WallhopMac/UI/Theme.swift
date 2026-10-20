@@ -19,11 +19,18 @@ struct WTheme: Equatable {
     static let surface = Color.white.opacity(0.07)
     static let chip = Color.white.opacity(0.13)
     static let secondary = Color.white.opacity(0.68)
-    static let tertiary = Color.white.opacity(0.4)
+    /// Times and other quiet labels: still ≥ 4.5:1 on the panel's darker surfaces.
+    static let tertiary = Color.white.opacity(0.6)
     /// Destructive actions, failures and declining a call.
     static let danger = Color(red: 1, green: 0.42, blue: 0.38)
     /// Answering a call, codes.
     static let success = Color(red: 0.36, green: 0.84, blue: 0.5)
+
+    /// One-time codes always use Lync's own colours, never the phone's accent (same as Android):
+    /// Forest background, Mint digits and accents, white at 75 % for the rest.
+    static let codeForest = Color(red: 0x0F / 255.0, green: 0x2E / 255.0, blue: 0x24 / 255.0)
+    static let codeMint = Color(red: 0x7F / 255.0, green: 0xE3 / 255.0, blue: 0xB0 / 255.0)
+    static let codeSecondary = Color.white.opacity(0.75)
 
     static let defaultSeed: UInt32 = 0xFF4B2BC9
 
@@ -38,14 +45,85 @@ struct WTheme: Equatable {
         }
         let sat = min(max(saturation, 0.45), 0.8)
         let other = accent.map { Self.hsl($0).0 } ?? (hue + 110).truncatingRemainder(dividingBy: 360)
-        top = Self.color(hue, sat * 0.85, 0.42)
-        mid = Self.color(hue, sat * 0.7, 0.2)
-        card = Self.color(hue, sat * 0.5, 0.12)
-        pale = Self.color(hue, 0.8, 0.92)
-        onPale = Self.color(hue, 0.6, 0.22)
-        peek = Self.color(other, 0.62, 0.44)
-        peekPale = Self.color(other, 0.9, 0.9)
-        onPeekPale = Self.color(other, 0.6, 0.18)
+        let p = Self.palette(hue: hue, other: other, sat: sat)
+        top = Self.color(p.top); mid = Self.color(p.mid); card = Self.color(p.card)
+        pale = Self.color(p.pale); onPale = Self.color(p.onPale)
+        peek = Self.color(p.peek); peekPale = Self.color(p.peekPale); onPeekPale = Self.color(p.onPeekPale)
+    }
+
+    typealias RGB = (r: Double, g: Double, b: Double)
+
+    /// The colours as sRGB. Surfaces that carry white text (`top`, `mid`, `card`, `peek`) are made
+    /// dark enough for white to reach 4.5:1 whatever the hue: yellows and greens are much lighter
+    /// than blues at the same HSL lightness, so lightness is chosen by WCAG luminance.
+    static func palette(hue: Double, other: Double, sat: Double)
+        -> (top: RGB, mid: RGB, card: RGB, pale: RGB, onPale: RGB, peek: RGB, peekPale: RGB, onPeekPale: RGB) {
+        (top: forWhiteText(hue, sat * 0.85, 0.42),
+         mid: forWhiteText(hue, sat * 0.7, 0.2),
+         card: forWhiteText(hue, sat * 0.5, 0.12),
+         pale: rgb(hue, 0.8, 0.92),
+         onPale: rgb(hue, 0.6, 0.22),
+         peek: forWhiteText(other, 0.62, 0.44),
+         peekPale: rgb(other, 0.9, 0.9),
+         onPeekPale: rgb(other, 0.6, 0.18))
+    }
+
+    /// `rgb(h, s, l)`, darkened until white text on it is at least 4.5:1.
+    static func forWhiteText(_ h: Double, _ s: Double, _ l: Double) -> RGB {
+        var lightness = l
+        var value = rgb(h, s, lightness)
+        while contrast((1, 1, 1), value) < 4.6, lightness > 0.02 {
+            lightness -= 0.01
+            value = rgb(h, s, lightness)
+        }
+        return value
+    }
+
+    /// WCAG relative luminance of an sRGB colour.
+    static func luminance(_ c: RGB) -> Double {
+        func channel(_ v: Double) -> Double { v <= 0.03928 ? v / 12.92 : pow((v + 0.055) / 1.055, 2.4) }
+        return 0.2126 * channel(c.r) + 0.7152 * channel(c.g) + 0.0722 * channel(c.b)
+    }
+
+    /// WCAG contrast ratio between two sRGB colours.
+    static func contrast(_ a: RGB, _ b: RGB) -> Double {
+        let la = luminance(a), lb = luminance(b)
+        return (max(la, lb) + 0.05) / (min(la, lb) + 0.05)
+    }
+
+    /// `fg` at `alpha` over `bg`.
+    static func blend(_ fg: RGB, _ alpha: Double, over bg: RGB) -> RGB {
+        (fg.r * alpha + bg.r * (1 - alpha), fg.g * alpha + bg.g * (1 - alpha), fg.b * alpha + bg.b * (1 - alpha))
+    }
+
+    /// A self check of the colour rules, run by the snapshot renderer (scripts/snapshots.sh):
+    /// every hue and saturation keeps white text ≥ 4.5:1 on the coloured surfaces, and the
+    /// code card's colours pass too. Returns the failures, empty when all is well.
+    static func contrastProblems() -> [String] {
+        var problems: [String] = []
+        let white: RGB = (1, 1, 1)
+        for hue in stride(from: 0.0, to: 360, by: 5) {
+            for sat in [0.45, 0.6, 0.8] {
+                let p = palette(hue: hue, other: (hue + 110).truncatingRemainder(dividingBy: 360), sat: sat)
+                for (name, c) in [("top", p.top), ("mid", p.mid), ("card", p.card), ("peek", p.peek)] {
+                    let ratio = contrast(white, c)
+                    if ratio < 4.5 { problems.append("white on \(name) hue \(Int(hue)) sat \(sat): \(String(format: "%.2f", ratio))") }
+                }
+                let onPale = contrast(p.onPale, p.pale)
+                if onPale < 4.5 { problems.append("onPale on pale hue \(Int(hue)): \(String(format: "%.2f", onPale))") }
+            }
+        }
+        let forest: RGB = (0x0F / 255.0, 0x2E / 255.0, 0x24 / 255.0), mint: RGB = (0x7F / 255.0, 0xE3 / 255.0, 0xB0 / 255.0)
+        let ink: RGB = (0.043, 0.043, 0.047)
+        let checks: [(String, Double)] = [
+            ("mint on forest", contrast(mint, forest)),
+            ("white 75% on forest", contrast(blend(white, 0.75, over: forest), forest)),
+            ("forest on mint", contrast(forest, mint)),
+            ("tertiary (white 60%) on ink", contrast(blend(white, 0.6, over: ink), ink)),
+            ("tertiary on surface", contrast(blend(white, 0.6, over: blend(white, 0.07, over: ink)), blend(white, 0.07, over: ink))),
+        ]
+        for (name, ratio) in checks where ratio < 4.5 { problems.append("\(name): \(String(format: "%.2f", ratio))") }
+        return problems
     }
 
     /// The screen gradient: colour at the top fading to ink.
@@ -71,6 +149,14 @@ struct WTheme: Equatable {
     }
 
     private static func color(_ h: Double, _ s: Double, _ l: Double) -> Color {
+        color(rgb(h, s, l))
+    }
+
+    private static func color(_ c: RGB) -> Color {
+        Color(red: c.r, green: c.g, blue: c.b)
+    }
+
+    static func rgb(_ h: Double, _ s: Double, _ l: Double) -> RGB {
         let c = (1 - abs(2 * l - 1)) * s
         let x = c * (1 - abs((h / 60).truncatingRemainder(dividingBy: 2) - 1))
         let m = l - c / 2
@@ -83,7 +169,7 @@ struct WTheme: Equatable {
         case ..<300: (r, g, b) = (x, 0, c)
         default: (r, g, b) = (c, 0, x)
         }
-        return Color(red: r + m, green: g + m, blue: b + m)
+        return (r + m, g + m, b + m)
     }
 }
 
@@ -134,10 +220,11 @@ func withMotion<Result>(_ animation: Animation, _ body: () throws -> Result) ret
     try withAnimation(WMotion.animation(animation), body)
 }
 
-/// Caches `accessibilityDisplayShouldReduceMotion` and follows changes to it.
-private final class ReduceMotionObserver {
+/// Caches `accessibilityDisplayShouldReduceMotion` and follows changes to it. Root views observe
+/// it, so switching Reduce Motion on or off takes effect at once, without a relaunch.
+final class ReduceMotionObserver: ObservableObject {
     static let shared = ReduceMotionObserver()
-    private(set) var isOn: Bool
+    @Published private(set) var isOn: Bool
     private var observer: NSObjectProtocol?
 
     private init() {
@@ -182,6 +269,19 @@ struct WPill: ButtonStyle {
             .padding(.horizontal, compact ? 12 : 16)
             .frame(height: compact ? 30 : 36)
             .background(Capsule().fill(destructive ? WTheme.danger : prominent ? theme.theme.pale : WTheme.chip))
+            .modifier(WInteractive(shape: Capsule(), pressed: configuration.isPressed))
+    }
+}
+
+/// The pill on the code card: Mint with Forest text.
+struct CodePill: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .labelStyle(.titleAndIcon)
+            .font(.wh(13, .semibold))
+            .foregroundStyle(WTheme.codeForest)
+            .padding(.horizontal, 16).frame(height: 36)
+            .background(Capsule().fill(WTheme.codeMint))
             .modifier(WInteractive(shape: Capsule(), pressed: configuration.isPressed))
     }
 }

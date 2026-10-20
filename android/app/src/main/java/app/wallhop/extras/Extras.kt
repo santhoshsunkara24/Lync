@@ -36,10 +36,14 @@ fun isSingleUrl(text: String): Boolean {
 }
 
 /**
- * Rings the phone loudly, even on silent, so it can be found. Stops after 30 seconds,
- * when the user taps "Found it", or when the Mac says stop.
+ * "Ring phone": rings loudly, even on silent, so the phone can be found. Stops after 30 seconds,
+ * when the user taps Stop (notification or the banner on Home), or when the Mac says stop.
+ * Works without notification permission: the sound, the banner and the timeout don't need it.
  */
 object PhoneFinder {
+    private val _ringing = kotlinx.coroutines.flow.MutableStateFlow(false)
+    /** True while ringing, for Home's "Your Mac is ringing this phone" banner. */
+    val ringing: kotlinx.coroutines.flow.StateFlow<Boolean> = _ringing
     private const val NOTIFICATION_ID = 77
     private const val ACTION_STOP = "app.wallhop.STOP_RINGING"
     private var player: MediaPlayer? = null
@@ -51,7 +55,8 @@ object PhoneFinder {
         val app = context.applicationContext
         appContext = app
         handler.post {
-            if (player != null) return@post
+            if (player != null || _ringing.value) return@post
+            _ringing.value = true
             val uri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
                 ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
             player = runCatching {
@@ -79,6 +84,7 @@ object PhoneFinder {
             handler.removeCallbacks(stopLater)
             player?.runCatching { stop(); release() }
             player = null
+            _ringing.value = false
             vibrator(context)?.cancel()
             Glyphs.stop(context)
             NotificationManagerCompat.from(context).cancel(NOTIFICATION_ID)
@@ -104,16 +110,27 @@ object PhoneFinder {
             context, 3, Intent(context, StopRingingReceiver::class.java).setAction(ACTION_STOP),
             PendingIntent.FLAG_IMMUTABLE,
         )
-        val notification = NotificationCompat.Builder(context, Notifications.CHANNEL_FROM_MAC)
+        val open = PendingIntent.getActivity(
+            context, 5,
+            Intent(context, app.wallhop.ui.MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP),
+            PendingIntent.FLAG_IMMUTABLE,
+        )
+        val builder = NotificationCompat.Builder(context, Notifications.CHANNEL_RING)
             .setSmallIcon(R.drawable.ic_stat_wallhop)
-            .setContentTitle("Your Mac is looking for this phone")
-            .setContentText("Tap Found it to stop the sound")
-            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setContentTitle("Your Mac is ringing this phone")
+            .setContentText("Tap Stop to end the sound")
+            .setPriority(NotificationCompat.PRIORITY_MAX)
             .setCategory(NotificationCompat.CATEGORY_ALARM)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setOngoing(true)
-            .setContentIntent(stop)
-            .addAction(0, "Found it", stop)
-            .build()
+            .setTimeoutAfter(30_000)
+            .setContentIntent(open)
+            .setDeleteIntent(stop)
+            .addAction(0, "Stop", stop)
+        // Full screen over the lock screen where Android allows it (Android 14 asks the user).
+        val manager = context.getSystemService(NotificationManager::class.java)
+        if (Build.VERSION.SDK_INT < 34 || manager.canUseFullScreenIntent()) builder.setFullScreenIntent(open, true)
+        val notification = builder.build()
         runCatching { NotificationManagerCompat.from(context).notify(NOTIFICATION_ID, notification) }
     }
 }
@@ -186,7 +203,7 @@ class SendClipboardActivity : ComponentActivity() {
                 when {
                     !ok -> "Couldn't reach your Mac"
                     isSingleUrl(text) -> "Opened on your Mac"
-                    else -> "Sent to your Mac"
+                    else -> app.wallhop.core.Wording.READY
                 },
                 Toast.LENGTH_SHORT,
             ).show()

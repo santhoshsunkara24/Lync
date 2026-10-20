@@ -10,6 +10,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var panel: PanelController!
     private var sensor: NotchSensor!
     private var menus: Menus!
+    private var hotKey: HotKey?
+    private var dragWatcher: FileDragWatcher?
     private var observers: [Any] = []
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -33,12 +35,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         sensor = NotchSensor(
             onHover: { [weak self] in self?.panel.open(byHover: true) },
             onClick: { [weak self] in self?.panel.toggle() },
-            drop: FileDropHandler(model: model),
+            drop: FileDropHandler(model: model, source: "sensor"),
             menu: { [weak self] in self?.menus.contextMenu() ?? NSMenu() }
         )
         let applyMode = { [weak self] in
             guard let self else { return }
             let notch = self.model.hasNotch
+            self.model.noteScreens()
             self.statusItem.update(mode: self.model.displayMode, hasNotch: notch)
             self.sensor.update(active: self.model.displayMode == .notch && notch)
         }
@@ -47,12 +50,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         observers.append(NotificationCenter.default.addObserver(
             forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { _ in applyMode() })
         // Development (WALLHOP_CAPTURE=1 only): drive the panel for screenshots, e.g.
-        // `distnoted`-style: post "app.wallhop.debug" with object open | close | settings | notch | menubar.
+        // `distnoted`-style: post "app.wallhop.debug" with object open | close | settings | notch | menubar
+        // | save-latest | send-clipboard | send-files:<path>[|<path>…].
         if ProcessInfo.processInfo.environment["WALLHOP_CAPTURE"] == "1" {
             observers.append(DistributedNotificationCenter.default().addObserver(
                 forName: .init("app.wallhop.debug"), object: nil, queue: .main) { [weak self] note in
                 guard let self else { return }
-                switch note.object as? String {
+                let command = note.object as? String ?? ""
+                // "send-files:/a/b.png|/c/d.txt": the same path as files dropped on the notch or icon.
+                if command.hasPrefix("send-files:") {
+                    let urls = command.dropFirst("send-files:".count).split(separator: "|").map { URL(fileURLWithPath: String($0)) }
+                    let files = urls.filter { !$0.hasDirectoryPath }
+                    NSLog("Lync: debug send-files \(files.count)")
+                    self.model.dropAccepted()
+                    self.model.sendFilesToPhone(files, skippedFolders: urls.count - files.count)
+                    return
+                }
+                switch command {
+                case "send-clipboard": self.model.sendClipboardToPhone()
                 case "open": self.panel.open(byHover: false)
                 case "close": self.model.closePanel()
                 case "settings": self.model.openPanel(.settings)
@@ -70,7 +85,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if ProcessInfo.processInfo.environment["WALLHOP_OPEN_PANEL"] == "1" {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in self?.panel.open(byHover: false) }
         }
+        // ⌥⌘L from anywhere: gives a card with buttons keyboard focus, otherwise opens or closes the panel.
+        hotKey = HotKey { [weak self] in
+            guard let self else { return }
+            if !self.overlay.focusCard() { self.panel.toggle() }
+        }
+        // Files dragged anywhere on the Mac: the notch (or menu bar icon) offers to take them.
+        dragWatcher = FileDragWatcher(model: model) { [weak self] in
+            guard let self else { return nil }
+            return OverlayController.dropTarget(model: self.model, statusFrame: self.statusItem.visibleFrame)
+        }
         server.start()
+        // First run: unpaired, the panel opens by itself with the pairing steps; until the panel
+        // has been opened once, a short hint says where Lync lives.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
+            guard let self, ProcessInfo.processInfo.environment["WALLHOP_OPEN_PANEL"] != "1" else { return }
+            self.model.launched { self.panel.open(byHover: false, user: false) }
+        }
 
         // Re-announce on wake so the phone finds this Mac again within seconds.
         NSWorkspace.shared.notificationCenter.addObserver(
@@ -88,6 +119,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
         pathMonitor.start(queue: DispatchQueue(label: "app.wallhop.path"))
+    }
+
+    /// Opening Lync again (Finder, Spotlight, Launchpad, `open`) while it runs opens the panel.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        panel.open(byHover: false)
+        return false
     }
 }
 

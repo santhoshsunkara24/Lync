@@ -53,6 +53,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.error
+import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
@@ -117,6 +119,7 @@ fun WTextField(
                 .background(Color.White.copy(alpha = 0.1f))
                 .border(2.dp, ringColor.copy(alpha = ring), shape)
                 .then(if (label != null) Modifier.semantics { contentDescription = label } else Modifier)
+                .then(if (error != null) Modifier.semantics { error(error) } else Modifier)
                 .then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier),
             decorationBox = { inner ->
                 val clear = value.isNotEmpty() && singleLine
@@ -126,7 +129,8 @@ fun WTextField(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Box(Modifier.weight(1f).padding(vertical = 11.dp)) {
-                        if (value.isEmpty()) Text(placeholder, style = Type.body, color = colors.labelTertiary)
+                        // labelSecondary, not tertiary: placeholders need 4.5:1 too.
+                        if (value.isEmpty()) Text(placeholder, style = Type.body, color = colors.labelSecondary)
                         inner()
                     }
                     if (clear) ClearButton { onValueChange("") }
@@ -134,7 +138,9 @@ fun WTextField(
             },
         )
         if (error != null) {
-            Text(error, style = Type.footnote, color = colors.red, modifier = Modifier.padding(start = 4.dp, top = 6.dp))
+            // Read out as soon as it appears.
+            Text(error, style = Type.footnote, color = colors.red,
+                modifier = Modifier.padding(start = 4.dp, top = 6.dp).semantics { liveRegion = androidx.compose.ui.semantics.LiveRegionMode.Assertive })
         }
     }
 }
@@ -186,11 +192,17 @@ fun SearchField(value: String, onValueChange: (String) -> Unit, modifier: Modifi
  * (DESIGN.md §5.16: 40 ms apart, spring.bouncy); with Reduce Motion they simply show.
  */
 @Composable
-fun CodeDisplay(code: String, modifier: Modifier = Modifier, color: Color = Wallhop.colors.label) {
-    Box(modifier, contentAlignment = Alignment.Center) {
+fun CodeDisplay(code: String, modifier: Modifier = Modifier, color: Color = Wallhop.colors.label, maxWidth: Dp = 280.dp) {
+    // Digits grow with the font size, but never wider than [maxWidth]: past that the whole code
+    // scales down together, so nothing clips at the largest font sizes.
+    val fontScale = androidx.compose.ui.platform.LocalDensity.current.fontScale
+    val scale = minOf(fontScale, maxWidth / (30.dp * 6 + 14.dp))
+    val style = Type.code.copy(fontSize = Type.code.fontSize * (scale / fontScale), lineHeight = Type.code.lineHeight * (scale / fontScale))
+    // One item for TalkBack, read digit by digit.
+    Box(modifier.clearAndSetSemantics { contentDescription = app.wallhop.core.Wording.pairingCodeDescription(code) }, contentAlignment = Alignment.Center) {
         RollingCode(
-            spacedCode(code), Type.code, color,
-            fromTop = true, staggerMs = 40, spec = Springs.bouncy(), digitWidth = 30.dp, groupGap = 14.dp,
+            spacedCode(code), style, color,
+            fromTop = true, staggerMs = 40, spec = Springs.bouncy(), digitWidth = 30.dp * scale, groupGap = 14.dp * scale,
         )
     }
 }
@@ -324,5 +336,4 @@ fun copyCode(context: android.content.Context, code: String) {
 }
 
 /** "482913" → "482 913". */
-fun spacedCode(code: String): String =
-    if (code.length == 6 && code.all(Char::isDigit)) "${code.take(3)} ${code.takeLast(3)}" else code
+fun spacedCode(code: String): String = app.wallhop.core.Wording.spaced(code)

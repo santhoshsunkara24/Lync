@@ -38,14 +38,29 @@ struct WShapePress<S: Shape>: ButtonStyle {
     }
 }
 
-/// A text-only button (Undo, Clear all): dims and sinks a little while pressed.
+/// A text-only button (Undo, Clear all): dims and sinks a little while pressed, and shows a
+/// rounded ring while it has keyboard focus.
 struct WPlainPress: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .scaleEffect(configuration.isPressed ? 0.94 : 1)
             .opacity(configuration.isPressed ? 0.7 : 1)
             .contentShape(Rectangle())
+            .modifier(WFocusRing(shape: RoundedRectangle(cornerRadius: 6, style: .continuous), inset: -4))
             .animation(WMotion.animation(WMotion.press), value: configuration.isPressed)
+    }
+}
+
+/// A ring in `shape` while the view has keyboard focus.
+struct WFocusRing<S: Shape>: ViewModifier {
+    let shape: S
+    var inset: CGFloat = -3
+    @Environment(\.isFocused) private var focused
+
+    func body(content: Content) -> some View {
+        content
+            .overlay(shape.stroke(Color.white.opacity(0.8), lineWidth: 2).padding(inset).opacity(focused ? 1 : 0))
+            .animation(WMotion.animation(WMotion.snappy), value: focused)
     }
 }
 

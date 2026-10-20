@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -284,6 +285,8 @@ fun PillNavBar(tabs: List<TabItem>, selected: Int, onSelect: (Int) -> Unit, modi
     val red = Wallhop.colors.red
     BoxWithConstraints(
         modifier
+            // Not stretched across a tablet: the same 640 dp column as the content.
+            .widthIn(max = app.wallhop.ui.screens.MaxContentWidth)
             .fillMaxWidth()
             .padding(horizontal = 16.dp)
             .height(64.dp)

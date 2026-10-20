@@ -43,6 +43,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -59,6 +62,9 @@ import app.wallhop.ui.design.Type
 import app.wallhop.ui.design.Wallhop
 import app.wallhop.ui.design.capsule
 import app.wallhop.ui.design.glass
+
+/** Widest the content column gets on tablets and in landscape. */
+val MaxContentWidth: Dp = 640.dp
 
 /** Height of the floating tab bar plus its gap, so the last row can scroll clear of it. */
 val TabBarClearance: Dp = 64.dp + 12.dp + 24.dp
@@ -94,17 +100,19 @@ fun Page(
     val start = sides.calculateStartPadding(layoutDirection)
     val end = sides.calculateEndPadding(layoutDirection)
 
-    Box(
+    androidx.compose.foundation.layout.BoxWithConstraints(
         modifier
             .fillMaxSize()
             .background(Brush.verticalGradient(0f to home.top, 0.34f to home.mid, 0.62f to colors.background)),
     ) {
+        // Tablets and landscape: content stays a readable column, centred (the background still fills).
+        val extra = ((maxWidth - start - end - MaxContentWidth) / 2).coerceAtLeast(0.dp)
         // The page's first rows fade up in turn each time it comes on show.
         androidx.compose.runtime.CompositionLocalProvider(LocalStagger provides rememberStaggerClock()) {
         LazyColumn(
             state = state,
             modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(start = start + 20.dp, end = end + 20.dp, top = statusBar + 14.dp, bottom = navBar + bottomClearance),
+            contentPadding = PaddingValues(start = start + extra + 20.dp, end = end + extra + 20.dp, top = statusBar + 14.dp, bottom = navBar + bottomClearance),
         ) {
             item(key = "title") {
                 Column(Modifier.staggerIn(0).fillMaxWidth().padding(bottom = 22.dp)) {
@@ -116,11 +124,12 @@ fun Page(
                         }
                     }
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(title, style = Type.largeTitle, color = colors.label, modifier = Modifier.weight(1f))
+                        Text(title, style = Type.largeTitle, color = colors.label, modifier = Modifier.weight(1f).semantics { heading() })
                         if (leading == null) trailing?.invoke()
                     }
                     if (subtitle != null) {
-                        Text(subtitle, style = Type.subheadline, color = colors.labelSecondary, modifier = Modifier.padding(top = 6.dp))
+                        // White at 78 %: the subtitle sits on the brightest part of the gradient.
+                        Text(subtitle, style = Type.subheadline, color = Color.White.copy(alpha = 0.78f), modifier = Modifier.padding(top = 6.dp))
                     }
                 }
             }
@@ -166,7 +175,7 @@ fun SectionHeader(text: String, trailing: (@Composable () -> Unit)? = null) {
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        Text(text, style = Type.headline, color = Wallhop.colors.label)
+        Text(text, style = Type.headline, color = Wallhop.colors.label, modifier = Modifier.semantics { heading() })
         trailing?.invoke()
     }
 }

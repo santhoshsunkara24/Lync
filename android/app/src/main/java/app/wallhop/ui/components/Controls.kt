@@ -40,6 +40,8 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import app.wallhop.ui.design.Haptic
@@ -143,7 +145,9 @@ fun SegmentedControl(
     val colors = Wallhop.colors
     val home = Wallhop.home
     val haptics = rememberHaptics()
-    BoxWithConstraints(modifier.fillMaxWidth().height(44.dp)) {
+    // 48 dp at the default font, taller as the font grows so labels never clip.
+    val fontScale = androidx.compose.ui.platform.LocalDensity.current.fontScale
+    BoxWithConstraints(modifier.fillMaxWidth().height(48.dp * fontScale.coerceAtLeast(1f))) {
         val gap = 8.dp
         val segment = (maxWidth - gap * (options.size - 1)) / options.size
         val stepPx = with(androidx.compose.ui.platform.LocalDensity.current) { (segment + gap).toPx() }
@@ -175,21 +179,40 @@ fun SegmentedControl(
                                 if (haptic) haptics.perform(Haptic.Selection)
                                 onSelect(index)
                             }
-                        },
+                        }
+                        .semantics { this.selected = on },
                     contentAlignment = Alignment.Center,
                 ) {
                     val tint by animateColorAsState(if (on) home.onPale else colors.label, Springs.snappy(), label = "chipText")
                     Text(label, style = Type.footnote.copy(fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold),
-                        color = tint, maxLines = 1)
+                        color = tint, maxLines = 2, textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                        modifier = Modifier.padding(horizontal = 4.dp))
                 }
             }
         }
     }
 }
 
-/** iOS-style spinner: 8 spokes fading in turn, one turn per second. */
+/** iOS-style spinner: 8 spokes fading in turn, one turn per second. Still with Reduce Motion. */
 @Composable
 fun ActivityIndicator(color: Color = Wallhop.colors.labelSecondary, size: Dp = 20.dp) {
+    if (Wallhop.a11y.reduceMotion) {
+        Canvas(Modifier.size(size)) {
+            val center = Offset(this.size.width / 2, this.size.height / 2)
+            val outer = this.size.minDimension / 2
+            for (i in 0 until 8) {
+                val angle = (i * 45.0 - 90.0) * PI / 180
+                drawLine(
+                    color = color.copy(alpha = color.alpha * (1f - i / 8f * 0.85f)),
+                    start = Offset(center.x + (outer * 0.45f * cos(angle)).toFloat(), center.y + (outer * 0.45f * sin(angle)).toFloat()),
+                    end = Offset(center.x + (outer * cos(angle)).toFloat() * 0.92f, center.y + (outer * sin(angle)).toFloat() * 0.92f),
+                    strokeWidth = outer * 0.2f,
+                    cap = StrokeCap.Round,
+                )
+            }
+        }
+        return
+    }
     val transition = androidx.compose.animation.core.rememberInfiniteTransition(label = "spinner")
     val turn = transition.animateFloat(
         0f, 8f,

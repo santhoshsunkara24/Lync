@@ -24,13 +24,26 @@ class MainActivity : ComponentActivity() {
         // Test builds only (debug and benchmark): `adb shell am start -n app.wallhop/.ui.MainActivity
         // --ez demo true` shows the paired screens with sample data, for design review and screenshots.
         val demo = (app.wallhop.BuildConfig.DEBUG || app.wallhop.BuildConfig.STRESS_HOOKS) && intent.getBooleanExtra("demo", false)
+        handleIntent(intent)
         setContent {
             WallhopTheme { WallhopRoot(link, demo) }
         }
     }
 
+    override fun onNewIntent(intent: android.content.Intent) {
+        super.onNewIntent(intent)
+        handleIntent(intent)
+    }
+
+    /** A notification can ask for a tab (Activity, for files from the Mac). */
+    private fun handleIntent(intent: android.content.Intent?) {
+        val tab = intent?.getIntExtra(app.wallhop.link.Notifications.EXTRA_TAB, -1) ?: -1
+        if (tab in 0..2) AppNav.tab.value = tab
+    }
+
     override fun onStart() {
         super.onStart()
+        app.wallhop.link.AppVisibility.foreground = true
         LinkService.screensOpen++
         Pickers.open = false
         LinkService.start(this)
@@ -38,6 +51,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onStop() {
         super.onStop()
+        app.wallhop.link.AppVisibility.foreground = false
         LinkService.screensOpen = (LinkService.screensOpen - 1).coerceAtLeast(0)
         // "Run in background" off in Lync: stay connected only while the app is open. Not while
         // a photo or file picker is up (the app comes straight back), and not while a transfer
@@ -56,4 +70,9 @@ class MainActivity : ComponentActivity() {
 /** True while Lync's own photo or file picker is on screen, so leaving for it doesn't drop the link. */
 internal object Pickers {
     @Volatile var open = false
+}
+
+/** Asks the app root for a tab; cleared once it's shown. */
+internal object AppNav {
+    val tab = kotlinx.coroutines.flow.MutableStateFlow<Int?>(null)
 }

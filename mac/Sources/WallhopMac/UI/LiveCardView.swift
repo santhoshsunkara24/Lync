@@ -12,7 +12,13 @@ struct LiveCardView: View {
             case .otp(let code, let sender):
                 otp(code: code, sender: sender)
             case .text(let text):
-                row(icon: "text.bubble.fill", title: "From your phone", subtitle: text, trailing: copiedBadge)
+                // "Copied" only when it really was; otherwise a Copy button.
+                if model.copyTextAutomatically {
+                    row(icon: "text.bubble.fill", title: "Ready to paste", subtitle: text, trailing: copiedBadge)
+                } else {
+                    row(icon: "text.bubble.fill", title: "From your phone", subtitle: text,
+                        trailing: CopyButton(style: WPill(prominent: false, compact: true), label: "Copy text") { Clipboard.copy(text) })
+                }
             case .receiving(let id):
                 receiving(id)
             case .added(let id):
@@ -21,10 +27,12 @@ struct LiveCardView: View {
                 saved(id)
             case .pairing(let id):
                 pairing(id)
-            case .connected(let name):
-                row(icon: "iphone.radiowaves.left.and.right", title: name, subtitle: "Connected", trailing: EmptyView())
-            case .sentToPhone(let message):
-                row(icon: "arrow.up.right.circle.fill", title: message, subtitle: nil, trailing: EmptyView())
+            case .quiet(let symbol, let text):
+                row(icon: symbol, title: text, subtitle: nil, trailing: EmptyView())
+            case .dropZone:
+                dropZone
+            case .sending(let id):
+                sending(id)
             case .info(let symbol, let title, let subtitle):
                 row(icon: symbol, title: title, subtitle: subtitle, trailing: EmptyView())
             case .call:
@@ -44,7 +52,7 @@ struct LiveCardView: View {
 
     private func otp(code: String, sender: String) -> some View {
         HStack(spacing: 14) {
-            CodeIconTile(size: 34, tint: WTheme.success, wash: 0.16)
+            CodeIconTile(size: 34, tint: WTheme.codeMint, wash: 0.16)
             VStack(alignment: .leading, spacing: 2) {
                 RollingCode(code: code, font: .wh(26, .semibold).monospacedDigit(), tracking: 1)
                 Text(sender.isEmpty ? "Verification code" : sender)
@@ -53,8 +61,47 @@ struct LiveCardView: View {
                     .lineLimit(1)
             }
             Spacer(minLength: 8)
-            copiedBadge
+            if model.codeOnClipboard == code {
+                copiedBadge
+            } else {
+                CopyButton(style: WPill(prominent: false, compact: true), label: "Copy code \(spaced(code))") { model.copyOTP(code) }
+            }
         }
+    }
+
+    /// Files dragged near the notch: drop them here. Thumbnails of the photos when there are some.
+    private var dropZone: some View {
+        let drag = model.fileDrag
+        return HStack(spacing: 14) {
+            if let images = drag?.images, !images.isEmpty {
+                ThumbnailStack(urls: images)
+            } else {
+                iconTile("arrow.up.doc.fill", tint: WTheme.codeMint)
+            }
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Drop to send to \(model.connectedPhone?.name ?? "your phone")")
+                    .font(.wh(14, .semibold)).lineLimit(1)
+                if let drag {
+                    Text(drag.summary).font(.wh(12, .medium)).foregroundStyle(.white.opacity(0.7))
+                }
+            }
+            Spacer(minLength: 8)
+        }
+        .accessibilityElement(children: .combine)
+    }
+
+    private func sending(_ id: String) -> some View {
+        let progress = model.outgoing?.id == id ? model.outgoing?.progress ?? 0 : 1
+        return HStack(spacing: 14) {
+            iconTile("arrow.up", tint: WTheme.codeMint)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Sending to \(model.connectedPhone?.name ?? "your phone")").font(.wh(14, .semibold)).lineLimit(1)
+                Text("\(Int(progress * 100))%").font(.wh(12, .medium).monospacedDigit()).foregroundStyle(.white.opacity(0.7))
+            }
+            Spacer(minLength: 8)
+            ProgressRing(progress: progress)
+        }
+        .accessibilityElement(children: .combine)
     }
 
     private func receiving(_ id: String) -> some View {
@@ -105,22 +152,22 @@ struct LiveCardView: View {
                     }
             }
             VStack(alignment: .leading, spacing: 2) {
-                Text(interrupted ? "Transfer interrupted" : files.isEmpty ? "Transfer failed" : "Copied to clipboard")
+                Text(interrupted ? "Transfer interrupted" : files.isEmpty ? "Transfer failed" : "\(batch?.summary ?? "Files") ready to paste")
                     .font(.wh(14, .semibold))
                     .lineLimit(1)
                 Text(files.isEmpty ? "Nothing arrived"
-                     : interrupted ? "\(batch?.summary ?? "") arrived · copied"
-                     : batch?.summary ?? "")
+                     : interrupted ? "\(batch?.summary ?? "") arrived · kept for a day"
+                     : "Kept for a day — Save to keep")
                     .font(.wh(12, .medium))
-                    .foregroundStyle(.white.opacity(0.65))
+                    .foregroundStyle(.white.opacity(0.7))
                     .lineLimit(1)
             }
             Spacer(minLength: 8)
             if !files.isEmpty {
                 if interrupted {
-                    CopyButton(iconOnly: true, style: WRound(size: 30)) { model.copyFiles(id) }
+                    CopyButton(iconOnly: true, style: WRound(size: 30), label: "Copy \(batch?.summary ?? "files")") { model.copyFiles(id) }
                 } else {
-                    CopyButton(style: WPill(prominent: false, compact: true)) { model.copyFiles(id) }
+                    CopyButton(style: WPill(prominent: false, compact: true), label: "Copy \(batch?.summary ?? "files")") { model.copyFiles(id) }
                 }
                 Button("Save") { model.saveFiles(id) }
                     .buttonStyle(WPill(compact: true))
@@ -163,6 +210,7 @@ struct LiveCardView: View {
                 Spacer()
                 Button("Decline") { model.decidePairing(false) }
                     .buttonStyle(WPill(prominent: false, compact: true))
+                    .keyboardShortcut(.cancelAction)
                 Button("Pair") { model.decidePairing(true) }
                     .buttonStyle(WPill(compact: true))
                     .keyboardShortcut(.defaultAction)
@@ -247,9 +295,9 @@ private struct NotificationCard: View {
                         Text(notification.time, format: .relative(presentation: .named))
                     }
                     .font(.wh(11, .medium))
-                    .foregroundStyle(.white.opacity(0.5))
+                    .foregroundStyle(.white.opacity(0.6))
                     .lineLimit(1)
-                    if !notification.title.isEmpty {
+                    if !notification.title.isEmpty, !model.hideNotificationText {
                         Text(notification.title)
                             .font(.wh(14, .semibold))
                             .lineLimit(1)
@@ -264,8 +312,8 @@ private struct NotificationCard: View {
                     model.dismissNotification(notification.key)
                 } label: {
                     Image(systemName: "xmark")
-                        .font(.wh(10, .bold))
-                        .frame(width: 22, height: 22)
+                        .font(.wh(11, .bold))
+                        .frame(width: 24, height: 24)
                         .background(Circle().fill(Color.white.opacity(0.12)))
                 }
                 .buttonStyle(WShapePress(shape: Circle()))
@@ -284,6 +332,7 @@ private struct NotificationCard: View {
                         .focused($focused)
                         .onSubmit(send)
                         .onExitCommand { model.cancelReply() }
+                        .accessibilityLabel("Reply to \(notification.appName)")
                     Button("Send", action: send)
                         .buttonStyle(WPill(compact: true))
                         .disabled(draft.trimmingCharacters(in: .whitespaces).isEmpty)
@@ -338,6 +387,26 @@ private struct CallCard: View {
     let call: PhoneCall
 
     var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            header
+            // Decline leads; audio always stays on the phone, so Answer says where.
+            if call.state == .ringing {
+                HStack(spacing: 8) {
+                    CallButton(title: "Decline", symbol: "phone.down.fill", fill: WTheme.danger) { model.declineCall() }
+                        .keyboardShortcut(.cancelAction)
+                    CallButton(title: "Answer on phone", symbol: "phone.fill", fill: WTheme.success) { model.answerCall() }
+                    Spacer(minLength: 0)
+                }
+            } else if call.state == .active {
+                HStack {
+                    CallButton(title: "End call", symbol: "phone.down.fill", fill: WTheme.danger) { model.endCall() }
+                    Spacer(minLength: 0)
+                }
+            }
+        }
+    }
+
+    private var header: some View {
         HStack(spacing: 14) {
             ZStack {
                 Circle().fill(Color.white.opacity(0.14))
@@ -364,18 +433,6 @@ private struct CallCard: View {
                 .lineLimit(1)
             }
             Spacer(minLength: 8)
-            if call.state == .ringing {
-                CircleButton(symbol: "phone.down.fill", tint: WTheme.danger, help: "Decline") {
-                    model.declineCall()
-                }
-                CircleButton(symbol: "phone.fill", tint: WTheme.success, help: "Answer on phone") {
-                    model.answerCall()
-                }
-            } else if call.state == .active {
-                CircleButton(symbol: "phone.down.fill", tint: WTheme.danger, help: "End call") {
-                    model.endCall()
-                }
-            }
         }
     }
 
@@ -395,22 +452,25 @@ private struct CallCard: View {
     }
 }
 
-private struct CircleButton: View {
+/// A call button: a light red or green fill with dark text and icon (white on these fills
+/// would be under 3:1).
+private struct CallButton: View {
+    let title: String
     let symbol: String
-    let tint: Color
-    let help: String
+    let fill: Color
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
-            Image(systemName: symbol)
-                .font(.wh(15, .semibold))
-                .foregroundStyle(.white)
-                .frame(width: 38, height: 38)
-                .background(Circle().fill(tint))
+            Label(title, systemImage: symbol)
+                .labelStyle(.titleAndIcon)
+                .font(.wh(13, .semibold))
+                .foregroundStyle(WTheme.ink)
+                .padding(.horizontal, 14)
+                .frame(height: 34)
+                .background(Capsule().fill(fill))
         }
-        .buttonStyle(WShapePress(shape: Circle()))
-        .help(help)
-        .accessibilityLabel(help)
+        .buttonStyle(WShapePress(shape: Capsule()))
+        .help(title)
     }
 }

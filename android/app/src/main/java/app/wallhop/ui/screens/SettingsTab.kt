@@ -73,6 +73,10 @@ class SettingsActions(
     val macDetails: () -> Unit,
     val openLicences: () -> Unit,
     val openPrivacy: () -> Unit,
+    /** The guided setup. */
+    val finishSetup: () -> Unit,
+    /** Adds the "Clipboard to Mac" Quick Settings tile (or explains how). */
+    val addTile: () -> Unit,
 )
 
 /** Permissions and preferences as an inset grouped list (DESIGN.md §6.6). */
@@ -93,23 +97,33 @@ fun SettingsTab(
         if (on && key !in setup.granted) request()
     }
     Page(title = "Settings") {
+        // Something the user wanted is still waiting for Android: first thing on the page.
+        if (!setup.essentialsDone) {
+            item(key = "setup") {
+                Column(Modifier.staggerIn(0)) {
+                    InsetSection(dividerInset = 57.dp) {
+                        row {
+                            ListRow(
+                                title = "Finish setup",
+                                subtitle = "A few things you turned on still need Android's OK",
+                                leading = { IconTile(WIcons.Settings, colors.orange) },
+                                chevron = true,
+                                onClick = actions.finishSetup,
+                            )
+                        }
+                    }
+                    Spacer(Modifier.height(32.dp))
+                }
+            }
+        }
         item(key = "mac") {
             Column(Modifier.staggerIn(1)) {
                 SectionHeader("On your Mac")
                 InsetSection(dividerInset = 57.dp) {
                     row {
                         ListRow(
-                            title = "App notifications",
-                            leading = { IconTile(WIcons.BellRinging, colors.red) },
-                            value = if (mirroredCount == 0) "Off" else "$mirroredCount apps",
-                        animateValue = true,
-                            chevron = true,
-                            onClick = openApps,
-                        )
-                    }
-                    row {
-                        ListRow(
-                            title = "Codes from messages",
+                            title = "Codes",
+                            subtitle = "One-time codes from your texts",
                             leading = { IconTile(WIcons.Code, colors.green) },
                             checked = setup.sms,
                             onCheckedChange = toggle(Features.Key.Codes, actions.allowSms),
@@ -141,8 +155,36 @@ fun SettingsTab(
                 Spacer(Modifier.height(32.dp))
             }
         }
-        item(key = "connected") {
+        item(key = "notifications") {
             Column(Modifier.staggerIn(2)) {
+                SectionHeader("Notifications")
+                InsetSection(dividerInset = 57.dp) {
+                    row {
+                        // Picking apps and granting notification access both live in this one flow.
+                        ListRow(
+                            title = "Phone notifications on Mac",
+                            leading = { IconTile(WIcons.BellRinging, colors.red) },
+                            value = if (mirroredCount == 0 || !setup.notificationAccess) "Off" else "$mirroredCount apps",
+                            animateValue = true,
+                            chevron = true,
+                            onClick = openApps,
+                        )
+                    }
+                    row {
+                        ListRow(
+                            title = "Alerts on this phone",
+                            subtitle = "Files and text from your Mac, and sending progress",
+                            leading = { IconTile(WIcons.Bell, colors.red) },
+                            checked = setup.notifications,
+                            onCheckedChange = toggle(Features.Key.Notifications, actions.allowNotifications),
+                        )
+                    }
+                }
+                Spacer(Modifier.height(32.dp))
+            }
+        }
+        item(key = "connected") {
+            Column(Modifier.staggerIn(3)) {
                 SectionHeader("Stay connected")
                 InsetSection(
                     dividerInset = 57.dp,
@@ -162,6 +204,7 @@ fun SettingsTab(
                             ListRow(
                                 title = "Keep running on ${brand.name}",
                                 subtitle = brand.steps,
+                                subtitleMaxLines = Int.MAX_VALUE,
                                 leading = { IconTile(WIcons.Lightning, colors.orange) },
                                 chevron = true,
                                 onClick = { app.wallhop.core.KeepAlive.open(context) },
@@ -170,19 +213,11 @@ fun SettingsTab(
                     }
                     row {
                         ListRow(
-                            title = "Notifications",
-                            leading = { IconTile(WIcons.Bell, colors.red) },
-                            checked = setup.notifications,
-                            onCheckedChange = toggle(Features.Key.Notifications, actions.allowNotifications),
-                        )
-                    }
-                    row {
-                        ListRow(
-                            title = "Notification access",
-                            subtitle = "Codes in other apps, and app notifications",
-                            leading = { IconTile(WIcons.Shield, colors.indigo) },
-                            checked = setup.notificationAccess,
-                            onCheckedChange = toggle(Features.Key.AppNotifications, actions.openNotificationAccess),
+                            title = "Send clipboard tile",
+                            subtitle = "One tap in Quick Settings sends your clipboard",
+                            leading = { IconTile(WIcons.Clipboard, colors.indigo) },
+                            chevron = true,
+                            onClick = actions.addTile,
                         )
                     }
                 }
@@ -190,11 +225,11 @@ fun SettingsTab(
             }
         }
         app.wallhop.glyph.Glyphs.hardware?.let { hardware ->
-            item(key = "glyph") { Column(Modifier.staggerIn(3)) { GlyphSection(hardware) } }
+            item(key = "glyph") { Column(Modifier.staggerIn(4)) { GlyphSection(hardware) } }
         }
         if (macName != null) {
             item(key = "pairedMac") {
-                Column(Modifier.staggerIn(4)) {
+                Column(Modifier.staggerIn(5)) {
                     SectionHeader("Mac")
                     InsetSection(dividerInset = 57.dp) {
                         row {
@@ -220,7 +255,7 @@ fun SettingsTab(
             }
         }
         item(key = "about") {
-            Column(Modifier.staggerIn(5)) {
+            Column(Modifier.staggerIn(6)) {
                 SectionHeader("About")
                 InsetSection(
                     dividerInset = 57.dp,
@@ -249,8 +284,23 @@ fun SettingsTab(
                             onClick = actions.openPrivacy,
                         )
                     }
-                    if (BuildConfig.STRESS_HOOKS) {
-                        row { ListRow(title = "Send a test code", onClick = actions.sendTestCode) }
+                }
+            }
+        }
+        // Test builds only.
+        if (BuildConfig.STRESS_HOOKS) {
+            item(key = "developer") {
+                Column {
+                    Spacer(Modifier.height(32.dp))
+                    SectionHeader("Developer")
+                    InsetSection(dividerInset = 57.dp) {
+                        row {
+                            ListRow(
+                                title = "Send a test code",
+                                leading = { IconTile(WIcons.Code, colors.gray) },
+                                onClick = actions.sendTestCode,
+                            )
+                        }
                     }
                 }
             }
@@ -279,7 +329,7 @@ fun AppsScreen(
     val recent = remember { mirrored.recent() }
 
     Page(
-        title = "App notifications",
+        title = "Phone notifications on Mac",
         subtitle = "Pick the apps that show on your Mac. Where an app supports quick reply, you can answer from the Mac.",
         leading = { CircleButton(WIcons.ChevronLeft, "Back", onClick = { onBack() }) },
     ) {
@@ -301,7 +351,7 @@ fun AppsScreen(
         }
         if (!hasNotificationAccess) {
             item(key = "access") {
-                InsetSection(footer = "Lync needs notification access to see notifications.") {
+                InsetSection(footer = "Android asks you to allow Lync to see notifications. Lync also finds codes in other apps' notifications this way.") {
                     row {
                         ListRow(
                             title = "Turn on notification access",

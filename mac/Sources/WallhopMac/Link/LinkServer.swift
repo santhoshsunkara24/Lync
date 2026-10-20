@@ -32,6 +32,10 @@ enum LinkEvent {
     case notificationRemoved(key: String)
     case outgoingProgress(id: String, sent: Int64, total: Int64)
     case outgoingFinished(id: String, ok: Bool)
+    /// The phone unpaired this Mac (`forget`); it's already removed from the paired phones.
+    case forgotten(PairedPhone)
+    /// The phone stopped ringing by itself (`ring` with `action` `stopped`).
+    case ringStopped
 }
 
 /// A notification mirrored from the phone.
@@ -347,6 +351,23 @@ final class LinkServer {
         }
     }
 
+    /// Public keys of paired phones with a working connection (the active one and any waiting).
+    func connectedPhoneKeys() -> Set<Data> {
+        queue.sync { Set(readyByKey.filter { $0.value.state == .ready }.keys) }
+    }
+
+    /// Makes another connected paired phone the one the app shows and talks to.
+    func makeActive(publicKey: Data) {
+        queue.async {
+            guard let next = self.readyByKey[publicKey], next.state == .ready, next !== self.active,
+                  let phone = next.phone else { return }
+            let previous = self.active?.phone
+            self.active = next
+            if let previous { self.emit(.disconnected(previous)) }
+            self.emit(.connected(phone, host: next.remoteHost))
+        }
+    }
+
     /// Drops the connection of a phone that was just forgotten.
     func disconnect(publicKey: Data) {
         queue.async {
@@ -362,7 +383,7 @@ final class LinkServer {
         // A paired phone waiting in the background still delivers codes, texts, links and files;
         // its status, media, calls and notifications would mix with the active phone's.
         if connection !== active {
-            let background: Set<String> = ["ping", "text", "otp", "open_url", "ack",
+            let background: Set<String> = ["ping", "text", "otp", "open_url", "ack", "forget",
                                            "batch_start", "file_start", "file_chunk", "file_end", "batch_end"]
             guard background.contains(message.type) else { return }
         }
@@ -475,6 +496,16 @@ final class LinkServer {
             if let id = message.string("id"), let pending = pendingAcks.removeValue(forKey: id) {
                 pending.callback(message.bool("ok") ?? true)
             }
+
+        case "forget":
+            // Forget on the phone, sent over this authenticated session just before it
+            // disconnects: drop the pairing here too, like Forget in Settings.
+            paired.remove(id: phone.id)
+            emit(.forgotten(phone))
+            connection.close()
+
+        case "ring":
+            if message.string("action") == "stopped" { emit(.ringStopped) }
 
         default:
             break // Unknown types are ignored so newer phones keep working.

@@ -23,6 +23,15 @@ struct SmsMessage: Identifiable, Equatable {
     let failed: Bool
     let sim: String?
     var pending = false
+    /// Why sending failed, shown on the bubble.
+    var error: String?
+}
+
+/// A contact from the phone, for the "To:" field.
+struct ContactMatch: Identifiable, Equatable {
+    let name: String
+    let number: String
+    var id: String { name + "|" + number }
 }
 
 struct SimCard: Identifiable, Hashable {
@@ -52,15 +61,76 @@ final class MessagesModel: ObservableObject {
     @Published var search = ""
     /// Set while writing to a number that has no conversation yet.
     @Published var newRecipient: String?
+    /// The contact picked for `newRecipient`, if it came from the search.
+    @Published private(set) var recipientName: String?
+    /// The phone's contacts matching what's typed in "To:" (at most 20).
+    @Published private(set) var contactResults: [ContactMatch] = []
+    /// The phone can't search its contacts (Contacts not allowed for Texts).
+    @Published private(set) var contactsUnavailable = false
 
     private let server: LinkServer
     private var observer: NSObjectProtocol?
+    private var contactSearch: AnyCancellable?
+    /// Only the newest search's answer counts.
+    private var contactQuery = 0
+    /// The number just picked from the results: it isn't searched again.
+    private var pickedNumber: String?
 
     init(server: LinkServer) {
         self.server = server
         observer = NotificationCenter.default.addObserver(forName: .smsChanged, object: nil, queue: .main) { [weak self] _ in
             self?.refresh(quiet: true)
         }
+        // Searches the phone's contacts as "To:" is typed, 250 ms after the last key.
+        contactSearch = $newRecipient
+            .removeDuplicates()
+            .debounce(for: .milliseconds(250), scheduler: RunLoop.main)
+            .sink { [weak self] query in self?.searchContacts(query) }
+    }
+
+    /// Asks the phone for contacts matching `raw` (`contacts`, answered with `sms_result`).
+    private func searchContacts(_ raw: String?) {
+        contactQuery += 1
+        let token = contactQuery
+        guard let query = raw?.trimmingCharacters(in: .whitespaces), !query.isEmpty else {
+            contactResults = []
+            return
+        }
+        if query == pickedNumber { return }
+        recipientName = nil
+        server.request("contacts", ["q": query]) { [weak self] reply in
+            guard let self, token == self.contactQuery, self.newRecipient != nil else { return }
+            guard let reply else {
+                self.contactResults = []
+                return
+            }
+            if reply.string("err") != nil {
+                self.contactsUnavailable = true
+                self.contactResults = []
+                return
+            }
+            self.contactsUnavailable = false
+            let json = (try? JSONSerialization.jsonObject(with: reply.body)) as? [String: Any]
+            self.contactResults = (json?["items"] as? [[String: Any]] ?? []).prefix(20).compactMap { item in
+                guard let number = item["number"] as? String, !number.isEmpty else { return nil }
+                return ContactMatch(name: item["name"] as? String ?? number, number: number)
+            }
+        }
+    }
+
+    /// For the snapshot renderer: shows results without a phone.
+    func showContactResults(_ results: [ContactMatch], unavailable: Bool = false) {
+        newRecipient = ""
+        contactResults = results
+        contactsUnavailable = unavailable
+    }
+
+    func pickContact(_ contact: ContactMatch) {
+        pickedNumber = contact.number
+        recipientName = contact.name
+        newRecipient = contact.number
+        contactResults = []
+        contactQuery += 1
     }
 
     var filteredThreads: [SmsThread] {
@@ -129,12 +199,17 @@ final class MessagesModel: ObservableObject {
     func startNewMessage() {
         selectedThread = nil
         messages = []
+        pickedNumber = nil
+        recipientName = nil
+        contactResults = []
         newRecipient = ""
     }
 
     /// Esc while writing to a new number: back to the first conversation.
     func cancelNewMessage() {
         guard newRecipient != nil else { return }
+        contactResults = []
+        recipientName = nil
         newRecipient = nil
         selectedThread = threads.first?.id
     }
@@ -142,7 +217,6 @@ final class MessagesModel: ObservableObject {
     /// Sends a text that failed again.
     func retry(_ message: SmsMessage) {
         messages.removeAll { $0.id == message.id }
-        if case .failed = status { status = .idle }
         send(message.body)
     }
 
@@ -165,11 +239,11 @@ final class MessagesModel: ObservableObject {
         server.sendSMS(to: address, text: trimmed, sim: sim) { [weak self] error in
             guard let self else { return }
             if let error {
+                // The reason shows on the failed bubble itself, next to Try again.
                 if let index = self.messages.firstIndex(where: { $0.id == placeholder.id }) {
                     self.messages[index] = SmsMessage(id: placeholder.id, body: trimmed, date: Date(), outgoing: true,
-                                                      failed: true, sim: simLabel)
+                                                      failed: true, sim: simLabel, error: error)
                 }
-                self.status = .failed(error)
             } else {
                 self.refresh(quiet: true)
             }
@@ -233,7 +307,7 @@ final class MessagesWindowController: NSObject, NSWindowDelegate {
                 backing: .buffered,
                 defer: false
             )
-            window.title = "Lync Messages"
+            window.title = "Lync — Texts"
             window.titlebarAppearsTransparent = true
             // Same dark, phone-coloured style as the panel.
             window.appearance = NSAppearance(named: .darkAqua)
@@ -245,10 +319,9 @@ final class MessagesWindowController: NSObject, NSWindowDelegate {
             window.setFrameAutosaveName("WallhopMessages")
             window.delegate = self
             self.window = window
-            // "Lync — Anna" while a conversation is open.
+            // "Lync — Texts", with the open conversation underneath.
             titleObserver = model.$selectedThread.combineLatest(model.$threads).sink { [weak window] id, threads in
-                let name = threads.first { $0.id == id }?.title
-                window?.title = name.map { "Lync — \($0)" } ?? "Lync Messages"
+                window?.subtitle = threads.first { $0.id == id }?.title ?? ""
             }
         }
         NSApp.setActivationPolicy(.regular)
@@ -386,6 +459,8 @@ private struct ConversationView: View {
     @EnvironmentObject var theme: ThemeStore
     @State private var draft = ""
     @FocusState private var composerFocused: Bool
+    /// The contact match chosen with the arrow keys.
+    @State private var highlighted: Int?
     /// How many messages were on screen before the latest change: only messages added to an
     /// open conversation slide in, not a whole conversation loading.
     @State private var shownCount = 0
@@ -406,7 +481,8 @@ private struct ConversationView: View {
                                     .foregroundStyle(.secondary)
                                     .padding(.vertical, 8)
                             }
-                            Bubble(message: message, showSim: model.sims.count > 1, connected: connected) {
+                            Bubble(message: message, sender: model.currentThread?.title ?? model.recipientName ?? "Them",
+                                   showSim: model.sims.count > 1, connected: connected) {
                                 model.retry(message)
                             }
                             .id(message.id)
@@ -435,13 +511,13 @@ private struct ConversationView: View {
             }
             if case .failed(let error) = model.status {
                 Text(error)
-                    .font(.wh(11, .medium))
-                    .foregroundStyle(WTheme.danger)
+                    .font(.wh(12, .medium))
+                    .foregroundStyle(WTheme.secondary)
                     .padding(.top, 6)
             }
             if !connected {
                 Text("Connect your phone to send texts: open Lync on it, on the same Wi‑Fi as this Mac.")
-                    .font(.wh(11, .medium))
+                    .font(.wh(12, .medium))
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
                     .padding(.top, 8)
@@ -452,16 +528,56 @@ private struct ConversationView: View {
     }
 
     @ViewBuilder private var header: some View {
+        VStack(spacing: 0) {
+            headerRow
+            if model.newRecipient != nil {
+                ContactResults(model: model, highlighted: $highlighted) { pick($0) }
+            }
+        }
+    }
+
+    /// Picks a contact from the search and moves on to the message.
+    private func pick(_ contact: ContactMatch) {
+        model.pickContact(contact)
+        highlighted = nil
+        composerFocused = true
+    }
+
+    @ViewBuilder private var headerRow: some View {
         HStack(spacing: 10) {
             if model.newRecipient != nil {
                 Text("To:").foregroundStyle(.secondary)
-                TextField("Phone number", text: Binding(
+                TextField("Name or phone number", text: Binding(
                     get: { model.newRecipient ?? "" },
-                    set: { model.newRecipient = $0 }
+                    set: { model.newRecipient = $0; highlighted = nil }
                 ))
                 .textFieldStyle(.plain)
                 .font(.wh(14, .medium))
+                .accessibilityLabel("To")
                 .onExitCommand { model.cancelNewMessage() }
+                // ↑/↓ move through the matches, Return picks one (or goes on with the number as typed).
+                .onKeyPress(.downArrow) {
+                    guard !model.contactResults.isEmpty else { return .ignored }
+                    highlighted = min((highlighted ?? -1) + 1, model.contactResults.count - 1)
+                    return .handled
+                }
+                .onKeyPress(.upArrow) {
+                    guard let current = highlighted else { return .ignored }
+                    highlighted = current > 0 ? current - 1 : nil
+                    return .handled
+                }
+                .onSubmit {
+                    if let index = highlighted, model.contactResults.indices.contains(index) {
+                        pick(model.contactResults[index])
+                    } else if model.contactResults.count == 1 {
+                        pick(model.contactResults[0])
+                    } else {
+                        composerFocused = true
+                    }
+                }
+                if let name = model.recipientName {
+                    Text(name).font(.wh(12, .semibold)).foregroundStyle(.secondary).lineLimit(1)
+                }
                 Button("Cancel") { model.cancelNewMessage() }
                     .buttonStyle(WPill(prominent: false, compact: true))
                     .help("Cancel the new message (Esc)")
@@ -539,6 +655,8 @@ private struct ConversationView: View {
 
 private struct Bubble: View {
     let message: SmsMessage
+    /// The other person, for VoiceOver ("Anna: …").
+    let sender: String
     let showSim: Bool
     let connected: Bool
     let retry: () -> Void
@@ -567,11 +685,19 @@ private struct Bubble: View {
                         }
                         Button("Copy") { Clipboard.copy(message.body) }
                     }
-                HStack(spacing: 4) {
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel("\(message.outgoing ? "You" : sender): \(message.body)")
+                    .accessibilityActions {
+                        if message.failed && message.outgoing && connected { Button("Try again", action: retry) }
+                        Button("Copy") { Clipboard.copy(message.body) }
+                    }
+                HStack(spacing: 6) {
                     if message.failed {
-                        Label("Not sent", systemImage: "exclamationmark.circle").foregroundStyle(WTheme.danger)
+                        Label(message.error.map { "Not sent · \($0)" } ?? "Not sent", systemImage: "exclamationmark.circle")
+                            .foregroundStyle(WTheme.danger)
                         Button("Try again", action: retry).buttonStyle(WPlainPress()).foregroundStyle(theme.theme.pale)
                             .disabled(!connected)
+                        Button("Copy") { Clipboard.copy(message.body) }.buttonStyle(WPlainPress()).foregroundStyle(theme.theme.pale)
                     } else if message.pending {
                         Text("Sending…")
                     } else {
@@ -579,7 +705,7 @@ private struct Bubble: View {
                     }
                     if showSim, let sim = message.sim { Text("· \(sim)") }
                 }
-                .font(.wh(10, .medium))
+                .font(.wh(11, .medium))
                 .foregroundStyle(.secondary)
             }
             if !message.outgoing { Spacer(minLength: 80) }
@@ -615,6 +741,59 @@ private struct Avatar: View {
         let palette: [Color] = [theme.theme.top, theme.theme.peek, theme.theme.mid, theme.theme.card]
         let hash = (name ?? "").unicodeScalars.reduce(0) { $0 &+ Int($1.value) }
         return palette[abs(hash) % palette.count]
+    }
+}
+
+/// Matches from the phone's contacts under the "To:" field: name and number, ↑/↓ to choose.
+struct ContactResults: View {
+    @ObservedObject var model: MessagesModel
+    @Binding var highlighted: Int?
+    let pick: (ContactMatch) -> Void
+    @EnvironmentObject var theme: ThemeStore
+
+    var body: some View {
+        if model.contactsUnavailable && model.contactResults.isEmpty {
+            HStack(spacing: 8) {
+                Image(systemName: "person.crop.circle.badge.exclamationmark").foregroundStyle(WTheme.secondary)
+                Text("Allow Contacts for Texts on your phone to search names")
+                    .font(.wh(12, .medium)).foregroundStyle(WTheme.secondary)
+                Spacer()
+            }
+            .padding(.horizontal, 16).padding(.bottom, 10)
+        } else if !model.contactResults.isEmpty {
+            ScrollViewReader { proxy in
+                ScrollView {
+                    VStack(spacing: 0) {
+                        ForEach(Array(model.contactResults.enumerated()), id: \.element.id) { index, contact in
+                            Button { pick(contact) } label: {
+                                HStack(spacing: 10) {
+                                    Text(contact.name).font(.wh(13, .semibold)).lineLimit(1)
+                                    Spacer(minLength: 8)
+                                    Text(contact.number).font(.wh(12, .medium)).foregroundStyle(WTheme.secondary).lineLimit(1)
+                                }
+                                .padding(.horizontal, 12).frame(height: 34)
+                                .background(RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                    .fill(highlighted == index ? Color.white.opacity(0.14) : Color.clear))
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .rowHover(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                            .id(index)
+                            .accessibilityLabel("\(contact.name), \(contact.number)")
+                            .accessibilityAddTraits(highlighted == index ? .isSelected : [])
+                        }
+                    }
+                    .padding(6)
+                }
+                .frame(maxHeight: min(CGFloat(model.contactResults.count) * 34 + 12, 220))
+                .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(theme.theme.card))
+                .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Color.white.opacity(0.1), lineWidth: 1))
+                .padding(.horizontal, 12).padding(.bottom, 10)
+                .onChange(of: highlighted) { _, index in if let index { proxy.scrollTo(index) } }
+                .accessibilityElement(children: .contain)
+                .accessibilityLabel("Contacts")
+            }
+        }
     }
 }
 

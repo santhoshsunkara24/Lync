@@ -35,6 +35,35 @@ class SmsStore(private val context: Context) {
 
     val canRead: Boolean get() = granted(Manifest.permission.READ_SMS)
     val canSend: Boolean get() = granted(Manifest.permission.SEND_SMS)
+    val canReadContacts: Boolean get() = granted(Manifest.permission.READ_CONTACTS)
+
+    /**
+     * Contacts whose name or number contains [query], for the Mac's Texts window: up to 20
+     * (name, number) pairs. The provider narrows it down; [app.wallhop.core.Wording.matchContacts]
+     * applies the exact rule.
+     */
+    fun searchContacts(query: String, limit: Int = 20): List<Pair<String, String>> {
+        val q = query.trim()
+        if (q.isEmpty() || !canReadContacts) return emptyList()
+        val phone = ContactsContract.CommonDataKinds.Phone.CONTENT_URI
+        val name = ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME
+        val number = ContactsContract.CommonDataKinds.Phone.NUMBER
+        val like = "%" + q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+        // Numbers are stored with spaces and dashes: "98765" should find "+91 98765 43210".
+        val digits = q.filter(Char::isDigit)
+        val likeNumber = if (digits.length >= 3) "%" + digits.toList().joinToString("%") + "%" else like
+        val found = ArrayList<Pair<String, String>>()
+        context.contentResolver.query(
+            phone, arrayOf(name, number),
+            "$name LIKE ? ESCAPE '\\' OR $number LIKE ? ESCAPE '\\'", arrayOf(like, likeNumber),
+            "$name COLLATE NOCASE ASC",
+        )?.use { cursor ->
+            while (cursor.moveToNext() && found.size < 200) {
+                found += cursor.getString(0).orEmpty() to cursor.getString(1).orEmpty()
+            }
+        }
+        return app.wallhop.core.Wording.matchContacts(found, q, limit)
+    }
 
     /** Latest conversations, newest first. */
     fun threads(limit: Int = 100): JSONObject {
@@ -182,10 +211,14 @@ class SmsStore(private val context: Context) {
     companion object {
         private const val SEND_TIMEOUT_MS = 30_000L
 
-        val permissions = arrayOf(
+        /** Texts needs SMS; without these it can't work at all. */
+        val required = arrayOf(
             Manifest.permission.READ_SMS,
             Manifest.permission.SEND_SMS,
             Manifest.permission.RECEIVE_SMS,
+        )
+        /** Nice to have: names instead of numbers, and which SIM. Texts works without them. */
+        val optional = arrayOf(
             Manifest.permission.READ_CONTACTS,
             Manifest.permission.READ_PHONE_STATE,
         )

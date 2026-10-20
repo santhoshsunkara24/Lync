@@ -20,6 +20,11 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.runtime.produceState
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -85,7 +90,9 @@ fun ConnectScreen(
     val colors = Wallhop.colors
     val address = rememberSaveable { mutableStateOf("") }
     val addressError = remember { mutableStateOf<String?>(null) }
-    fun enterAddress() = showAddressSheet(overlays, address, addressError) { host, port -> onPair(host, port, host) }
+    // A typed address isn't a name: until the Mac says its name, it's "your Mac".
+    fun enterAddress() = showAddressSheet(overlays, address, addressError) { host, port -> onPair(host, port, "your Mac") }
+    val context = androidx.compose.ui.platform.LocalContext.current
 
     // A failed pairing needs an answer: try again, or put it away.
     LaunchedEffect(problem) {
@@ -115,7 +122,7 @@ fun ConnectScreen(
     val macRows = rememberAnimatedRows(macs) { "${it.host}:${it.port}" }
     Page(
         title = "Connect your Mac",
-        subtitle = "Open Lync on your Mac and keep both on the same Wi-Fi. Pair once and they stay connected.",
+        subtitle = "Open Lync on your Mac and keep both on the same Wi‑Fi. Pair once and they stay connected.",
         bottomClearance = 32.dp,
     ) {
         item(key = "hero") {
@@ -128,32 +135,31 @@ fun ConnectScreen(
             Column(Modifier.staggerIn(2)) {
                 // The quickest way: scan the code in the Mac's menu bar panel.
                 WButton("Pair with QR code", onScan, modifier = Modifier.fillMaxWidth(), style = ButtonStyle.Filled, icon = WIcons.QrCode)
+                Spacer(Modifier.height(10.dp))
+                WButton("Get Lync for Mac", { openLink(context, app.wallhop.core.Wording.RELEASES_URL) },
+                    modifier = Modifier.fillMaxWidth(), style = ButtonStyle.Glass, icon = WIcons.Laptop)
+                Text(
+                    "On the Mac, Lync lives in the notch, or in the menu bar on Macs without one.",
+                    style = Type.footnote, color = colors.labelSecondary, textAlign = TextAlign.Center,
+                    modifier = Modifier.fillMaxWidth().padding(top = 10.dp, start = 8.dp, end = 8.dp),
+                )
                 Spacer(Modifier.height(28.dp))
             }
         }
         item(key = "macs") {
             Column(Modifier.staggerIn(3)) {
-                SectionHeader("Macs on this Wi-Fi") { ActivityIndicator(size = 14.dp) }
+                // The spinner says "still looking"; once Macs are found it goes.
+                SectionHeader("Macs on this Wi‑Fi", trailing = if (macs.isEmpty()) ({ ActivityIndicator(size = 14.dp) }) else null)
                 InsetSection(dividerInset = 57.dp) {
                     if (macRows.isEmpty()) {
                         row {
                             ListRow(
                                 title = "Looking for Macs…",
-                                // The line above the list already says to open Lync on the Mac; after a
-                                // while without results, say what usually fixes it.
-                                subtitle = if (searchingLong) "Check both are on the same Wi-Fi, or enter the address below." else null,
+                                // After a while without results, say what usually fixes it. The
+                                // address link below is always there, so no second row for it.
+                                subtitle = if (searchingLong) "Check Lync is open on your Mac and both are on the same Wi‑Fi." else null,
                                 leading = { IconTile(WIcons.Laptop, colors.gray) },
                             )
-                        }
-                        if (searchingLong) {
-                            row {
-                                ListRow(
-                                    title = "Enter the Mac's address",
-                                    leading = { IconTile(WIcons.Wifi, colors.indigo) },
-                                    chevron = true,
-                                    onClick = { enterAddress() },
-                                )
-                            }
                         }
                     } else {
                         // Macs come and go as they're found; each one slides in or out.
@@ -163,7 +169,7 @@ fun ConnectScreen(
                                 AnimatedVisibility(entry.visible, enter = rowEnter(reduceMotion), exit = rowExit(reduceMotion)) {
                                     ListRow(
                                         title = mac.name,
-                                        subtitle = mac.host,
+                                        subtitle = "On this Wi‑Fi",
                                         leading = { IconTile(WIcons.Laptop, colors.gray) },
                                         chevron = true,
                                         onClick = { onPair(mac.host, mac.port, mac.name) },
@@ -315,8 +321,16 @@ fun PairingScreen(state: LinkState.Pairing, onCancel: () -> Unit, success: Boole
         modifier = Modifier.fillMaxSize(),
         background = colors.background,
         content = {
+            // Scrolls, so landscape with a large font still shows everything (and Cancel stays clear).
+            androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxSize()) {
+            val available = maxWidth - 56.dp - 56.dp
             Column(
-                Modifier.fillMaxSize().padding(horizontal = 28.dp),
+                Modifier
+                    .fillMaxSize()
+                    .verticalScroll(androidx.compose.foundation.rememberScrollState())
+                    .padding(horizontal = 28.dp)
+                    .padding(top = 24.dp, bottom = 96.dp)
+                    .heightIn(min = maxHeight - 120.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Center,
             ) {
@@ -354,11 +368,11 @@ fun PairingScreen(state: LinkState.Pairing, onCancel: () -> Unit, success: Boole
                                     .background(capsuleColor)
                                     .padding(horizontal = 28.dp, vertical = 16.dp),
                             ) {
-                                CodeDisplay(code)
+                                CodeDisplay(code, maxWidth = available.coerceAtLeast(120.dp))
                             }
                             Spacer(Modifier.height(24.dp))
                             Text(
-                                "Check ${state.macName} shows the same code, then click Pair on the Mac.",
+                                "Check ${state.macName} shows the same code. Then click Pair on your Mac — it's under the notch (or the Lync menu bar icon).",
                                 style = Type.body,
                                 color = colors.labelSecondary,
                                 textAlign = TextAlign.Center,
@@ -370,7 +384,7 @@ fun PairingScreen(state: LinkState.Pairing, onCancel: () -> Unit, success: Boole
                                 label = "pairingStatus",
                             ) { paired ->
                                 Row(
-                                    Modifier.height(24.dp),
+                                    Modifier.heightIn(min = 24.dp),
                                     verticalAlignment = Alignment.CenterVertically,
                                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                                 ) {
@@ -378,14 +392,30 @@ fun PairingScreen(state: LinkState.Pairing, onCancel: () -> Unit, success: Boole
                                         DrawnCheck(colors.green, Modifier.size(22.dp))
                                         Text("Paired", style = Type.headline, color = colors.green)
                                     } else {
+                                        // The Mac has two minutes to say yes; show what's left.
+                                        val left by produceState(PairingWindowMs, code) {
+                                            val start = android.os.SystemClock.elapsedRealtime()
+                                            while (value > 0) {
+                                                value = (PairingWindowMs - (android.os.SystemClock.elapsedRealtime() - start)).coerceAtLeast(0)
+                                                delay(1_000 - (value % 1_000).coerceAtMost(999))
+                                            }
+                                        }
                                         ActivityIndicator(size = 16.dp)
-                                        Text("Waiting for your Mac", style = Type.footnote, color = colors.labelSecondary)
+                                        Text(
+                                            "Waiting for your Mac · ${app.wallhop.core.Wording.countdown(left)} left",
+                                            style = Type.footnote, color = colors.labelSecondary,
+                                            modifier = Modifier.semantics {
+                                                // Read as words, and only now and then rather than every second.
+                                                contentDescription = "Waiting for your Mac, about ${(left + 59_999) / 60_000} minute${if (left > 60_000) "s" else ""} left"
+                                            },
+                                        )
                                     }
                                 }
                             }
                         }
                     }
                 }
+            }
             }
         },
         chrome = {
@@ -403,6 +433,9 @@ fun PairingScreen(state: LinkState.Pairing, onCancel: () -> Unit, success: Boole
         },
     )
 }
+
+/** How long the Mac has to accept pairing (the phone waits 130 s; the countdown shows two minutes). */
+private const val PairingWindowMs = 120_000L
 
 /** A row joining a plain list: it opens up and fades in; leaving reverses it (DESIGN.md §7.2). */
 internal fun rowEnter(reduceMotion: Boolean) =

@@ -67,6 +67,12 @@ class LinkService : Service() {
                 if (phase != TransferPhase.Waiting && phase != TransferPhase.Sending) stopIfIdle(this@LinkService)
             }
         }
+        // The send queue in the notification shade, so a hidden share sheet still reports.
+        scope.launch {
+            link.transfers.collect { list ->
+                Notifications.transferProgress(this@LinkService, TransferQueue.shown(list), link.pairedMac?.name, TransferQueue.waitingBehind(list))
+            }
+        }
         scope.launch {
             link.state.distinctUntilChanged { a, b -> a::class == b::class && a == b }.collect { state ->
                 runCatching {
@@ -179,5 +185,25 @@ class BootReceiver : BroadcastReceiver() {
         // Exported for the system broadcasts; ignore anything else another app might send.
         if (intent.action != Intent.ACTION_BOOT_COMPLETED && intent.action != Intent.ACTION_MY_PACKAGE_REPLACED) return
         if (MacStore(context).get() != null && app.wallhop.core.Features.on(context, app.wallhop.core.Features.Key.Background)) LinkService.start(context)
+    }
+}
+
+/** True while the main Lync screen is started, so received files show in the app, not as a notification. */
+object AppVisibility {
+    @Volatile var foreground = false
+}
+
+/** Cancel and Retry on the transfer notification. */
+class TransferActionReceiver : BroadcastReceiver() {
+    override fun onReceive(context: Context, intent: Intent) {
+        val id = intent.getStringExtra(Notifications.EXTRA_TRANSFER) ?: return
+        val link = LinkManager.get(context)
+        when (intent.action) {
+            Notifications.ACTION_CANCEL_TRANSFER -> link.cancelTransfer(id)
+            Notifications.ACTION_RETRY_TRANSFER -> {
+                LinkService.start(context)
+                link.retryTransfer(id)
+            }
+        }
     }
 }

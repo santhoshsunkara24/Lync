@@ -1,6 +1,8 @@
 // A stand-in phone for testing the Mac app without a real one. Speaks the real protocol
 // (PROTOCOL.md): pairs (run the Mac app with WALLHOP_AUTO_PAIR=1), opens an encrypted session,
-// then sends a status, theme, code, text and two files, answering pings meanwhile.
+// then sends a status, theme, code, text and two files, answering pings meanwhile. Files the
+// Mac sends are received like the Android app does (file_start/file_chunk/file_end, sha256
+// checked, the same `ack`) and logged as "[test-phone] received <name> <bytes> ok".
 //
 //   scripts/test-phone.sh [host] [port] [seconds to stay connected]
 import AppKit
@@ -91,12 +93,31 @@ send(Message("ready"))
 let ready = receive()
 log("session: \(ready.type)")
 
-// Answer pings and print what the Mac sends, in the background.
+// Answer pings, receive files and print what the Mac sends, in the background.
+struct IncomingFile { let name: String; let size: Int; var data = Data() }
+var incoming: [String: IncomingFile] = [:]
 Thread.detachNewThread {
     while true {
         let m = receive()
-        if m.type == "ping" { send(Message("pong")) }
-        log("mac → \(m.type) \(m.header.filter { $0.key != "t" })")
+        switch m.type {
+        case "ping": send(Message("pong"))
+        case "file_start":
+            if let id = m.string("id") { incoming[id] = IncomingFile(name: m.string("name") ?? "File", size: m.int("size") ?? 0) }
+        case "file_chunk":
+            if let id = m.string("id") { incoming[id]?.data.append(m.body) }
+        case "file_end":
+            let id = m.string("id") ?? ""
+            let file = incoming.removeValue(forKey: id)
+            let ok = file.map { Data(SHA256.hash(data: $0.data)).hex == m.string("sha256")?.lowercased() } ?? false
+            // Same as Android (LinkManager): ack with ok, and err when it failed.
+            var ack: [String: Any] = ["id": id, "ok": ok]
+            if !ok { ack["err"] = "checksum mismatch" }
+            send(Message("ack", ack))
+            log("received \(file?.name ?? "?") \(file?.data.count ?? 0) \(ok ? "ok" : "FAILED")")
+            continue
+        default: break
+        }
+        if m.type != "file_chunk" { log("mac → \(m.type) \(m.header.filter { $0.key != "t" })") }
     }
 }
 

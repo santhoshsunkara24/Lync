@@ -179,6 +179,8 @@ fun ListRow(
     /** Draws the title instead of plain text (e.g. a code rolling in); [title] still names the row. */
     titleContent: (@Composable () -> Unit)? = null,
     subtitle: String? = null,
+    /** Longer help text (e.g. maker-specific steps) can show in full. */
+    subtitleMaxLines: Int = 3,
     leading: (@Composable () -> Unit)? = null,
     value: String? = null,
     /** Roll [value] when it changes (numbers like "12 ms" or "4 apps"). */
@@ -192,6 +194,8 @@ fun ListRow(
     onCheckedChange: ((Boolean) -> Unit)? = null,
     switchEnabled: Boolean = true,
     onLongClickLabel: String? = null,
+    /** What a tap does, for TalkBack ("Copy code"). */
+    onClickLabel: String? = null,
     onLongClick: (() -> Unit)? = null,
     onClick: (() -> Unit)? = null,
 ) {
@@ -226,6 +230,7 @@ fun ListRow(
                         interactionSource = source,
                         indication = null,
                         role = role,
+                        onClickLabel = onClickLabel,
                         onLongClickLabel = onLongClickLabel,
                         onLongClick = onLongClick?.let { long -> { haptics.perform(Haptic.Medium); long() } },
                         onClick = onClick,
@@ -272,7 +277,7 @@ fun ListRow(
                 )
             }
             if (subtitle != null) {
-                Text(subtitle, style = Type.footnote, color = colors.labelSecondary, maxLines = 3,
+                Text(subtitle, style = Type.footnote, color = colors.labelSecondary, maxLines = subtitleMaxLines,
                     overflow = TextOverflow.Ellipsis)
             }
         }

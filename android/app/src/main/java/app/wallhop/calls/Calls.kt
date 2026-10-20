@@ -158,10 +158,12 @@ object CallControl {
         }.getOrDefault(false)
     }
 
-    val permissions = arrayOf(
+    /** Calls needs these: call state, the caller's number (call log) and answering. */
+    val required = arrayOf(
         Manifest.permission.READ_PHONE_STATE,
         Manifest.permission.READ_CALL_LOG,
-        Manifest.permission.READ_CONTACTS,
         Manifest.permission.ANSWER_PHONE_CALLS,
     )
+    /** Optional: names instead of numbers. Calls still work without it. */
+    val optional = arrayOf(Manifest.permission.READ_CONTACTS)
 }

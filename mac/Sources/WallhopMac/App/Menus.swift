@@ -67,13 +67,20 @@ final class Menus: NSObject {
     func contextMenu() -> NSMenu {
         let menu = NSMenu()
         let connected = model.connectedPhone != nil
-        menu.addItem(item("Open Lync", #selector(openLync)))
+        // Shows the global shortcut; it works from anywhere, not just this menu.
+        let open = item("Open Lync", #selector(openLync), key: "l")
+        open.keyEquivalentModifierMask = [.option, .command]
+        menu.addItem(open)
+        if let code = model.latestCode {
+            menu.addItem(item("Copy latest code (\(spaced(code.code)))", #selector(copyLatestCode)))
+        }
         menu.addItem(.separator())
         menu.addItem(item("Send clipboard", #selector(sendClipboard), enabled: connected))
         menu.addItem(item("Send files…", #selector(sendFiles), enabled: connected))
         menu.addItem(item("Texts", #selector(openMessages)))
         menu.addItem(item(model.ringing ? "Stop ringing" : "Ring phone", #selector(ringPhone), enabled: connected))
         menu.addItem(.separator())
+        menu.addItem(item("Add a phone…", #selector(addPhone)))
         menu.addItem(item("Settings…", #selector(showSettings), key: ","))
         menu.addItem(item("About Lync", #selector(showAbout)))
         menu.addItem(.separator())
@@ -91,6 +98,11 @@ final class Menus: NSObject {
     // MARK: - Actions
 
     @objc private func openLync() { openPanel() }
+    @objc private func copyLatestCode() { model.copyLatestCode() }
+    @objc private func addPhone() {
+        openPanel()
+        model.showingPairingQR = true
+    }
     @objc private func sendClipboard() { model.sendClipboardToPhone() }
     @objc private func sendFiles() { model.chooseFilesToSend() }
     @objc private func openMessages() { model.openMessages() }

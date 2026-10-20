@@ -14,6 +14,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
@@ -180,6 +182,7 @@ fun expressivePalette(home: HomeColors) = DarkPalette.copy(
     separator = Color.White.copy(alpha = 0.1f),
     fill = Color.White.copy(alpha = 0.12f),
     tint = home.pale,
+    red = home.red,
 )
 
 val LocalPalette = staticCompositionLocalOf { LightPalette }
@@ -205,7 +208,20 @@ fun WallhopTheme(content: @Composable () -> Unit) {
     val context = LocalContext.current
     val home = rememberHomeColors()
     val palette = remember(home) { expressivePalette(home) }
-    val accessibility = remember { readAccessibility(context) }
+    // Read again whenever the animation scale or high-contrast text changes, so Reduce Motion
+    // (Remove animations) applies straight away, not on the next launch.
+    var accessibility by remember { androidx.compose.runtime.mutableStateOf(readAccessibility(context)) }
+    androidx.compose.runtime.DisposableEffect(context) {
+        val observer = object : android.database.ContentObserver(android.os.Handler(android.os.Looper.getMainLooper())) {
+            override fun onChange(selfChange: Boolean) { accessibility = readAccessibility(context) }
+        }
+        val resolver = context.contentResolver
+        runCatching {
+            resolver.registerContentObserver(Settings.Global.getUriFor(Settings.Global.ANIMATOR_DURATION_SCALE), false, observer)
+            resolver.registerContentObserver(Settings.Secure.getUriFor("high_text_contrast_enabled"), false, observer)
+        }
+        onDispose { runCatching { resolver.unregisterContentObserver(observer) } }
+    }
     // Material components still used under the hood (text selection, dialogs) pick up the same colours.
     val scheme = darkColorScheme().copy(
         primary = palette.tint,

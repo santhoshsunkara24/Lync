@@ -1,7 +1,6 @@
 package app.wallhop.share
 
 import app.wallhop.ui.design.WIcons
-import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
@@ -43,12 +42,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.update
-import kotlinx.coroutines.launch
 import java.util.UUID
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -56,6 +49,10 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
 import androidx.core.content.IntentCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.wallhop.extras.isSingleUrl
@@ -129,9 +126,10 @@ class ShareActivity : ComponentActivity() {
     private fun send(link: LinkManager, shared: Shared) {
         when (shared) {
             is Shared.Files -> LinkService.sendFiles(this, shared.uris, requestId.value)
+            // Text and links join the same queue as files: they wait for the Mac rather than fail.
             is Shared.Text -> {
                 LinkService.start(this)
-                ShareSends.send(this, link, requestId.value, shared.text)
+                link.sendTextQueued(shared.text, requestId.value)
             }
             Shared.Nothing -> Unit
         }
@@ -173,26 +171,6 @@ class ShareActivity : ComponentActivity() {
     }
 }
 
-/**
- * Shared text and links are sent here, outside the sheet: closing the sheet or rotating doesn't
- * cancel a send, and a send isn't repeated. Results by request id; null while sending.
- */
-private object ShareSends {
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
-    val results = MutableStateFlow<Map<String, Boolean?>>(emptyMap())
-
-    fun send(context: Context, link: LinkManager, id: String, text: String) {
-        if (id in results.value) return
-        val app = context.applicationContext
-        results.update { it + (id to null) }
-        scope.launch {
-            val ok = if (isSingleUrl(text)) link.openOnMac(text.trim()) else link.sendText(text)
-            results.update { it + (id to ok) }
-            LinkService.stopIfIdle(app)
-        }
-    }
-}
-
 private enum class Outcome { Working, Done, Failed }
 
 @Composable
@@ -207,27 +185,22 @@ private fun ShareSheet(
     val colors = Wallhop.colors
     val haptics = rememberHaptics()
     val state by link.state.collectAsStateWithLifecycle()
-    val anyTransfer by link.transfer.collectAsStateWithLifecycle()
+    val queue by link.transfers.collectAsStateWithLifecycle()
     // Only this share's own transfer; another one (an earlier share, a send from the app) is ignored.
-    val transfer = anyTransfer?.takeIf { it.id == requestId }
+    val transfer = queue.firstOrNull { it.id == requestId }
+    // Earlier shares still ahead of this one in the queue.
+    val ahead = queue.takeWhile { it.id != requestId }.count(app.wallhop.link.TransferQueue::active)
     // Where it got to, in case the app clears the finished transfer while the sheet is still up.
     var lastPhase by rememberSaveable(requestId) { mutableStateOf<TransferPhase?>(null) }
     LaunchedEffect(transfer?.phase) { transfer?.phase?.let { lastPhase = it } }
-    val results by ShareSends.results.collectAsStateWithLifecycle()
-    val textResult = results[requestId]
     val macName = link.pairedMac?.name
     val isLink = shared is ShareActivity.Shared.Text && isSingleUrl(shared.text)
 
     val outcome = when (shared) {
-        is ShareActivity.Shared.Files -> when (transfer?.phase ?: lastPhase) {
+        is ShareActivity.Shared.Files, is ShareActivity.Shared.Text -> when (transfer?.phase ?: lastPhase) {
             TransferPhase.Done -> Outcome.Done
             TransferPhase.Failed -> Outcome.Failed
             else -> Outcome.Working
-        }
-        is ShareActivity.Shared.Text -> when (textResult) {
-            true -> Outcome.Done
-            false -> Outcome.Failed
-            null -> Outcome.Working
         }
         ShareActivity.Shared.Nothing -> Outcome.Failed
     }
@@ -243,11 +216,16 @@ private fun ShareSheet(
     }
     // Some files sent, some unreadable: Done, with a note worth reading before the sheet goes.
     val partial = (shared as? ShareActivity.Shared.Files)?.let { transfer?.message }
+    val context = androidx.compose.ui.platform.LocalContext.current
+    // With TalkBack on, "Done" is read out, so the sheet stays long enough to hear it.
+    val talkBack = remember {
+        context.getSystemService(android.view.accessibility.AccessibilityManager::class.java)?.isTouchExplorationEnabled == true
+    }
     LaunchedEffect(outcome) {
         when (outcome) {
             Outcome.Done -> {
                 haptics.perform(Haptic.Success)
-                delay(if (partial != null) 4_000 else 1_300)
+                delay(if (partial != null) 4_000 else if (talkBack) 3_000 else 1_300)
                 close()
             }
             Outcome.Failed -> haptics.perform(Haptic.Failure)
@@ -278,11 +256,12 @@ private fun ShareSheet(
             ) {
                 // No grab handle: this sheet doesn't drag. Cancel, Hide, back or a tap outside close it.
                 Box(Modifier.fillMaxWidth().padding(top = 8.dp).height(48.dp)) {
-                    val sendingText = shared is ShareActivity.Shared.Text && outcome == Outcome.Working
+                    val sendingText = shared is ShareActivity.Shared.Text && transfer?.phase == TransferPhase.Sending
                     Box(Modifier.align(Alignment.CenterStart)) {
-                        // A text that's on its way can't be called back, so it just carries on.
+                        // A text that's on its way can't be called back, so it just carries on;
+                        // while it waits for the Mac it can still be cancelled.
                         if (outcome != Outcome.Done && !sendingText) TextAction("Cancel", onClick = {
-                            if (shared is ShareActivity.Shared.Files && outcome == Outcome.Working) link.cancelTransfer()
+                            if (outcome == Outcome.Working) link.cancelTransfer(requestId)
                             close()
                         })
                     }
@@ -357,14 +336,20 @@ private fun ShareSheet(
                 ) { result ->
                     when (result) {
                         Outcome.Done -> Column {
+                            val done = if (isLink) "Opened on your Mac" else app.wallhop.core.Wording.READY
+                            // Dark ink on green: white on #30D158 is only 2:1.
                             Row(
-                                Modifier.fillMaxWidth().height(50.dp).clip(capsule()).background(colors.green),
+                                Modifier.fillMaxWidth().height(50.dp).clip(capsule()).background(colors.green)
+                                    .semantics {
+                                        liveRegion = LiveRegionMode.Assertive
+                                        contentDescription = done
+                                    },
                                 horizontalArrangement = Arrangement.Center,
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
-                                Icon(WIcons.CheckCircle, null, tint = Color.White, modifier = Modifier.size(20.dp))
+                                Icon(WIcons.CheckCircle, null, tint = app.wallhop.ui.design.Ink, modifier = Modifier.size(20.dp))
                                 Spacer(Modifier.size(8.dp))
-                                Text(if (isLink) "Opened on your Mac" else "Copied to your Mac", style = Type.headline, color = Color.White)
+                                Text(done, style = Type.headline, color = app.wallhop.ui.design.Ink)
                             }
                             if (partial != null) {
                                 Text(partial, style = Type.footnote, color = colors.orange, modifier = Modifier.padding(top = 10.dp))
@@ -390,8 +375,9 @@ private fun ShareSheet(
                             val sending = transfer?.phase == TransferPhase.Sending
                             Text(
                                 when {
-                                    shared is ShareActivity.Shared.Text -> "Sending…"
-                                    sending -> "Sending over Wi-Fi · ${formatBytes(transfer?.sentBytes ?: 0)} of ${formatBytes(transfer?.totalBytes ?: 0)}"
+                                    ahead > 0 -> if (ahead == 1) "Next in line, after 1 other share" else "Waiting behind $ahead other shares"
+                                    shared is ShareActivity.Shared.Text && (sending || state is LinkState.Connected) -> "Sending…"
+                                    sending -> "Sending · ${formatBytes(transfer?.sentBytes ?: 0)} of ${formatBytes(transfer?.totalBytes ?: 0)}"
                                     state is LinkState.Connected -> "Starting…"
                                     else -> "Waiting for your Mac. It sends as soon as both are on the same Wi-Fi."
                                 },
@@ -399,7 +385,7 @@ private fun ShareSheet(
                                 color = colors.labelSecondary,
                             )
                             Spacer(Modifier.height(12.dp))
-                            if (sending) ProgressBar(transfer?.progress) else HopDots(active = true, modifier = Modifier.fillMaxWidth())
+                            if (sending && shared is ShareActivity.Shared.Files) ProgressBar(transfer?.progress) else HopDots(active = true, modifier = Modifier.fillMaxWidth())
                         }
                     }
                 }

@@ -18,6 +18,7 @@ import app.wallhop.BuildConfig
 import app.wallhop.core.Crypto
 import app.wallhop.core.Identity
 import app.wallhop.core.Message
+import app.wallhop.core.Wording
 import app.wallhop.core.toHex
 import app.wallhop.link.Session.Companion.b64
 import kotlinx.coroutines.CoroutineExceptionHandler
@@ -57,6 +58,11 @@ sealed interface LinkState {
     data class Forgotten(val macName: String) : LinkState
 }
 
+/** Files that just arrived from the Mac, for the "received" popup and notification. */
+data class ReceivedBatch(val macName: String, val uris: List<Uri>, val names: List<String>, val mimes: List<String>) {
+    val summary: String get() = app.wallhop.core.Wording.received(mimes, macName)
+}
+
 data class TransferItem(val uri: Uri, val name: String, val size: Long, val mime: String)
 
 enum class TransferPhase { Waiting, Sending, Done, Failed }
@@ -68,6 +74,9 @@ data class TransferState(
     val totalBytes: Long,
     val phase: TransferPhase,
     val message: String? = null,
+    /** A shared text or link waiting its turn, instead of files. */
+    val text: String? = null,
+    val isLink: Boolean = false,
 ) {
     val progress: Float get() = if (totalBytes <= 0) 0f else (sentBytes.toFloat() / totalBytes).coerceIn(0f, 1f)
 }
@@ -78,6 +87,8 @@ data class ActivityEntry(
     val title: String,
     val detail: String,
     val time: Long = System.currentTimeMillis(),
+    /** Files this entry is about (content URIs as strings): saved from the Mac, or sent to it. */
+    val uris: List<String> = emptyList(),
 ) {
     enum class Kind { Otp, TextSent, FilesSent, FromMac, Call }
 }
@@ -117,8 +128,16 @@ class LinkManager private constructor(private val context: Context) {
 
     val discovered: StateFlow<List<DiscoveredMac>> = discovery.macs
 
+    // The send queue (TransferQueue): every share waits its turn, first in first out.
+    private val _transfers = MutableStateFlow<List<TransferState>>(emptyList())
+    val transfers: StateFlow<List<TransferState>> = _transfers.asStateFlow()
     private val _transfer = MutableStateFlow<TransferState?>(null)
+    /** The transfer to show: the one sending, else the next waiting, else the last finished. */
     val transfer: StateFlow<TransferState?> = _transfer.asStateFlow()
+
+    private val _received = kotlinx.coroutines.flow.MutableSharedFlow<ReceivedBatch>(extraBufferCapacity = 4)
+    /** Files from the Mac, as each batch finishes (the in-app popup listens while a screen is open). */
+    val received: kotlinx.coroutines.flow.SharedFlow<ReceivedBatch> = _received
 
     private val _activity = MutableStateFlow<List<ActivityEntry>>(emptyList())
     val activity: StateFlow<List<ActivityEntry>> = _activity.asStateFlow()
@@ -141,7 +160,14 @@ class LinkManager private constructor(private val context: Context) {
     @Volatile private var session: Session? = null
     private var loopJob: Job? = null
     private var pairingJob: Job? = null
-    private var transferJob: Job? = null
+    private val queueLock = Any()
+    private val queueWake = Channel<Unit>(Channel.CONFLATED)
+    private var queueWorker: Job? = null
+    @Volatile private var runningId: String? = null
+    @Volatile private var runningJob: Job? = null
+    /** What each queued transfer sends: the URIs (described when its turn comes) and files already skipped. */
+    private val sources = ConcurrentHashMap<String, Pair<List<Uri>, Int>>()
+    private val pendingCodes = PendingCodes()
     private val wake = Channel<Unit>(Channel.CONFLATED)
     private val recentCodes = ConcurrentHashMap<String, Long>()
     private val iconsSent = ConcurrentHashMap.newKeySet<String>()
@@ -311,6 +337,8 @@ class LinkManager private constructor(private val context: Context) {
         lastBatterySent = -1
         sendStatus()
         sendTheme(session)
+        // Codes that waited while the Mac was away go across now, if still under five minutes old.
+        pendingCodes.drain(System.currentTimeMillis()).forEach { sendOtp(it.code, it.sender, it.app) }
         mainHandler.post { startWatchers(); media.resend() }
 
         val heartbeat = scope.launch {
@@ -371,7 +399,7 @@ class LinkManager private constructor(private val context: Context) {
             "text" -> {
                 val text = message.bodyText
                 Notifications.textFromMac(context, text, session.macName)
-                record(ActivityEntry(UUID.randomUUID().toString(), ActivityEntry.Kind.FromMac, "Text from your Mac", text))
+                record(ActivityEntry(UUID.randomUUID().toString(), ActivityEntry.Kind.FromMac, "Text from your Mac", "Copied on this phone"))
                 message.string("id")?.let { session.send(Message.of("ack", "id" to it, "ok" to true)) }
             }
             // Replies, actions and dismissals only while notification mirroring is on in Lync.
@@ -408,6 +436,25 @@ class LinkManager private constructor(private val context: Context) {
                     runCatching { session.send(reply) }
                 }
             }
+            // Contacts search for the Mac's Texts window: names or numbers containing q.
+            "contacts" -> {
+                val id = message.string("id") ?: return
+                val query = message.string("q").orEmpty()
+                scope.launch {
+                    val reply = runCatching {
+                        if (!app.wallhop.core.Features.on(context, app.wallhop.core.Features.Key.Texts) || !sms.canReadContacts) {
+                            Message.of("sms_result", "id" to id, "err" to "unavailable")
+                        } else {
+                            val items = org.json.JSONArray()
+                            sms.searchContacts(query).forEach { (name, number) ->
+                                items.put(JSONObject().put("name", name).put("number", number))
+                            }
+                            Message.of("sms_result", "id" to id, body = JSONObject().put("items", items).toString().toByteArray())
+                        }
+                    }.getOrElse { Message.of("sms_result", "id" to id, "err" to "unavailable") }
+                    runCatching { session.send(reply) }
+                }
+            }
             "sms_send" -> {
                 val id = message.string("id")
                 val sim = if (message.header.has("sim")) message.header.optInt("sim", -1) else null
@@ -437,8 +484,11 @@ class LinkManager private constructor(private val context: Context) {
                 val error = runCatching { incoming.fileEnd(message) }.getOrElse { "couldn't save" }
                 session.send(Message.of("ack", "id" to message.string("id"), "ok" to (error == null), "err" to error))
             }
-            "batch_end" -> runCatching { incoming.batchEnd(message, session.macName) }.getOrNull()?.let { summary ->
-                record(ActivityEntry(UUID.randomUUID().toString(), ActivityEntry.Kind.FromMac, summary, "Saved to Downloads › Lync"))
+            "batch_end" -> runCatching { incoming.batchEnd(message, session.macName) }.getOrNull()?.let { batch ->
+                record(ActivityEntry(UUID.randomUUID().toString(), ActivityEntry.Kind.FromMac, batch.summary,
+                    "Saved to Downloads › Lync", uris = batch.uris.map { it.toString() }))
+                // A Lync screen in front shows its own popup; otherwise a heads-up notification.
+                if (AppVisibility.foreground) _received.tryEmit(batch) else Notifications.filesFromMac(context, batch)
             }
             else -> Unit // Unknown types are ignored so newer Macs keep working.
         }
@@ -572,7 +622,15 @@ class LinkManager private constructor(private val context: Context) {
     }
 
     fun forgetMac() {
-        session?.close()
+        // Tell the Mac first (PROTOCOL.md, forget), so it drops this phone too; then close.
+        val open = session?.takeIf { !it.closed }
+        session = null
+        if (open != null) {
+            scope.launch {
+                withTimeoutOrNull(1_500) { runCatching { open.send(Message.of("forget")) } }
+                open.close()
+            }
+        }
         store.forget()
         macInfoStore.clear()
         _macInfo.value = MacInfo()
@@ -657,11 +715,13 @@ class LinkManager private constructor(private val context: Context) {
             }
             if (BuildConfig.STRESS_HOOKS) Log.d("WallhopLink", "otp delivered=${ack != null}")
             if (ack != null) {
-                record(ActivityEntry(id, ActivityEntry.Kind.Otp, code, if (sender.isBlank()) "Copied on your Mac" else "From $sender · copied on your Mac"))
+                record(ActivityEntry(id, ActivityEntry.Kind.Otp, code, if (sender.isBlank()) Wording.READY else "From $sender · ready to paste"))
             } else {
                 // Not delivered: forget it, so the same code from another source (or the inbox
-                // scan after reconnecting) can still go across.
+                // scan after reconnecting) can still go across, and keep it with its time to send
+                // when the Mac comes back (if that's within five minutes of the code arriving).
                 recentCodes.remove(code, now)
+                pendingCodes.add(PendingCodes.Code(code, sender, app, now))
             }
         }
     }
@@ -741,53 +801,115 @@ class LinkManager private constructor(private val context: Context) {
         val session = awaitSession(8_000) ?: return false
         val id = UUID.randomUUID().toString()
         val ack = runCatching { session.request(Message.of("text", "id" to id, body = text.toByteArray())) }.getOrNull()
-        if (ack != null) record(ActivityEntry(id, ActivityEntry.Kind.TextSent, "Text sent", text))
+        if (ack != null) record(ActivityEntry(id, ActivityEntry.Kind.TextSent, app.wallhop.core.Wording.READY, text))
         return ack != null
     }
 
     /**
-     * Sends files to the Mac. Waits up to ten minutes for the Mac if it isn't nearby. [id] names
-     * the transfer, so a share sheet can follow its own transfer and not an earlier one.
-     * [skipped] counts files the caller already couldn't read (the share fallback copy); they're
-     * reported in the finished transfer's message along with any here that can't be read.
+     * Sends files to the Mac. Joins the back of the queue: an earlier share that's waiting or
+     * sending carries on. Each waits up to ten minutes for the Mac. [id] names the transfer, so a
+     * share sheet can follow its own. [skipped] counts files the caller already couldn't read
+     * (the share fallback copy); they're reported in the finished transfer's message.
      */
-    @Synchronized
     fun sendFiles(uris: List<Uri>, id: String = UUID.randomUUID().toString(), skipped: Int = 0) {
-        transferJob?.cancel()
-        transferJob = scope.launch {
-            // Reading names and sizes queries other apps' providers: never on the main thread.
+        sources[id] = uris to skipped
+        updateTransfers { TransferQueue.enqueue(it, TransferState(id, emptyList(), 0, 0, TransferPhase.Waiting)) }
+        // Names and sizes for the card straight away; reading them queries other apps' providers.
+        scope.launch {
             val items = uris.mapNotNull { describe(it) }
-            val unreadable = skipped + uris.size - items.size
-            if (items.isEmpty()) {
-                _transfer.value = TransferState(id, emptyList(), 0, 0, TransferPhase.Failed, "Couldn't read these files")
-                return@launch
-            }
-            val total = items.sumOf { it.size.coerceAtLeast(0) }
-            _transfer.value = TransferState(id, items, 0, total, TransferPhase.Waiting)
+            updateOne(id) { if (it.items.isEmpty() && it.phase == TransferPhase.Waiting) it.copy(items = items, totalBytes = items.sumOf { i -> i.size.coerceAtLeast(0) }) else it }
+        }
+        startQueue()
+    }
 
+    /** Queues a shared text or link like files, so it waits for the Mac instead of failing. */
+    fun sendTextQueued(text: String, id: String = UUID.randomUUID().toString()) {
+        val isLink = app.wallhop.extras.isSingleUrl(text)
+        updateTransfers { TransferQueue.enqueue(it, TransferState(id, emptyList(), 0, 0, TransferPhase.Waiting, text = text, isLink = isLink)) }
+        startQueue()
+    }
+
+    private fun updateTransfers(change: (List<TransferState>) -> List<TransferState>) = synchronized(queueLock) {
+        val list = change(_transfers.value)
+        _transfers.value = list
+        _transfer.value = TransferQueue.shown(list)
+    }
+
+    private fun updateOne(id: String, change: (TransferState) -> TransferState) =
+        updateTransfers { list -> list.map { if (it.id == id) change(it) else it } }
+
+    /** One worker runs the queue, one transfer at a time. */
+    @Synchronized
+    private fun startQueue() {
+        if (queueWorker?.isActive != true) {
+            queueWorker = scope.launch {
+                while (isActive) {
+                    val next = synchronized(queueLock) { TransferQueue.next(_transfers.value) }
+                    if (next == null) {
+                        queueWake.receive()
+                        continue
+                    }
+                    val job = launch { runTransfer(next) }
+                    runningId = next.id
+                    runningJob = job
+                    job.join()
+                    runningId = null
+                    runningJob = null
+                    // Cancelled mid-way: it's gone from the list already; anything still marked
+                    // sending from it is put away so the next one can start.
+                    updateTransfers { list -> list.filterNot { it.id == next.id && TransferQueue.active(it) && job.isCancelled } }
+                }
+            }
+        }
+        queueWake.trySend(Unit)
+    }
+
+    private suspend fun runTransfer(state: TransferState) {
+        val id = state.id
+        if (state.text != null) {
             val session = awaitSession(10 * 60_000)
             if (session == null) {
                 fail(id, "Your Mac isn't nearby. Try again when it's on the same Wi-Fi.")
-                return@launch
+                return
             }
-            _transfer.update { it?.copy(phase = TransferPhase.Sending) }
-            // Progress at most ten times a second: every chunk would redraw the screens for nothing.
-            var shownAt = 0L
-            val error = stream(session, id, items) { sent ->
-                val now = android.os.SystemClock.elapsedRealtime()
-                if (now - shownAt >= 100) {
-                    shownAt = now
-                    _transfer.update { it?.copy(sentBytes = sent) }
-                }
+            updateOne(id) { it.copy(phase = TransferPhase.Sending) }
+            val ok = if (state.isLink) openOnMac(state.text.trim()) else sendText(state.text)
+            if (ok) updateOne(id) { it.copy(phase = TransferPhase.Done) } else fail(id, "Couldn't reach your Mac. Check it's awake and on the same Wi-Fi.")
+            return
+        }
+        val (uris, skipped) = sources[id] ?: (emptyList<Uri>() to 0)
+        val items = state.items.ifEmpty { uris.mapNotNull { describe(it) } }
+        val unreadable = skipped + uris.size - items.size
+        if (items.isEmpty()) {
+            updateOne(id) { it.copy(phase = TransferPhase.Failed, message = "Couldn't read these files") }
+            return
+        }
+        val total = items.sumOf { it.size.coerceAtLeast(0) }
+        updateOne(id) { it.copy(items = items, totalBytes = total) }
+
+        val session = awaitSession(10 * 60_000)
+        if (session == null) {
+            fail(id, "Your Mac isn't nearby. Try again when it's on the same Wi-Fi.")
+            return
+        }
+        updateOne(id) { it.copy(phase = TransferPhase.Sending) }
+        // Progress at most ten times a second: every chunk would redraw the screens for nothing.
+        var shownAt = 0L
+        val error = stream(session, id, items) { sent ->
+            val now = android.os.SystemClock.elapsedRealtime()
+            if (now - shownAt >= 100) {
+                shownAt = now
+                updateOne(id) { it.copy(sentBytes = sent) }
             }
-            if (error != null) {
-                fail(id, error)
-            } else {
-                // Some files couldn't be read at all: say so rather than a plain "Done".
-                val note = if (unreadable > 0) "${items.size} of ${items.size + unreadable} sent — couldn't read $unreadable" else null
-                _transfer.update { it?.copy(sentBytes = total, phase = TransferPhase.Done, message = note) }
-                record(ActivityEntry(id, ActivityEntry.Kind.FilesSent, summary(items), note ?: "Copied on your Mac"))
-            }
+        }
+        if (error != null) {
+            fail(id, error)
+        } else {
+            // Some files couldn't be read at all: say so rather than a plain "Done".
+            val note = if (unreadable > 0) "${items.size} of ${items.size + unreadable} sent — couldn't read $unreadable" else null
+            updateOne(id) { it.copy(sentBytes = total, phase = TransferPhase.Done, message = note) }
+            record(ActivityEntry(id, ActivityEntry.Kind.FilesSent, summary(items), note ?: app.wallhop.core.Wording.READY,
+                uris = items.map { it.uri.toString() }))
         }
     }
 
@@ -838,18 +960,36 @@ class LinkManager private constructor(private val context: Context) {
         if (e is kotlinx.coroutines.CancellationException || session.closed) "Connection lost" else "The connection dropped. Try again."
     }
 
-    fun cancelTransfer() {
-        transferJob?.cancel()
-        _transfer.value = null
+    /** Cancels a transfer ([id], or the one on show): stops it if it's sending, or takes it out of the queue. */
+    fun cancelTransfer(id: String? = null) {
+        val target = id ?: _transfer.value?.takeIf { TransferQueue.active(it) }?.id ?: return
+        if (runningId == target) runningJob?.cancel()
+        sources.remove(target)
+        updateTransfers { list -> list.filterNot { it.id == target } }
+        queueWake.trySend(Unit)
+    }
+
+    /** Sends a failed transfer again, at the back of the queue. Returns false if there's nothing to resend. */
+    fun retryTransfer(id: String): Boolean {
+        val failed = _transfers.value.firstOrNull { it.id == id } ?: return false
+        updateTransfers { list -> list.filterNot { it.id == id } }
+        val text = failed.text
+        if (text != null) {
+            sendTextQueued(text)
+            return true
+        }
+        val uris = sources.remove(id)?.first ?: failed.items.map { it.uri }
+        if (uris.isEmpty()) return false
+        sendFiles(uris)
+        return true
     }
 
     fun clearFinishedTransfer() {
-        val phase = _transfer.value?.phase
-        if (phase == TransferPhase.Done || phase == TransferPhase.Failed) _transfer.value = null
+        updateTransfers { list -> list.filter(TransferQueue::active) }
     }
 
     private fun fail(id: String, message: String) {
-        _transfer.update { if (it?.id == id) it.copy(phase = TransferPhase.Failed, message = message) else it }
+        updateOne(id) { it.copy(phase = TransferPhase.Failed, message = message) }
     }
 
     private fun describe(uri: Uri): TransferItem? = runCatching {
@@ -911,6 +1051,11 @@ class LinkManager private constructor(private val context: Context) {
         _activity.update { list -> list.filterNot { it.id == id } }
     }
 
+    fun removeActivity(ids: Collection<String>) {
+        val set = ids.toHashSet()
+        _activity.update { list -> list.filterNot { it.id in set } }
+    }
+
     private fun record(entry: ActivityEntry) {
         _activity.update { (listOf(entry) + it).take(30) }
     }
@@ -955,16 +1100,7 @@ class LinkManager private constructor(private val context: Context) {
             instance ?: LinkManager(context.applicationContext).also { instance = it }
         }
 
-        fun summary(items: List<TransferItem>): String {
-            val images = items.all { it.mime.startsWith("image/") }
-            val videos = items.all { it.mime.startsWith("video/") }
-            val noun = when {
-                images -> if (items.size == 1) "photo" else "photos"
-                videos -> if (items.size == 1) "video" else "videos"
-                else -> if (items.size == 1) "file" else "files"
-            }
-            return "${items.size} $noun"
-        }
+        fun summary(items: List<TransferItem>): String = app.wallhop.core.Wording.count(items.map { it.mime })
     }
 }
 

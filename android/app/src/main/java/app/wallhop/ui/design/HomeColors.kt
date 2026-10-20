@@ -16,6 +16,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
 import androidx.core.graphics.ColorUtils
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -35,48 +36,69 @@ data class HomeColors(
     val peek: Color,
     val peekPale: Color,
     val onPeekPale: Color,
+    /** Red for destructive text, light enough to read on [card] and on lists over [mid]. */
+    val red: Color = Color(0xFFFF453A),
 ) {
     companion object {
         /** Violet, for phones older than Android 12 (no Material You). */
-        val Default = from(Color(0xFF4B2BC9).toArgbInt(), null)
+        val Default = from(0xFF4B2BC9.toInt(), null)
 
-        /** [seed] is the primary hue; [accent] the tertiary one for the contrasting card. */
+        /** One-time codes always use Lync's own colours, never the wallpaper's (shared with the Mac). */
+        val CodeForest = Color(0xFF0F2E24)
+        val CodeMint = Color(0xFF7FE3B0)
+        /** Secondary text on [CodeForest]. */
+        const val CodeSecondaryAlpha = 0.75f
+
+        /**
+         * [seed] is the primary hue; [accent] the tertiary one for the contrasting card. The
+         * lightness of [top], [mid] and [peek] drops per hue until white and white at 78 %
+         * read at 4.5:1 (yellows and greens get darker than blues).
+         */
         fun from(seed: Int, accent: Int?): HomeColors {
-            val hsl = FloatArray(3).also { ColorUtils.colorToHSL(seed, it) }
+            val hsl = Contrast.argbToHsl(seed)
             // A monochrome Material You palette (common on Nothing phones) stays monochrome:
             // greys from charcoal to ink, pale grey buttons, a lighter grey card for contrast.
             if (hsl[1] < 0.12f) return monochrome()
             val hue = hsl[0]
             // Greys and near-greys get a gentle tint, so the screen never looks washed out.
             val sat = hsl[1].coerceIn(0.45f, 0.8f)
-            val other = accent?.let { FloatArray(3).also { a -> ColorUtils.colorToHSL(it, a) }[0] } ?: ((hue + 110f) % 360f)
-            return HomeColors(
-                top = hsl(hue, sat * 0.85f, 0.42f),
-                mid = hsl(hue, sat * 0.7f, 0.2f),
+            val other = accent?.let { Contrast.argbToHsl(it)[0] } ?: ((hue + 110f) % 360f)
+            return finish(
+                top = safe(hue, sat * 0.85f, 0.42f),
+                mid = safe(hue, sat * 0.7f, 0.2f),
                 card = hsl(hue, sat * 0.5f, 0.12f),
                 pale = hsl(hue, 0.8f, 0.92f),
                 onPale = hsl(hue, 0.6f, 0.22f),
-                peek = hsl(other, 0.62f, 0.44f),
+                peek = safe(other, 0.62f, 0.44f),
                 peekPale = hsl(other, 0.9f, 0.9f),
                 onPeekPale = hsl(other, 0.6f, 0.18f),
             )
         }
 
-        private fun monochrome() = HomeColors(
-            top = hsl(0f, 0f, 0.3f),
-            mid = hsl(0f, 0f, 0.14f),
+        private fun monochrome() = finish(
+            top = safe(0f, 0f, 0.3f),
+            mid = safe(0f, 0f, 0.14f),
             card = hsl(0f, 0f, 0.12f),
             pale = hsl(0f, 0f, 0.92f),
             onPale = hsl(0f, 0f, 0.12f),
-            peek = hsl(0f, 0f, 0.26f),
+            peek = safe(0f, 0f, 0.26f),
             peekPale = hsl(0f, 0f, 0.92f),
             onPeekPale = hsl(0f, 0f, 0.12f),
         )
 
-        private fun hsl(h: Float, s: Float, l: Float) = Color(ColorUtils.HSLToColor(floatArrayOf(h, s, l)))
-        private fun Color.toArgbInt() = android.graphics.Color.argb(
-            (alpha * 255).toInt(), (red * 255).toInt(), (green * 255).toInt(), (blue * 255).toInt(),
-        )
+        private fun finish(top: Color, mid: Color, card: Color, pale: Color, onPale: Color, peek: Color, peekPale: Color, onPeekPale: Color): HomeColors {
+            val cardArgb = card.toArgb()
+            // Lists are white 7 % over the card (sheets) or over the gradient's mid tone (pages).
+            val red = Contrast.lightenUntil(
+                0xFFFF453A.toInt(),
+                listOf(cardArgb, Contrast.blend(Contrast.WHITE, 0.07f, cardArgb), Contrast.blend(Contrast.WHITE, 0.07f, mid.toArgb())),
+            )
+            return HomeColors(top, mid, card, pale, onPale, peek, peekPale, onPeekPale, Color(red))
+        }
+
+        /** hsl with the lightness lowered until white (and white at 78 %) text reads on it. */
+        private fun safe(h: Float, s: Float, l: Float) = Color(Contrast.hslToArgb(h, s, Contrast.lightnessForWhite(h, s, l)))
+        private fun hsl(h: Float, s: Float, l: Float) = Color(Contrast.hslToArgb(h, s, l))
     }
 }
 

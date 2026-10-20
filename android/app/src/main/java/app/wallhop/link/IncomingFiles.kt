@@ -16,13 +16,14 @@ class IncomingFiles(private val context: Context) {
     private class Incoming(
         val batch: String,
         val name: String,
+        val mime: String,
         val uri: Uri,
         val stream: OutputStream,
         val digest: MessageDigest = MessageDigest.getInstance("SHA-256"),
     )
 
     private val files = HashMap<String, Incoming>()
-    private val saved = HashMap<String, MutableList<Uri>>()
+    private val saved = HashMap<String, MutableList<Incoming>>()
     /** Files that couldn't be saved, with why; their chunks are skipped and `file_end` reports it. */
     private val failed = HashMap<String, String>()
 
@@ -34,9 +35,10 @@ class IncomingFiles(private val context: Context) {
     fun fileStart(message: Message) {
         val id = message.string("id") ?: return
         val name = sanitize(message.string("name") ?: "File")
+        val mime = message.string("mime") ?: "application/octet-stream"
         val values = ContentValues().apply {
             put(MediaStore.MediaColumns.DISPLAY_NAME, name)
-            put(MediaStore.MediaColumns.MIME_TYPE, message.string("mime") ?: "application/octet-stream")
+            put(MediaStore.MediaColumns.MIME_TYPE, mime)
             put(MediaStore.MediaColumns.RELATIVE_PATH, "${Environment.DIRECTORY_DOWNLOADS}/Lync")
             put(MediaStore.MediaColumns.IS_PENDING, 1)
         }
@@ -52,7 +54,7 @@ class IncomingFiles(private val context: Context) {
             failed[id] = "couldn't save"
             return
         }
-        files[id] = Incoming(message.string("batch") ?: id, name, uri, stream)
+        files[id] = Incoming(message.string("batch") ?: id, name, mime, uri, stream)
     }
 
     fun fileChunk(message: Message) {
@@ -87,7 +89,7 @@ class IncomingFiles(private val context: Context) {
             runCatching { resolver.delete(file.uri, null, null) }
             return "couldn't save"
         }
-        saved.getOrPut(file.batch) { mutableListOf() } += file.uri
+        saved.getOrPut(file.batch) { mutableListOf() } += file
         return null
     }
 
@@ -99,14 +101,12 @@ class IncomingFiles(private val context: Context) {
         failed[id] = reason
     }
 
-    /** Returns a summary like "2 files from your Mac", and shows a notification. */
-    fun batchEnd(message: Message, macName: String): String? {
+    /** The files saved in this batch ("3 photos from MacBook Air"), or null if none were. */
+    fun batchEnd(message: Message, macName: String): ReceivedBatch? {
         val batch = message.string("batch") ?: return null
-        val uris = saved.remove(batch).orEmpty()
-        if (uris.isEmpty()) return null
-        val summary = "${uris.size} ${if (uris.size == 1) "file" else "files"} from $macName"
-        Notifications.filesFromMac(context, summary)
-        return summary
+        val files = saved.remove(batch).orEmpty()
+        if (files.isEmpty()) return null
+        return ReceivedBatch(macName, files.map { it.uri }, files.map { it.name }, files.map { it.mime })
     }
 
     fun cancelAll() {

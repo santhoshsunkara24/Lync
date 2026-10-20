@@ -63,6 +63,11 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.dialog
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.paneTitle
+import androidx.compose.foundation.focusable
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.IntOffset
@@ -133,6 +138,9 @@ class Overlays {
     var menu by mutableStateOf<MenuSpec?>(null); private set
     var toast by mutableStateOf<ToastSpec?>(null); private set
 
+    /** Something modal is up: the screen behind is hidden from TalkBack until it closes. */
+    val modal: Boolean get() = sheet != null || alert != null || actionSheet != null || menu != null
+
     fun showSheet(
         title: String? = null,
         large: Boolean = false,
@@ -163,6 +171,29 @@ class Overlays {
 }
 
 val LocalOverlays = staticCompositionLocalOf<Overlays?> { null }
+
+/**
+ * How long something with a timeout should stay: Android's recommended time for the user's
+ * accessibility settings (longer with TalkBack or "Time to take action"), at least [ms].
+ */
+fun recommendedTimeout(context: android.content.Context, ms: Long, controls: Boolean = false): Long {
+    val manager = context.getSystemService(android.view.accessibility.AccessibilityManager::class.java) ?: return ms
+    val flags = android.view.accessibility.AccessibilityManager.FLAG_CONTENT_TEXT or
+        android.view.accessibility.AccessibilityManager.FLAG_CONTENT_ICONS or
+        (if (controls) android.view.accessibility.AccessibilityManager.FLAG_CONTENT_CONTROLS else 0)
+    return manager.getRecommendedTimeoutMillis(ms.toInt(), flags).toLong().coerceAtLeast(ms)
+}
+
+/** Takes focus once when it appears, so TalkBack moves into a dialog rather than staying behind it. */
+@Composable
+private fun Modifier.focusOnShow(): Modifier {
+    val requester = remember { androidx.compose.ui.focus.FocusRequester() }
+    LaunchedEffect(Unit) {
+        delay(150) // After the enter transition has placed it.
+        runCatching { requester.requestFocus() }
+    }
+    return focusRequester(requester).focusable()
+}
 
 /** How glass materializes: refraction and light ramp up rather than a plain fade. */
 private val materialize = Springs.materialize<Float>()
@@ -248,6 +279,10 @@ private fun BoxScope.SheetLayer(overlays: Overlays) {
                 .clip(shape)
                 .background(colors.backgroundElevated)
                 .then(if (spec.large) Modifier else Modifier.border(0.5.dp, colors.separator, shape))
+                .semantics {
+                    paneTitle = spec.title ?: "Sheet"
+                    dialog()
+                }
                 .draggable(
                     dragState,
                     Orientation.Vertical,
@@ -274,7 +309,8 @@ private fun BoxScope.SheetLayer(overlays: Overlays) {
                 Box(Modifier.fillMaxWidth().height(52.dp).padding(horizontal = 16.dp)) {
                     Box(Modifier.align(Alignment.CenterStart)) { spec.leading?.invoke() }
                     if (spec.title != null) {
-                        Text(spec.title, style = Type.title3, color = colors.label, modifier = Modifier.align(Alignment.Center))
+                        Text(spec.title, style = Type.title3, color = colors.label,
+                            modifier = Modifier.align(Alignment.Center).semantics { heading() })
                     }
                     Box(Modifier.align(Alignment.CenterEnd)) { spec.trailing?.invoke() }
                 }
@@ -338,6 +374,7 @@ private fun BoxScope.MenuLayer(overlays: Overlays) {
                 .offset(x = x, y = y)
                 .requiredSize(width, height)
                 .glass(RoundedRectangle(radius), GlassVariant.Regular, appear = { 0.6f + 0.4f * progress.value })
+                .semantics { paneTitle = "Menu" }
                 .padding(vertical = 6.dp)
                 .alpha(((p - 0.4f) / 0.6f).coerceIn(0f, 1f)),
         ) {
@@ -397,11 +434,16 @@ private fun BoxScope.AlertLayer(overlays: Overlays) {
             Modifier
                 .width(270.dp)
                 .glass(rounded(Radius.xl), GlassVariant.Regular, appear = { appear })
+                .semantics {
+                    paneTitle = spec.title
+                    dialog()
+                }
                 .padding(20.dp)
                 .alpha(((appear - 0.3f) / 0.7f).coerceIn(0f, 1f)),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            Text(spec.title, style = Type.headline, color = colors.label, textAlign = TextAlign.Center)
+            Text(spec.title, style = Type.headline, color = colors.label, textAlign = TextAlign.Center,
+                modifier = Modifier.semantics { heading() }.focusOnShow())
             if (spec.message != null) {
                 Spacer(Modifier.height(6.dp))
                 Text(spec.message, style = Type.footnote, color = colors.labelSecondary, textAlign = TextAlign.Center)
@@ -467,13 +509,19 @@ private fun BoxScope.ActionSheetLayer(overlays: Overlays) {
         val appear = 1f
         val spec = shown ?: return@AnimatedVisibility
         Column(
-            Modifier.fillMaxWidth().navigationBarsPadding().padding(10.dp).alpha(((appear - 0.2f) / 0.8f).coerceIn(0f, 1f)),
+            Modifier.fillMaxWidth().navigationBarsPadding().padding(10.dp).alpha(((appear - 0.2f) / 0.8f).coerceIn(0f, 1f))
+                .semantics {
+                    paneTitle = spec.message ?: "Actions"
+                    dialog()
+                },
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Column(Modifier.fillMaxWidth().glass(rounded(Radius.xl), GlassVariant.Regular, appear = { appear }).padding(8.dp)) {
                 if (spec.message != null) {
                     Text(spec.message, style = Type.footnote, color = colors.labelSecondary, textAlign = TextAlign.Center,
-                        modifier = Modifier.fillMaxWidth().padding(12.dp))
+                        modifier = Modifier.fillMaxWidth().padding(12.dp).focusOnShow())
+                } else {
+                    Box(Modifier.size(1.dp).focusOnShow())
                 }
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     spec.actions.forEach { action ->
@@ -504,14 +552,16 @@ private fun BoxScope.ToastLayer(overlays: Overlays) {
     val colors = Wallhop.colors
     val reduceMotion = Wallhop.a11y.reduceMotion
     val haptics = rememberHaptics()
+    val context = androidx.compose.ui.platform.LocalContext.current
     var shown by remember { mutableStateOf<ToastSpec?>(null) }
     val current = overlays.toast
     if (current != null) shown = current
     LaunchedEffect(current?.id) {
         if (current != null) {
             if (current.tint == colors.red) haptics.perform(Haptic.Failure)
-            // Longer when there's a button to reach, e.g. Undo.
-            delay(if (current.action != null) 5_000 else 2_500)
+            // Longer when there's a button to reach (Undo), and as long as the user's
+            // accessibility settings ask for (TalkBack, "Time to take action").
+            delay(toastDuration(context, current.action != null))
             overlays.clearToast(current.id)
         }
     }
@@ -555,7 +605,8 @@ private fun BoxScope.ToastLayer(overlays: Overlays) {
                 val source = remember { MutableInteractionSource() }
                 Box(
                     Modifier
-                        .heightIn(min = 44.dp)
+                        .heightIn(min = 48.dp)
+                        .widthIn(min = 48.dp)
                         .pressScale(source)
                         .clip(capsule())
                         .background(Wallhop.home.onPale.copy(alpha = 0.1f))
@@ -572,3 +623,7 @@ private fun BoxScope.ToastLayer(overlays: Overlays) {
         }
     }
 }
+
+/** How long a toast stays; one with a button (Undo) gets the time the user's settings recommend. */
+fun toastDuration(context: android.content.Context, hasAction: Boolean): Long =
+    if (hasAction) recommendedTimeout(context, 5_000, controls = true) else recommendedTimeout(context, 2_500)

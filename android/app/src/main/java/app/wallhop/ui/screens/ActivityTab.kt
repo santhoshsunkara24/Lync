@@ -63,14 +63,24 @@ import app.wallhop.ui.design.rememberHaptics
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 
-private val filters = listOf("All", "Codes", "Files & text", "Calls")
+private val filters = listOf("All", "Codes", "Sent", "Calls")
 
 /**
  * Everything that went between phone and Mac (DESIGN.md §6.5). The filters are pages: swipe
  * sideways between them, and the segmented control follows the finger.
  */
 @Composable
-fun ActivityTab(activity: List<ActivityEntry>, overlays: Overlays, onDelete: (String) -> Unit) {
+fun ActivityTab(
+    activity: List<ActivityEntry>,
+    overlays: Overlays,
+    onDelete: (String) -> Unit,
+    /** A tap on a row: copy a code, open a file or link, or the actions. */
+    onTap: (ActivityEntry) -> Unit,
+    /** Long press: the actions (Copy code, Send again, Delete). */
+    onActions: (ActivityEntry) -> Unit,
+    /** "Clear older than a week" in the ⋯ menu; asks first, and offers Undo. */
+    onClearOld: () -> Unit,
+) {
     val context = LocalContext.current
     val haptics = rememberHaptics()
     val scope = rememberCoroutineScope()
@@ -102,7 +112,15 @@ fun ActivityTab(activity: List<ActivityEntry>, overlays: Overlays, onDelete: (St
     if (measuredMin > 0 && measuredMin != pagesMinPx) pagesMinPx = measuredMin
     val pagesMin = with(androidx.compose.ui.platform.LocalDensity.current) { pagesMinPx.toDp() }
 
-    Page(title = "Activity", state = list) {
+    Page(
+        title = "Activity",
+        state = list,
+        trailing = {
+            app.wallhop.ui.components.CircleButton(WIcons.More, "More", onClick = { anchor ->
+                overlays.showMenu(anchor, listOf(app.wallhop.ui.components.MenuItem("Clear older than a week", destructive = false) { onClearOld() }))
+            })
+        },
+    ) {
         item(key = "filter") {
             Column(Modifier.staggerIn(1)) {
             SegmentedControl(
@@ -125,7 +143,7 @@ fun ActivityTab(activity: List<ActivityEntry>, overlays: Overlays, onDelete: (St
                 beyondViewportPageCount = 1,
             ) { page ->
                 Box(Modifier.fillMaxWidth().heightIn(min = pagesMin)) {
-                    ActivityPage(activity.filter { matches(it, page) }, page, overlays, onDelete)
+                    ActivityPage(activity.filter { matches(it, page) }, page, onTap, onActions)
                 }
             }
         }
@@ -140,9 +158,8 @@ private fun matches(entry: ActivityEntry, filter: Int) = when (filter) {
 }
 
 @Composable
-private fun ActivityPage(entries: List<ActivityEntry>, filter: Int, overlays: Overlays, onDelete: (String) -> Unit) {
+private fun ActivityPage(entries: List<ActivityEntry>, filter: Int, onTap: (ActivityEntry) -> Unit, onActions: (ActivityEntry) -> Unit) {
     val context = LocalContext.current
-    val haptics = rememberHaptics()
     val reduceMotion = Wallhop.a11y.reduceMotion
     val groups = entries.groupBy { dayLabel(context, it.time) }
     // Days already here when the page opened; a day that turns up later animates its first row in.
@@ -169,7 +186,7 @@ private fun ActivityPage(entries: List<ActivityEntry>, filter: Int, overlays: Ov
                     rows.forEach { entry ->
                         row {
                             AnimatedVisibility(entry.visible, enter = rowEnter(reduceMotion), exit = rowExit(reduceMotion)) {
-                                ActivityRow(entry.item, onLongClick = { showEntryActions(overlays, context, entry.item, haptics, onDelete) })
+                                ActivityRow(entry.item, onLongClick = { onActions(entry.item) }, onClick = { onTap(entry.item) })
                             }
                         }
                     }
@@ -180,32 +197,87 @@ private fun ActivityPage(entries: List<ActivityEntry>, filter: Int, overlays: Ov
     }
 }
 
-/** Copy code / Delete for one entry; the same on Home and in Activity. */
+/** Actions for one entry (long press); the same on Home and in Activity. */
 internal fun showEntryActions(
     overlays: Overlays,
     context: android.content.Context,
     entry: ActivityEntry,
     haptics: Haptics? = null,
     onDelete: (String) -> Unit,
+    /** Files sent to the Mac: send them again. */
+    onSendAgain: ((ActivityEntry) -> Unit)? = null,
 ) {
     overlays.showActionSheet(ActionSheetSpec(
         message = null,
         actions = buildList {
             if (entry.kind == ActivityEntry.Kind.Otp) {
-                add(AlertAction("Copy code") {
-                    copyCode(context, entry.title)
-                    haptics?.confirm()
-                    overlays.toast("Code copied", WIcons.CheckCircle)
+                add(AlertAction("Copy code") { copyEntryCode(overlays, context, entry, haptics) })
+            }
+            if (entry.kind == ActivityEntry.Kind.FromMac && entry.uris.isNotEmpty()) {
+                add(AlertAction(if (entry.uris.size == 1) "Open" else "Open in Downloads") { openReceived(overlays, context, entry) })
+                add(AlertAction("Share") {
+                    val uris = entry.uris.map(android.net.Uri::parse)
+                    runCatching {
+                        context.startActivity(app.wallhop.link.Notifications.shareChooser(uris, uris.map { context.contentResolver.getType(it) ?: "*/*" }))
+                    }
                 })
             }
+            if (entry.kind == ActivityEntry.Kind.FilesSent && entry.uris.isNotEmpty() && onSendAgain != null) {
+                add(AlertAction("Send again") { onSendAgain(entry) })
+            }
+            linkOf(entry)?.let { url -> add(AlertAction("Open link") { openLink(context, url) }) }
             add(AlertAction("Delete", destructive = true) { onDelete(entry.id) })
         },
     ))
 }
 
-/** One entry. Long press (or [onClick], where given) offers Copy code / Delete. */
+/** The link a "Link opened on your Mac" entry is about, if any. */
+private fun linkOf(entry: ActivityEntry): String? =
+    entry.detail.trim().takeIf { entry.kind == ActivityEntry.Kind.TextSent && app.wallhop.extras.isSingleUrl(it) }
+
+/** Copies a code, marked sensitive, with "Code copied". */
+private fun copyEntryCode(overlays: Overlays, context: android.content.Context, entry: ActivityEntry, haptics: Haptics?) {
+    copyCode(context, entry.title)
+    haptics?.confirm()
+    overlays.toast("Code copied", WIcons.CheckCircle)
+}
+
+/** Files from the Mac: one opens in its app; several open Downloads, where Lync's folder is. */
+private fun openReceived(overlays: Overlays, context: android.content.Context, entry: ActivityEntry) {
+    val uris = entry.uris.map(android.net.Uri::parse)
+    val intent = if (uris.size == 1) {
+        app.wallhop.link.Notifications.viewIntent(uris.first(), context.contentResolver.getType(uris.first()))
+    } else {
+        app.wallhop.link.Notifications.downloadsIntent()
+    }
+    runCatching { context.startActivity(intent) }.onFailure { overlays.toast("No app here can open this") }
+}
+
+/**
+ * A tap on an entry, on Home and in Activity: a code is copied; files from the Mac open; a link
+ * opens on the phone; anything else shows its actions (long press always does).
+ */
+internal fun tapEntry(
+    overlays: Overlays,
+    context: android.content.Context,
+    entry: ActivityEntry,
+    haptics: Haptics?,
+    onActions: (ActivityEntry) -> Unit,
+) {
+    val link = linkOf(entry)
+    when {
+        entry.kind == ActivityEntry.Kind.Otp -> copyEntryCode(overlays, context, entry, haptics)
+        entry.kind == ActivityEntry.Kind.FromMac && entry.uris.isNotEmpty() -> openReceived(overlays, context, entry)
+        link != null -> openLink(context, link)
+        else -> onActions(entry)
+    }
+}
+
+/**
+ * One entry. Tap does the obvious thing ([tapEntry]); long press offers the actions.
+ * [showDay]: lists that aren't grouped by day (Home's Recent) say "Yesterday" or the date.
+ */
 @Composable
-/** [showDay]: lists that aren't grouped by day (Home's Recent) say "Yesterday" or the date. */
 internal fun ActivityRow(entry: ActivityEntry, onLongClick: () -> Unit, onClick: (() -> Unit)? = null, showDay: Boolean = false) {
     val colors = Wallhop.colors
     val context = LocalContext.current
@@ -239,6 +311,12 @@ internal fun ActivityRow(entry: ActivityEntry, onLongClick: () -> Unit, onClick:
             )
         },
         onLongClickLabel = "Show actions",
+        onClickLabel = when {
+            entry.kind == ActivityEntry.Kind.Otp -> "Copy code"
+            entry.kind == ActivityEntry.Kind.FromMac && entry.uris.isNotEmpty() -> "Open"
+            linkOf(entry) != null -> "Open link"
+            else -> null
+        },
         onLongClick = onLongClick,
         onClick = onClick,
     )

@@ -161,8 +161,22 @@ optional binary body.
 | `media_cmd` | Mac → phone | `action` (`play`, `pause`, `toggle`, `next`, `previous`, `volume_up`, `volume_down`) | | |
 | `open_url` | both | `url` | | |
 | `ring` | Mac → phone | `action` (`start`, `stop`) | | |
+| `ring` | phone → Mac | `action` (`stopped`): the phone stopped ringing by itself (silenced on the phone, or its own timeout) | | |
+| `forget` | phone → Mac | | | |
 
 Notifications are only sent for apps the user switched on in the phone app.
+
+`ring`: the Mac shows "Stop ringing" from `start` until the phone reports `stopped`, or for
+30 s if no report comes (older phones).
+
+`forget`: sent by the phone over the authenticated session (a sealed frame, after `ready`)
+just before it disconnects, when the user forgets this Mac on the phone. Exactly
+`{"t":"forget"}`, no other fields and no reply. The Mac removes that phone (the session's
+public key) from its paired phones, as Forget in its own Settings does but without asking,
+closes the connection and tells the user "<phone> unpaired this Mac". It's accepted from a
+paired phone that is connected in the background too. A phone that is forgotten while the
+Mac is unreachable is simply answered with `unpaired` the next time it connects (Session,
+step 2).
 
 Files from the phone land in the Mac's private inbox (`~/Library/Application Support/Wallhop/Inbox`)
 and go straight to the clipboard, so they can be pasted anywhere. They are moved to
@@ -189,12 +203,23 @@ Nothing is synced ahead of time or stored on the Mac.
 | `sms_threads` | Mac → phone | `id` | | `sms_result`, body `{"threads": [...], "sims": [...]}` |
 | `sms_thread` | Mac → phone | `id`, `thread` | | `sms_result`, body `{"thread": "…", "messages": [...]}` |
 | `sms_send` | Mac → phone | `id`, `address`, `sim` (subscription id, optional) | UTF-8 text | `ack` (`ok`, `err`) |
-| `sms_result` | phone → Mac | `id`, `err` (optional, e.g. `permission`) | JSON | |
+| `contacts` | Mac → phone | `id`, `q` (what's typed in the "To:" field, at least 1 character) | | `sms_result`, body `{"items": [...]}` |
+| `sms_result` | phone → Mac | `id`, `err` (optional, e.g. `permission`, `unavailable`) | JSON | |
 | `sms_changed` | phone → Mac | `thread` (optional) | | |
 
 Thread: `{"thread", "address", "name", "snippet", "date" (ms), "unread"}`.
 Message: `{"id", "body", "date" (ms), "out" (bool), "failed" (bool), "sim"}`.
 SIM: `{"id" (subscription id), "label"}`; only listed on phones with more than one active SIM.
+
+Contacts search: the Mac sends `{"t":"contacts","id":"<id>","q":"<query>"}` about 250 ms after
+the user stops typing in the "To:" field of a new text. The phone answers with an
+`sms_result` carrying the same `id` and the body `{"items": [{"name": "…", "number": "…"}, …]}`:
+at most 20 contacts whose name or number contains `q`, one item per phone number. If it can't
+search (Contacts not allowed for Texts, or the Texts feature is off) it answers
+`{"t":"sms_result","id":"<id>","err":"unavailable"}` with no body, and the Mac shows "Allow
+Contacts for Texts on your phone to search names"; a raw number can always be typed. Replies
+are matched to requests by `id`, like the other requests here; the Mac uses only the reply to
+its newest query and gives up on a request after 15 s.
 
 `id` and `batch` are strings, unique per sender. Unknown message types are ignored, so newer
 versions can add messages without breaking older ones.

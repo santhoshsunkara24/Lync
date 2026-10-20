@@ -20,7 +20,7 @@ final class StatusItemController: NSObject {
             button.action = #selector(togglePopover)
             button.imagePosition = .imageOnly
             button.setAccessibilityLabel("Lync")
-            let drop = DropTargetView(frame: button.bounds, drop: FileDropHandler(model: model), menu: menu) { [weak self] in
+            let drop = DropTargetView(frame: button.bounds, drop: FileDropHandler(model: model, source: "status"), menu: menu) { [weak self] in
                 self?.togglePopover()
             }
             drop.autoresizingMask = [.width, .height]
@@ -31,6 +31,26 @@ final class StatusItemController: NSObject {
             .combineLatest(model.$pairingRequest.map { $0 != nil })
             .sink { [weak self] phone, pairing in self?.updateIcon(connected: phone != nil, attention: pairing) }
             .store(in: &cancellables)
+        // Files dragged anywhere on the Mac: the icon glows Mint (pulsing gently; steady under Reduce Motion).
+        model.$fileDrag.map { $0 != nil }.removeDuplicates()
+            .sink { [weak self] dragging in self?.glow(dragging) }
+            .store(in: &cancellables)
+    }
+
+    private func glow(_ on: Bool) {
+        guard let button = item.button else { return }
+        button.wantsLayer = true
+        button.contentTintColor = on ? NSColor(srgbRed: 0x7F / 255.0, green: 0xE3 / 255.0, blue: 0xB0 / 255.0, alpha: 1) : nil
+        button.layer?.removeAnimation(forKey: "dragGlow")
+        guard on, !WMotion.reduceMotion else { return }
+        let pulse = CABasicAnimation(keyPath: "opacity")
+        pulse.fromValue = 1
+        pulse.toValue = 0.55
+        pulse.duration = 0.9
+        pulse.autoreverses = true
+        pulse.repeatCount = .infinity
+        pulse.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+        button.layer?.add(pulse, forKey: "dragGlow")
     }
 
     /// Shown in menu bar mode, or always on a Mac without a notch.
@@ -56,8 +76,10 @@ final class StatusItemController: NSObject {
         // The Lync droid (Resources/MenuBarIcon*.png, a template image); a dot at its top right when something
         // needs attention. Dimmed while no phone is connected.
         let image = attention ? Self.markWithDot : Self.mark
-        image?.accessibilityDescription = attention ? "Lync, needs attention" : "Lync"
+        let state = attention ? "Lync, needs attention" : connected ? "Lync, phone connected" : "Lync, phone not connected"
+        image?.accessibilityDescription = state
         guard let button = item.button else { return }
+        button.setAccessibilityLabel(state)
         let disabled = !connected && !attention
         // A short crossfade when the icon changes (the dot coming or going, connecting).
         if button.image != nil, button.image !== image || button.appearsDisabled != disabled {
@@ -122,6 +144,7 @@ private final class DropTargetView: NSView {
     }
 
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation { drop.entered(sender) }
+    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation { drop.entered(sender, update: true) }
     override func draggingExited(_ sender: NSDraggingInfo?) { drop.exited() }
     override func draggingEnded(_ sender: NSDraggingInfo) { drop.exited() }
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool { drop.perform(sender) }
@@ -131,26 +154,30 @@ private final class DropTargetView: NSView {
 /// folders are left out (and the user told so).
 final class FileDropHandler {
     private let model: AppModel
+    /// Which drop target this is ("sensor", "status", "overlay", "panel"), for `AppModel.dropHover`.
+    private let source: String
 
-    init(model: AppModel) {
+    init(model: AppModel, source: String) {
         self.model = model
+        self.source = source
     }
 
-    func entered(_ info: NSDraggingInfo) -> NSDragOperation {
+    /// `update`: a move within the target; only the answer is needed.
+    func entered(_ info: NSDraggingInfo, update: Bool = false) -> NSDragOperation {
         let (files, folders) = Self.read(info)
         guard !files.isEmpty || folders > 0 else { return [] }
-        model.dropHover(true)
+        if !update { model.dropHover(true, source: source) }
         return model.connectedPhone != nil && !files.isEmpty ? .copy : []
     }
 
     func exited() {
-        model.dropHover(false)
+        model.dropHover(false, source: source)
     }
 
     func perform(_ info: NSDraggingInfo) -> Bool {
         let (files, folders) = Self.read(info)
         guard model.connectedPhone != nil, !files.isEmpty else {
-            model.dropHover(false)
+            model.dropHover(false, source: source)
             return false
         }
         model.dropAccepted()
@@ -159,8 +186,13 @@ final class FileDropHandler {
     }
 
     private static func read(_ info: NSDraggingInfo) -> (files: [URL], folders: Int) {
+        read(info.draggingPasteboard)
+    }
+
+    /// Dragged files, and how many folders were left out (they can't be sent).
+    static func read(_ board: NSPasteboard) -> (files: [URL], folders: Int) {
         let options: [NSPasteboard.ReadingOptionKey: Any] = [.urlReadingFileURLsOnly: true]
-        let urls = info.draggingPasteboard.readObjects(forClasses: [NSURL.self], options: options) as? [URL] ?? []
+        let urls = board.readObjects(forClasses: [NSURL.self], options: options) as? [URL] ?? []
         let files = urls.filter { !$0.hasDirectoryPath }
         return (files, urls.count - files.count)
     }
