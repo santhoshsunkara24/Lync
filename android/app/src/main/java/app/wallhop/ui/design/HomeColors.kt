@@ -40,8 +40,8 @@ data class HomeColors(
     val red: Color = Color(0xFFFF453A),
 ) {
     companion object {
-        /** Violet, for phones older than Android 12 (no Material You). */
-        val Default = from(0xFF4B2BC9.toInt(), null)
+        /** Lync's own deep mint with a rose accent, for phones older than Android 12 (no Material You). */
+        val Default = from(0xFF2FB57E.toInt(), 0xFFE0386A.toInt())
 
         /** One-time codes always use Lync's own colours, never the wallpaper's (shared with the Mac). */
         val CodeForest = Color(0xFF0F2E24)
@@ -106,7 +106,7 @@ data class HomeColors(
  * The two colours Wallhop themes itself with: [seed] for the screen, [accent] for the contrasting
  * card. Android's Material You palette when it follows the wallpaper; otherwise the wallpaper's own
  * colours, read directly. Phones set to a preset or monochrome style would otherwise give grey even
- * with a colourful wallpaper. Null before Android 12 (the caller falls back to violet).
+ * with a colourful wallpaper. Null before Android 12 (the caller falls back to Lync mint).
  */
 fun themeSeeds(context: Context): Pair<Int, Int?>? {
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return null
@@ -153,7 +153,7 @@ private fun hueDistance(a: Float, b: Float) = minOf(kotlin.math.abs(a - b), 360f
 @Volatile private var lastHomeColors: HomeColors? = null
 
 /**
- * Home colours from the wallpaper; violet before Android 12. Updates when the wallpaper changes.
+ * Home colours from the wallpaper; Lync mint before Android 12. Updates when the wallpaper changes.
  * Reading the wallpaper's colours can take a while, so it happens off the main thread; until then
  * the screen uses the last colours, or the system palette on first launch.
  */

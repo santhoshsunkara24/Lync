@@ -343,6 +343,7 @@ private struct PhoneCard: View {
             ZStack(alignment: .top) {
                 LinearGradient(colors: [Color.white.opacity(0.07), Color.white.opacity(0.03)], startPoint: .top, endPoint: .bottom)
                 MiniPhone(connected: connected, theme: theme.theme).padding(.top, 22)
+                BridgeMac(connected: connected, animate: model.panelOpen)
             }
             .frame(height: 196, alignment: .top)
             .clipped()
@@ -377,6 +378,65 @@ private struct PhoneCard: View {
                          : "connected \(minutes / 60) h ago")
         }
         return parts.isEmpty ? "Connected" : parts.joined(separator: " · ")
+    }
+}
+
+/// The Bridge, Mac side: this Mac stands small in front of the phone, and a mint link arcs from
+/// it up to the phone's camera with a light travelling along it while they're linked.
+private struct BridgeMac: View {
+    let connected: Bool
+    /// Only while the panel is open: a closed panel animates nothing.
+    let animate: Bool
+
+    var body: some View {
+        GeometryReader { geo in
+            let w = geo.size.width
+            let mac = CGPoint(x: w * 0.8, y: 120)
+            let camera = CGPoint(x: w / 2 + 14, y: 50)
+            TimelineView(.animation(minimumInterval: 1 / 30, paused: !connected || !animate || WMotion.reduceMotion)) { context in
+                let t = connected && !WMotion.reduceMotion
+                    ? context.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 4.2) / 4.2 : 0
+                Canvas { ctx, _ in
+                    guard connected else { return }
+                    var path = Path()
+                    path.move(to: CGPoint(x: mac.x - 4, y: mac.y - 4))
+                    path.addCurve(to: camera, control1: CGPoint(x: mac.x + 6, y: 40), control2: CGPoint(x: camera.x + 40, y: 30))
+                    ctx.stroke(path, with: .color(WTheme.codeMint.opacity(0.22)), style: StrokeStyle(lineWidth: 6, lineCap: .round))
+                    ctx.stroke(path, with: .color(WTheme.codeMint),
+                               style: StrokeStyle(lineWidth: 2, lineCap: .round, dash: [0.1, 10], dashPhase: CGFloat(-t * 60)))
+                    // The light travels Mac → phone in the first 60 % of each loop.
+                    let p = t / 0.6
+                    if p > 0.01 && p < 1 {
+                        let eased = p < 0.5 ? 2 * p * p : 1 - pow(-2 * p + 2, 2) / 2
+                        let at = path.trimmedPath(from: 0, to: eased).currentPoint ?? camera
+                        let a = sin(p * .pi)
+                        ctx.fill(Path(ellipseIn: CGRect(x: at.x - 12, y: at.y - 12, width: 24, height: 24)),
+                                 with: .radialGradient(Gradient(colors: [WTheme.codeMint.opacity(0.7 * a), .clear]), center: at, startRadius: 0, endRadius: 12))
+                        ctx.fill(Path(ellipseIn: CGRect(x: at.x - 3, y: at.y - 3, width: 6, height: 6)), with: .color(.white.opacity(a)))
+                    }
+                }
+            }
+            .opacity(connected ? 1 : 0)
+            // This Mac, small, in front.
+            VStack(spacing: 0) {
+                ZStack(alignment: .top) {
+                    RoundedRectangle(cornerRadius: 7, style: .continuous).fill(Color(white: 0.36))
+                    RoundedRectangle(cornerRadius: 6, style: .continuous).fill(Color(white: 0.04)).padding([.horizontal, .top], 1)
+                    RoundedRectangle(cornerRadius: 3, style: .continuous)
+                        .fill(LinearGradient(colors: [Color(red: 0.11, green: 0.17, blue: 0.42), Color(red: 0.35, green: 0.18, blue: 0.53), Color(red: 0.88, green: 0.48, blue: 0.44)],
+                                             startPoint: .topLeading, endPoint: .bottomTrailing))
+                        .padding(.horizontal, 4).padding(.top, 4).padding(.bottom, 3)
+                    UnevenRoundedRectangle(bottomLeadingRadius: 3, bottomTrailingRadius: 3).fill(Color(white: 0.04)).frame(width: 16, height: 5).padding(.top, 1)
+                }
+                .frame(width: 92, height: 60)
+                UnevenRoundedRectangle(bottomLeadingRadius: 5, bottomTrailingRadius: 5)
+                    .fill(LinearGradient(colors: [Color(white: 0.56), Color(white: 0.23)], startPoint: .top, endPoint: .bottom))
+                    .frame(width: 108, height: 5)
+            }
+            .shadow(color: .black.opacity(0.45), radius: 10, y: 6)
+            .position(x: mac.x, y: mac.y + 33)
+        }
+        .accessibilityHidden(true)
     }
 }
 

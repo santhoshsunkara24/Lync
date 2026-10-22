@@ -43,12 +43,14 @@ android {
     buildTypes {
         debug {
             buildConfigField("boolean", "STRESS_HOOKS", "true")
+            buildConfigField("boolean", "PREVIEW", "false")
         }
         release {
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             buildConfigField("boolean", "STRESS_HOOKS", "false")
+            buildConfigField("boolean", "PREVIEW", "false")
             signingConfigs.findByName("upload")?.let { signingConfig = it }
         }
         // Release code (R8, not debuggable) signed with the debug key, so it installs over a
@@ -58,6 +60,18 @@ android {
             signingConfig = signingConfigs.getByName("debug")
             matchingFallbacks += listOf("release")
             buildConfigField("boolean", "STRESS_HOOKS", "true")
+            buildConfigField("boolean", "PREVIEW", "false")
+        }
+        // A look-only build to share: installs beside the real app as "Lync Preview" and always
+        // opens with sample data, so it needs no Mac. No test hooks.
+        create("preview") {
+            initWith(getByName("release"))
+            signingConfig = signingConfigs.getByName("debug")
+            matchingFallbacks += listOf("release")
+            applicationIdSuffix = ".preview"
+            versionNameSuffix = "-preview"
+            buildConfigField("boolean", "STRESS_HOOKS", "false")
+            buildConfigField("boolean", "PREVIEW", "true")
         }
     }
 

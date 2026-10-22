@@ -23,7 +23,9 @@ class MainActivity : ComponentActivity() {
         val link = LinkManager.get(this)
         // Test builds only (debug and benchmark): `adb shell am start -n app.wallhop/.ui.MainActivity
         // --ez demo true` shows the paired screens with sample data, for design review and screenshots.
-        val demo = (app.wallhop.BuildConfig.DEBUG || app.wallhop.BuildConfig.STRESS_HOOKS) && intent.getBooleanExtra("demo", false)
+        // The preview build (to share for a look) always shows sample data.
+        val demo = app.wallhop.BuildConfig.PREVIEW ||
+            (app.wallhop.BuildConfig.DEBUG || app.wallhop.BuildConfig.STRESS_HOOKS) && intent.getBooleanExtra("demo", false)
         handleIntent(intent)
         setContent {
             WallhopTheme { WallhopRoot(link, demo) }

@@ -3,7 +3,7 @@ import CoreText
 import SwiftUI
 
 /// The Mac app's colours, from the same hue as the phone's Material You palette (the phone sends
-/// its accent colours when it connects; violet until then). Mirrors `HomeColors` on Android:
+/// its accent colours when it connects; Lync mint until then). Mirrors `HomeColors` on Android:
 /// a `top` → `mid` → ink gradient, tinted `card`s, `pale` main buttons, a contrasting `peek`.
 struct WTheme: Equatable {
     var top: Color
@@ -32,7 +32,10 @@ struct WTheme: Equatable {
     static let codeMint = Color(red: 0x7F / 255.0, green: 0xE3 / 255.0, blue: 0xB0 / 255.0)
     static let codeSecondary = Color.white.opacity(0.75)
 
-    static let defaultSeed: UInt32 = 0xFF4B2BC9
+    /// Before any phone has connected, the Mac uses Lync's own colours: deep mint, with rose as the
+    /// contrasting accent. From the first connection on, it follows that phone's wallpaper.
+    static let defaultSeed: UInt32 = 0xFF2FB57E
+    static let defaultAccent: UInt32 = 0xFFE0386A
 
     init(seed: UInt32, accent: UInt32?) {
         let (hue, saturation, _) = Self.hsl(seed)
@@ -305,9 +308,12 @@ final class ThemeStore: ObservableObject {
 
     init() {
         let defaults = UserDefaults.standard
-        let seed = (defaults.object(forKey: "themeSeed") as? NSNumber)?.uint32Value ?? WTheme.defaultSeed
-        let accent = (defaults.object(forKey: "themeAccent") as? NSNumber)?.uint32Value
-        theme = WTheme(seed: seed, accent: accent)
+        if let seed = (defaults.object(forKey: "themeSeed") as? NSNumber)?.uint32Value {
+            let accent = (defaults.object(forKey: "themeAccent") as? NSNumber)?.uint32Value
+            theme = WTheme(seed: seed, accent: accent)
+        } else {
+            theme = WTheme(seed: WTheme.defaultSeed, accent: WTheme.defaultAccent)
+        }
     }
 
     func update(seed: UInt32, accent: UInt32?) {

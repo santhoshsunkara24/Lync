@@ -221,7 +221,19 @@ fun MacTab(
             delay(60_000)
         }
     }
-    val meta = heroMeta(card.info, connected, since)
+    val batteryContext = LocalContext.current
+    val phoneBattery by produceState<Int?>(null) {
+        while (true) {
+            value = batteryContext.registerReceiver(null, android.content.IntentFilter(android.content.Intent.ACTION_BATTERY_CHANGED))
+                ?.let { b ->
+                    val level = b.getIntExtra(android.os.BatteryManager.EXTRA_LEVEL, -1)
+                    val scale = b.getIntExtra(android.os.BatteryManager.EXTRA_SCALE, 100)
+                    if (level >= 0 && scale > 0) level * 100 / scale else null
+                }
+            delay(60_000)
+        }
+    }
+    val meta = heroMeta(card.info, connected, since, phoneBattery)
 
     Box(
         Modifier
@@ -600,8 +612,9 @@ private fun cardRowHeight(name: String, meta: String, heroWidth: Dp, transfer: T
 }
 
 /** "82% battery, charging · on for 2 h 14 m". */
-private fun heroMeta(info: app.wallhop.link.MacInfo, connected: Boolean, since: Long?): String = buildList {
-    if (info.laptop && info.battery != null) add("${info.battery}% battery" + if (info.charging) ", charging" else "")
+private fun heroMeta(info: app.wallhop.link.MacInfo, connected: Boolean, since: Long?, phoneBattery: Int? = null): String = buildList {
+    if (info.laptop && info.battery != null) add("Mac ${info.battery}%" + if (info.charging) ", charging" else "")
+    if (connected && phoneBattery != null) add("phone $phoneBattery%")
     when {
         !connected -> add("not connected")
         since == null -> Unit
@@ -686,6 +699,7 @@ private fun MacHero(
             Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color.Transparent, home.card.copy(alpha = 0.55f)))))
             // Big and anchored to the top: only the top of the screen shows, like a Mac peeking up.
             LiveMac(connected, card, Modifier.fillMaxWidth().wrapContentHeight(Alignment.Top, unbounded = true).padding(top = 16.dp))
+            BridgeLink(connected, home, Modifier.matchParentSize())
         }
         Column(Modifier.weight(1f).padding(start = 16.dp, end = 16.dp, top = 14.dp, bottom = 16.dp)) {
             Text(kind(name, info.laptop), style = Overline, color = Color.White.copy(alpha = 0.78f))
