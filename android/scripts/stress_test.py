@@ -274,16 +274,13 @@ if __name__ == "__main__":
     parser.add_argument("--device", required=True)
     parser.add_argument("--out", required=True)
     parser.add_argument("--only", nargs="*", help="scenario numbers to run, e.g. 1 2 3")
-    parser.add_argument("--glass", default="", help="test-build glass switches, e.g. noblur,nolens (see GlassDebug.kt)")
     args = parser.parse_args()
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     phone = Phone(args.device)
-    if args.glass is not None:
-        # Restart so the app reads the switches. Only when Wallhop is already in front.
-        phone.guard()
-        phone.sh("setprop", "debug.wallhop.glass", args.glass or "''")
-        phone.sh("am", "force-stop", PKG)
-        phone.sh("am", "start", "-n", f"{PKG}/.ui.MainActivity")
-        time.sleep(4)
+    # Start from a fresh launch. Only when Wallhop is already in front.
+    phone.guard()
+    phone.sh("am", "force-stop", PKG)
+    phone.sh("am", "start", "-n", f"{PKG}/.ui.MainActivity")
+    time.sleep(4)
     run(phone, out, args.only)

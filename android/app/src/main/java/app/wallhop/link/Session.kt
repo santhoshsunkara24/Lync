@@ -46,10 +46,6 @@ class Session(
     val macName: String,
     val host: String,
     val port: Int,
-    /** The Mac's app version from its hello (`app`); null from Macs before it was added. */
-    val macApp: String? = null,
-    /** The Mac's protocol version (`v`). */
-    val macProtocol: Int = 1,
 ) : MacPath {
     private val writeLock = Mutex()
     private val pending = ConcurrentHashMap<String, CompletableDeferred<Message>>()
@@ -150,8 +146,7 @@ class Session(
             val channel = SecureChannel(sendKey, receiveKey)
 
             val host = socket.inetAddress.hostAddress ?: ""
-            val session = Session(socket, input, output, channel, reply.optString("name", "Mac"), host, socket.port,
-                macApp = reply.optString("app").takeIf { it.isNotEmpty() }, macProtocol = reply.optInt("v", 1))
+            val session = Session(socket, input, output, channel, reply.optString("name", "Mac"), host, socket.port)
             Framing.write(output, channel.seal(Message.of("ready").encode()))
             output.flush()
             val ready = session.read()

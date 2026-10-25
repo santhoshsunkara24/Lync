@@ -1,7 +1,6 @@
 package app.wallhop.ui.screens
 
 import android.content.Context
-import android.net.Uri
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -34,13 +33,12 @@ private fun hasGlyphSdk(): Boolean = runCatching { Class.forName("com.nothing.ke
 
 private fun credits(): List<Credit> = buildList {
     add(Credit("Figtree", "SIL Open Font License 1.1", text = R.raw.license_figtree))
-    add(Credit("Doto", "SIL Open Font License 1.1", text = R.raw.license_doto))
     add(Credit("Galindo", "SIL Open Font License 1.1", text = R.raw.license_galindo))
     add(Credit("Phosphor Icons", "MIT License", text = R.raw.license_phosphor))
     add(Credit("AndroidX and Jetpack Compose", "Apache License 2.0", url = APACHE))
     add(Credit("ZXing", "Apache License 2.0", url = APACHE))
     add(Credit("Tink", "Apache License 2.0", url = APACHE))
-    add(Credit("Backdrop and Shapes by Kyant", "Apache License 2.0", url = APACHE))
+    add(Credit("Shapes by Kyant", "Apache License 2.0", url = APACHE))
     add(Credit("Kotlin and kotlinx.coroutines", "Apache License 2.0", url = APACHE))
     if (hasGlyphSdk()) {
         add(Credit("Nothing Glyph Developer Kit", "Proprietary. © Nothing Technology Limited, used under Nothing's terms", url = "https://github.com/Nothing-Developer-Programme"))
@@ -69,7 +67,7 @@ fun LicencesScreen(overlays: Overlays, onBack: () -> Unit) {
                             onClick = {
                                 when {
                                     credit.text != null -> showLicence(overlays, context, credit.name, credit.text)
-                                    credit.url != null -> openLink(context, credit.url)
+                                    credit.url != null -> app.wallhop.core.Open.link(context, credit.url)
                                 }
                             },
                         )
@@ -92,9 +90,6 @@ private fun showLicence(overlays: Overlays, context: Context, name: String, res:
         Spacer(Modifier.height(8.dp))
     }
 }
-
-/** Opens a web page; does nothing if the phone has no browser. */
-internal fun openLink(context: Context, url: String) = app.wallhop.core.Open.link(context, url)
 
 /**
  * Licence files are hard-wrapped at ~80 columns, which leaves ragged half-empty lines on a phone.

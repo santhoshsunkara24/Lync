@@ -38,13 +38,6 @@ object Wording {
     /** The Latest card's copy button, for TalkBack: "Copy code 482 913". */
     fun copyCodeLabel(code: String): String = "Copy code ${spaced(code)}"
 
-    /** The pairing code read digit by digit: "Pairing code 4 8 2, 9 1 3". */
-    fun pairingCodeDescription(code: String): String {
-        val digits = code.filter(Char::isDigit)
-        val groups = if (digits.length == 6) listOf(digits.take(3), digits.takeLast(3)) else listOf(digits)
-        return "Pairing code " + groups.joinToString(", ") { it.toList().joinToString(" ") }
-    }
-
     /** The little Mac on Home in one sentence: "MacBook Air, connected, 82% battery". */
     fun miniMac(kind: String, connected: Boolean, locked: Boolean, battery: Int?, charging: Boolean): String = buildList {
         add(kind)

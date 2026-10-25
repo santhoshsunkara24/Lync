@@ -54,19 +54,14 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import app.wallhop.link.ActivityEntry
-import app.wallhop.link.LinkState
 import app.wallhop.link.MacInfo
 import app.wallhop.link.TransferPhase
 import app.wallhop.link.TransferState
-import app.wallhop.ui.components.spacedCode
-import app.wallhop.ui.design.LocalLightAngle
-import app.wallhop.ui.design.Radius
 import app.wallhop.ui.design.Springs
 import app.wallhop.ui.design.Type
 import app.wallhop.ui.design.WIcons
 import app.wallhop.ui.design.Wallhop
 import app.wallhop.ui.design.capsule
-import app.wallhop.ui.design.rounded
 import kotlinx.coroutines.delay
 import java.text.DateFormat
 import java.util.Date
@@ -76,7 +71,6 @@ import kotlin.math.sin
 /** Live details about the Mac for [MacCard]. */
 class MacCardData(
     val info: MacInfo,
-    val latencyMs: Int?,
     val connectedSince: Long?,
     /** The newest Activity entry: it hops into the little Mac's notch when it arrives. */
     val latest: ActivityEntry?,
@@ -152,7 +146,7 @@ fun LiveMac(connected: Boolean, data: MacCardData, modifier: Modifier = Modifier
 
 /**
  * The miniature MacBook. Proportions follow a 13" MacBook Air: 16:10.4 screen, notch about 15%
- * of the width. Screen glare and wallpaper parallax follow the same tilt light as the glass.
+ * of the width.
  */
 @Composable
 private fun MiniMac(info: MacInfo, connected: Boolean, event: NotchEvent?, hop: () -> Float, hopUp: Boolean) {
@@ -232,7 +226,6 @@ private fun MiniMac(info: MacInfo, connected: Boolean, event: NotchEvent?, hop: 
 /** The Mac's screen: wallpaper, menu bar, and the lock screen while it's locked. */
 @Composable
 private fun Screen(info: MacInfo, connected: Boolean, width: Dp) {
-    val light = LocalLightAngle.current
     val density = LocalDensity.current
     val awake by animateFloatAsState(if (connected) 1f else 0f, Springs.smooth(), label = "awake")
     val lockedState = animateFloatAsState(if (info.locked && connected) 1f else 0f, Springs.smooth(), label = "locked")
@@ -244,8 +237,6 @@ private fun Screen(info: MacInfo, connected: Boolean, width: Dp) {
 
     Box(Modifier.fillMaxSize().clip(RoundedCornerShape(width * 0.02f)).background(Color.Black)) {
         val parallax = Modifier.graphicsLayer {
-            // Tilt shifts the wallpaper a touch, as if it sat behind the glass.
-            translationX = (light.value - 45f) / 20f * size.width * 0.02f
             scaleX = 1.05f
             scaleY = 1.05f
             alpha = 0.22f + 0.78f * awake
@@ -306,11 +297,10 @@ private fun Screen(info: MacInfo, connected: Boolean, width: Dp) {
                 )
             }
         }
-        // Glare across the glass, following the tilt light.
+        // Glare across the glass.
         Box(
             Modifier.fillMaxSize().drawWithContent {
-                val shift = (light.value - 45f) / 20f
-                val start = Offset(size.width * (0.15f + 0.25f * shift), 0f)
+                val start = Offset(size.width * 0.15f, 0f)
                 drawRect(
                     Brush.linearGradient(
                         0f to Color.White.copy(alpha = 0f),
@@ -439,7 +429,7 @@ private fun ProgressRing(progress: Float, modifier: Modifier) {
 }
 
 private fun notchEvent(entry: ActivityEntry): NotchEvent = when (entry.kind) {
-    ActivityEntry.Kind.Otp -> NotchEvent(WIcons.Code, spacedCode(entry.title))
+    ActivityEntry.Kind.Otp -> NotchEvent(WIcons.Code, app.wallhop.core.Wording.spaced(entry.title))
     ActivityEntry.Kind.FilesSent -> NotchEvent(WIcons.Image, entry.title)
     ActivityEntry.Kind.TextSent -> NotchEvent(WIcons.Text, entry.title)
     ActivityEntry.Kind.Call -> NotchEvent(WIcons.Call, entry.title)

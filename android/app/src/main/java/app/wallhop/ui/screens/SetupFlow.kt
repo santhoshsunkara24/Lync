@@ -100,7 +100,6 @@ fun GuidedSetup(
     onSkip: (SetupStep) -> Unit,
     onClose: () -> Unit,
     extra: @Composable (SetupStep) -> Unit = {},
-    turnOnLabel: (SetupStep) -> String = { "Turn on" },
 ) {
     val home = Wallhop.home
     val colors = Wallhop.colors
@@ -149,7 +148,7 @@ fun GuidedSetup(
                     extra(shown)
                 }
             }
-            WButton(turnOnLabel(step), { onTurnOn(step) }, style = ButtonStyle.Filled, modifier = Modifier.fillMaxWidth())
+            WButton("Turn on", { onTurnOn(step) }, style = ButtonStyle.Filled, modifier = Modifier.fillMaxWidth())
             Spacer(Modifier.height(8.dp))
             WButton("Skip", { onSkip(step) }, style = ButtonStyle.Glass, modifier = Modifier.fillMaxWidth())
             Spacer(Modifier.height(16.dp))

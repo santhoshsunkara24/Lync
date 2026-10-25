@@ -17,7 +17,6 @@ import javax.crypto.spec.GCMParameterSpec
  */
 class Identity private constructor(val privateKey: ByteArray) {
     val publicKey: ByteArray = Crypto.publicKey(privateKey)
-    val deviceId: String get() = Crypto.deviceId(publicKey)
 
     companion object {
         private const val PREFS = "identity"

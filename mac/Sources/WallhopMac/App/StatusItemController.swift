@@ -1,6 +1,5 @@
 import AppKit
 import Combine
-import SwiftUI
 
 /// The menu bar icon (menu bar mode): click for the panel, drop files on it to send them to the
 /// phone. Hidden in notch mode, where the notch does both.

@@ -38,7 +38,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.RoundRect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Color
@@ -65,7 +64,6 @@ import com.google.zxing.BarcodeFormat
 import com.google.zxing.BinaryBitmap
 import com.google.zxing.DecodeHintType
 import com.google.zxing.MultiFormatReader
-import com.google.zxing.NotFoundException
 import com.google.zxing.PlanarYUVLuminanceSource
 import com.google.zxing.common.HybridBinarizer
 import java.util.concurrent.Executors
@@ -162,7 +160,7 @@ fun QrScanScreen(onScanned: (QrInvite) -> Unit, onClose: () -> Unit, onEnterAddr
                     )
                     Spacer(Modifier.height(8.dp))
                     if (blocked) {
-                        WButton("Open Settings", { openAppDetails(context) }, style = ButtonStyle.Filled)
+                        WButton("Open Settings", { app.wallhop.core.Open.appSettings(context) }, style = ButtonStyle.Filled)
                     } else {
                         WButton("Allow camera", { permission.launch(Manifest.permission.CAMERA) }, style = ButtonStyle.Filled)
                     }
@@ -171,9 +169,6 @@ fun QrScanScreen(onScanned: (QrInvite) -> Unit, onClose: () -> Unit, onEnterAddr
         }
     }
 }
-
-/** Lync's page in Android's settings, where its permissions can be turned on. */
-internal fun openAppDetails(context: android.content.Context) = app.wallhop.core.Open.appSettings(context)
 
 /**
  * CameraX preview plus a ZXing QR decoder on the frames. [onCode] returns true to stop.
@@ -255,8 +250,6 @@ private fun decode(reader: MultiFormatReader, image: ImageProxy): String? {
     val source = PlanarYUVLuminanceSource(bytes, stride, image.height, 0, 0, image.width, image.height, false)
     return try {
         reader.decodeWithState(BinaryBitmap(HybridBinarizer(source))).text
-    } catch (_: NotFoundException) {
-        null
     } catch (_: Exception) {
         null
     } finally {

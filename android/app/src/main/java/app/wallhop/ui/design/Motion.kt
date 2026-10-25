@@ -5,7 +5,6 @@ import android.os.SystemClock
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.SizeTransform
 import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.FiniteAnimationSpec
 import androidx.compose.animation.core.MutableTransitionState
 import androidx.compose.animation.core.TweenSpec
 import androidx.compose.animation.core.keyframes
@@ -15,11 +14,9 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.width
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
@@ -31,20 +28,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.PathMeasure
-import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.StrokeJoin
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import app.wallhop.ui.components.LocalScreenActive
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
 
 // Motion vocabulary on top of the spring tokens in Tokens.kt (DESIGN.md §7). Everything here
 // collapses to an instant change (or a short fade) with Reduce Motion, and nothing here runs
@@ -58,8 +48,6 @@ object Durations {
     const val Quick = 150
     /** A list row's highlight fading after release (§5.5). */
     const val Highlight = 250
-    /** Glass glow ramping up under a finger. */
-    const val Glow = 90
     /** Something small arriving: a banner, a badge swapping in. */
     const val Enter = 260
     /** The same leaving: quicker than it came. */
@@ -76,8 +64,6 @@ object Durations {
 object Easings {
     /** Strong ease-out: arrivals, departures, anything answering a tap. */
     val Out = androidx.compose.animation.core.CubicBezierEasing(0.23f, 1f, 0.32f, 1f)
-    /** Drawer curve: full-screen sheets sliding over the app. */
-    val Drawer = androidx.compose.animation.core.CubicBezierEasing(0.32f, 0.72f, 0f, 1f)
     /** Ease-in-out: something moving from one place on screen to another. */
     val InOut = androidx.compose.animation.core.CubicBezierEasing(0.77f, 0f, 0.175f, 1f)
 }
@@ -90,22 +76,17 @@ object Fades {
 
 // MARK: - Haptic shorthands
 
-/** Selection tick: switches, segmented controls. */
-fun Haptics.tick() = perform(Haptic.Selection)
 /** Something worked: copied, sent, paired. */
 fun Haptics.confirm() = perform(Haptic.Success)
 /** Something failed. */
 fun Haptics.reject() = perform(Haptic.Failure)
-/** A long press landed. */
-fun Haptics.longPress() = perform(Haptic.Medium)
 
 // MARK: - Rolling digits
 
 /**
  * A code that rolls in like an odometer: each digit slides up into its slot, one after another
- * ([staggerMs] apart). Spaces and line breaks stay put. With [animate] false (or Reduce Motion)
+ * (30 ms apart). Spaces and line breaks stay put. With [animate] false (or Reduce Motion)
  * the code simply shows; a later change to [code] rolls only the digits that changed.
- * [fromTop] drops the digits in instead (pairing code). [digitWidth] fixes each slot's width.
  */
 @Composable
 fun RollingCode(
@@ -114,11 +95,6 @@ fun RollingCode(
     color: Color,
     modifier: Modifier = Modifier,
     animate: Boolean = true,
-    staggerMs: Long = 30,
-    fromTop: Boolean = false,
-    spec: FiniteAnimationSpec<Float> = Springs.snappy(),
-    digitWidth: Dp? = null,
-    groupGap: Dp = 0.dp,
     /** Added to every digit's delay, to continue a stagger from an earlier line. */
     delayOffsetMs: Long = 0,
 ) {
@@ -129,9 +105,9 @@ fun RollingCode(
         var slot = 0
         code.forEach { char ->
             if (char == ' ') {
-                if (groupGap > 0.dp) Box(Modifier.width(groupGap)) else Text(" ", style = style, color = color)
+                Text(" ", style = style, color = color)
             } else {
-                RollingChar(char, delayOffsetMs + slot * staggerMs, play, fromTop, spec, style, color, digitWidth)
+                RollingChar(char, delayOffsetMs + slot * 30L, play, style, color)
                 slot++
             }
         }
@@ -143,11 +119,8 @@ private fun RollingChar(
     char: Char,
     delayMs: Long,
     play: Boolean,
-    fromTop: Boolean,
-    spec: FiniteAnimationSpec<Float>,
     style: TextStyle,
     color: Color,
-    width: Dp?,
 ) {
     val progress = remember(char) { Animatable(if (play) 0f else 1f) }
     val active = LocalScreenActive.current
@@ -155,18 +128,18 @@ private fun RollingChar(
     LaunchedEffect(progress, active) {
         if (progress.value < 1f && active) {
             delay(delayMs)
-            progress.animateTo(1f, spec)
+            progress.animateTo(1f, Springs.snappy())
         }
     }
     Box(
-        (if (width != null) Modifier.width(width) else Modifier).clipToBounds(),
+        Modifier.clipToBounds(),
         contentAlignment = Alignment.Center,
     ) {
         Text(
             char.toString(), style = style, color = color, textAlign = TextAlign.Center,
             modifier = Modifier.graphicsLayer {
                 val p = progress.value
-                translationY = (1f - p) * size.height * (if (fromTop) -1f else 1f)
+                translationY = (1f - p) * size.height
                 alpha = p.coerceIn(0f, 1f)
             },
         )
@@ -247,7 +220,7 @@ fun Modifier.shake(trigger: Boolean): Modifier {
 
 /** A quick flash: scales up and glows for a moment each time [trigger] changes (not at 0). */
 @Composable
-fun Modifier.flashPulse(trigger: Int, glow: Color = Color.White): Modifier {
+fun Modifier.flashPulse(trigger: Int): Modifier {
     val reduceMotion = Wallhop.a11y.reduceMotion
     val flash = remember { Animatable(0f) }
     LaunchedEffect(trigger) {
@@ -264,13 +237,13 @@ fun Modifier.flashPulse(trigger: Int, glow: Color = Color.White): Modifier {
     }.drawWithContent {
         drawContent()
         val f = flash.value.coerceIn(0f, 1f)
-        if (f > 0f) drawCircle(glow.copy(alpha = 0.35f * f), radius = size.minDimension / 2 * (1f + 0.35f * f))
+        if (f > 0f) drawCircle(Color.White.copy(alpha = 0.35f * f), radius = size.minDimension / 2 * (1f + 0.35f * f))
     }
 }
 
-/** Fades in and rises [rise] once, the first time it's on screen. */
+/** Fades in and rises 6 dp once, the first time it's on screen. */
 @Composable
-fun Modifier.floatIn(rise: Dp = 6.dp): Modifier {
+fun Modifier.floatIn(): Modifier {
     val reduceMotion = Wallhop.a11y.reduceMotion
     val active = LocalScreenActive.current
     val progress = remember { Animatable(if (reduceMotion) 1f else 0f) }
@@ -279,7 +252,7 @@ fun Modifier.floatIn(rise: Dp = 6.dp): Modifier {
     }
     return graphicsLayer {
         alpha = progress.value.coerceIn(0f, 1f)
-        translationY = (1f - progress.value) * rise.toPx()
+        translationY = (1f - progress.value) * 6.dp.toPx()
     }
 }
 
@@ -377,35 +350,4 @@ fun <T> rememberAnimatedRows(items: List<T>, enterInitially: Boolean = false, ke
     holder.first = false
     holder.shown = result
     return result.map { (k, item) -> AnimatedRow(k, item, holder.states.getValue(k)) }
-}
-
-// MARK: - Success check
-
-/**
- * A checkmark that draws itself (300 ms) while popping from 0.8 to 1 on spring.bouncy
- * (DESIGN.md §7.2 Success). Static with Reduce Motion.
- */
-@Composable
-fun DrawnCheck(color: Color, modifier: Modifier = Modifier, strokeWidth: Dp = 3.dp) {
-    val reduceMotion = Wallhop.a11y.reduceMotion
-    val draw = remember { Animatable(if (reduceMotion) 1f else 0f) }
-    val scale = remember { Animatable(if (reduceMotion) 1f else 0.8f) }
-    LaunchedEffect(Unit) {
-        if (reduceMotion) return@LaunchedEffect
-        launch { draw.animateTo(1f, tween(300, easing = Easings.Out)) }
-        scale.animateTo(1f, Springs.pop())
-    }
-    Canvas(modifier.graphicsLayer { scaleX = scale.value; scaleY = scale.value }) {
-        val w = size.width
-        val h = size.height
-        val path = Path().apply {
-            moveTo(w * 0.2f, h * 0.53f)
-            lineTo(w * 0.42f, h * 0.74f)
-            lineTo(w * 0.8f, h * 0.3f)
-        }
-        val measure = PathMeasure().apply { setPath(path, false) }
-        val part = Path()
-        measure.getSegment(0f, measure.length * draw.value, part, true)
-        drawPath(part, color, style = Stroke(strokeWidth.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round))
-    }
 }

@@ -22,24 +22,5 @@ enum NetworkInfo {
         }
         return found.filter { $0.name.hasPrefix("en") }.map(\.ip) + found.filter { !$0.name.hasPrefix("en") }.map(\.ip)
     }
-
-    /// The Mac's IPv4 address on Wi-Fi or Ethernet, for display.
-    static func localIPv4() -> String? {
-        var addresses: UnsafeMutablePointer<ifaddrs>?
-        guard getifaddrs(&addresses) == 0, let first = addresses else { return nil }
-        defer { freeifaddrs(addresses) }
-        for pointer in sequence(first: first, next: { $0.pointee.ifa_next }) {
-            let interface = pointer.pointee
-            guard interface.ifa_addr.pointee.sa_family == UInt8(AF_INET) else { continue }
-            let name = String(cString: interface.ifa_name)
-            guard name.hasPrefix("en") else { continue }
-            var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
-            if getnameinfo(interface.ifa_addr, socklen_t(interface.ifa_addr.pointee.sa_len),
-                           &host, socklen_t(host.count), nil, 0, NI_NUMERICHOST) == 0 {
-                return String(cString: host)
-            }
-        }
-        return nil
-    }
 }
 

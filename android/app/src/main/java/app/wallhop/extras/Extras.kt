@@ -11,7 +11,6 @@ import android.media.MediaPlayer
 import android.media.RingtoneManager
 import android.net.Uri
 import android.os.Build
-import android.os.Bundle
 import android.os.VibrationEffect
 import android.os.VibratorManager
 import android.service.quicksettings.TileService
@@ -197,10 +196,6 @@ class ClipboardTileService : TileService() {
  */
 class SendClipboardActivity : ComponentActivity() {
     private var sent = false
-
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-    }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)

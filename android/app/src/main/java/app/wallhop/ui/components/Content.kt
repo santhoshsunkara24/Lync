@@ -11,7 +11,6 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -33,10 +32,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.LinearEasing
-import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -50,7 +46,6 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.error
@@ -61,10 +56,8 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import app.wallhop.ui.design.Durations
 import app.wallhop.ui.design.Radius
-import app.wallhop.ui.design.RollingCode
 import app.wallhop.ui.design.floatIn
 import app.wallhop.ui.design.pressDim
-import app.wallhop.ui.design.Springs
 import app.wallhop.ui.design.Type
 import app.wallhop.ui.design.Wallhop
 import app.wallhop.ui.design.capsule
@@ -91,7 +84,6 @@ fun WTextField(
     modifier: Modifier = Modifier,
     singleLine: Boolean = true,
     minLines: Int = 1,
-    maxLines: Int = if (singleLine) 1 else 6,
     keyboardType: KeyboardType = KeyboardType.Text,
     label: String? = null,
     error: String? = null,
@@ -108,7 +100,7 @@ fun WTextField(
             onValueChange = onValueChange,
             singleLine = singleLine,
             minLines = minLines,
-            maxLines = maxLines,
+            maxLines = if (singleLine) 1 else 6,
             textStyle = Type.body.copy(color = colors.label),
             cursorBrush = SolidColor(colors.tint),
             keyboardOptions = KeyboardOptions(keyboardType = keyboardType),
@@ -187,26 +179,6 @@ fun SearchField(value: String, onValueChange: (String) -> Unit, modifier: Modifi
     )
 }
 
-/**
- * A 6-digit code in two groups of three. On first show the digits drop in one after another
- * (DESIGN.md §5.16: 40 ms apart, spring.bouncy); with Reduce Motion they simply show.
- */
-@Composable
-fun CodeDisplay(code: String, modifier: Modifier = Modifier, color: Color = Wallhop.colors.label, maxWidth: Dp = 280.dp) {
-    // Digits grow with the font size, but never wider than [maxWidth]: past that the whole code
-    // scales down together, so nothing clips at the largest font sizes.
-    val fontScale = androidx.compose.ui.platform.LocalDensity.current.fontScale
-    val scale = minOf(fontScale, maxWidth / (30.dp * 6 + 14.dp))
-    val style = Type.code.copy(fontSize = Type.code.fontSize * (scale / fontScale), lineHeight = Type.code.lineHeight * (scale / fontScale))
-    // One item for TalkBack, read digit by digit.
-    Box(modifier.clearAndSetSemantics { contentDescription = app.wallhop.core.Wording.pairingCodeDescription(code) }, contentAlignment = Alignment.Center) {
-        RollingCode(
-            spacedCode(code), style, color,
-            fromTop = true, staggerMs = 40, spec = Springs.bouncy(), digitWidth = 30.dp * scale, groupGap = 14.dp * scale,
-        )
-    }
-}
-
 /** Centred icon, title and explanation (DESIGN.md §5.15). */
 @Composable
 fun EmptyState(icon: ImageVector, title: String, message: String, modifier: Modifier = Modifier) {
@@ -231,7 +203,9 @@ fun EmptyState(icon: ImageVector, title: String, message: String, modifier: Modi
  * across; otherwise the row rests. Static with Reduce Motion.
  */
 @Composable
-fun HopDots(active: Boolean, modifier: Modifier = Modifier, dots: Int = 7, color: Color = Wallhop.colors.label) {
+fun HopDots(active: Boolean, modifier: Modifier = Modifier) {
+    val dots = 7
+    val color = Wallhop.colors.label
     val reduceMotion = Wallhop.a11y.reduceMotion
     val screenActive = LocalScreenActive.current
     // One hop, then a rest with no frames drawn at all — an idle screen shouldn't redraw forever.
@@ -268,7 +242,8 @@ fun HopDots(active: Boolean, modifier: Modifier = Modifier, dots: Int = 7, color
 
 /** Up to three thumbnails fanned out (DESIGN.md §5.17). */
 @Composable
-fun ThumbnailStack(uris: List<Uri>, size: Dp = 52.dp) {
+fun ThumbnailStack(uris: List<Uri>) {
+    val size = 52.dp
     Box(Modifier.size(size + 12.dp)) {
         uris.take(3).reversed().forEachIndexed { reversedIndex, uri ->
             val index = minOf(uris.size, 3) - 1 - reversedIndex
@@ -303,17 +278,6 @@ fun Thumbnail(uri: Uri, size: Dp, modifier: Modifier = Modifier) {
     }
 }
 
-/** Gradient avatar with initials. */
-@Composable
-fun Avatar(name: String?, size: Dp = 40.dp) {
-    val palette = listOf(Color(0xFF5AC8FA), Color(0xFF5856D6), Color(0xFFFF9500), Color(0xFF34C759), Color(0xFFFF2D55), Color(0xFF8E8E93))
-    val color = palette[abs((name ?: "").hashCode()) % palette.size]
-    val initials = name?.split(" ")?.take(2)?.mapNotNull { it.firstOrNull()?.uppercaseChar() }?.joinToString("").orEmpty()
-    Box(Modifier.size(size).clip(capsule()).background(color), contentAlignment = Alignment.Center) {
-        Text(initials.ifEmpty { "#" }, style = Type.headline, color = Color.White)
-    }
-}
-
 fun formatBytes(bytes: Long): String = when {
     bytes < 0 -> "Unknown size"
     bytes < 1024 -> "$bytes B"
@@ -334,6 +298,3 @@ fun copyCode(context: android.content.Context, code: String) {
     }
     context.getSystemService(android.content.ClipboardManager::class.java).setPrimaryClip(clip)
 }
-
-/** "482913" → "482 913". */
-fun spacedCode(code: String): String = app.wallhop.core.Wording.spaced(code)

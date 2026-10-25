@@ -91,7 +91,7 @@ private val EdgeStroke = Stroke(19f, cap = StrokeCap.Round)
 private val TubeStroke = Stroke(16f, cap = StrokeCap.Round)
 private val HighlightStroke = Stroke(3f, cap = StrokeCap.Round)
 
-private fun clamp(v: Float, a: Float = 0f, b: Float = 1f) = v.coerceIn(a, b)
+private fun clamp(v: Float) = v.coerceIn(0f, 1f)
 private fun easeOut(t: Float) = 1f - (1f - clamp(t)).pow(3)
 private fun easeIn(t: Float) = clamp(t).pow(2.4f)
 /** Apple-style spring (duration + bounce), as on the Mac. */

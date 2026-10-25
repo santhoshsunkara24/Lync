@@ -83,7 +83,7 @@ CTFontManagerRegisterFontsForURL(URL(fileURLWithPath: "Resources/Galindo.ttf") a
     send(.listening(port: 47474))
     // Paired, phone not around yet: the header says it isn't connected and what to do.
     render("1b_home_searching", PanelView(model: model, theme: model.themeStore, fromNotch: true).fixedSize())
-    send(.connected(phone, host: "192.168.0.12"))
+    send(.connected(phone))
     send(.status(battery: 62, charging: true))
     // Lync's own mint and rose (HomeColors.Default on the phone), not a wallpaper's colours.
     send(.theme(seed: WTheme.defaultSeed, accent: WTheme.defaultAccent))
@@ -243,7 +243,7 @@ CTFontManagerRegisterFontsForURL(URL(fileURLWithPath: "Resources/Galindo.ttf") a
     send(.bluetoothRadio(.off))
     render("10k_home_bluetooth_off", PanelView(model: model, theme: model.themeStore, fromNotch: true).fixedSize())
     send(.bluetoothRadio(.ready))
-    send(.connected(phone, host: "192.168.0.12"))
+    send(.connected(phone))
     send(.call(PhoneCall(id: "c1", state: .ringing, number: "+44 7700 900123", name: "mi amor ❤️", sim: "SIM 1")))
 
     // The real overlay: a code that arrived during the call waits, then shows once the call ends.

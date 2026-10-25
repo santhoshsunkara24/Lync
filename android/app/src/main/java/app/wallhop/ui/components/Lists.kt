@@ -13,13 +13,11 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.ui.graphics.addOutline
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -48,7 +46,6 @@ import app.wallhop.ui.design.Durations
 import app.wallhop.ui.design.Fades
 import app.wallhop.ui.design.Springs
 import app.wallhop.ui.design.Haptic
-import app.wallhop.ui.design.Radius
 import app.wallhop.ui.design.rememberHaptics
 import app.wallhop.ui.design.Type
 import app.wallhop.ui.design.Wallhop
@@ -67,7 +64,6 @@ class SectionScope {
 @Composable
 fun InsetSection(
     modifier: Modifier = Modifier,
-    header: String? = null,
     footer: String? = null,
     dividerInset: Dp = 16.dp,
     content: SectionScope.() -> Unit,
@@ -75,10 +71,6 @@ fun InsetSection(
     val colors = Wallhop.colors
     val scope = SectionScope().apply(content)
     Column(modifier.fillMaxWidth()) {
-        if (header != null) {
-            Text(header, style = Type.footnote, color = colors.labelSecondary,
-                modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 7.dp))
-        }
         Column(
             Modifier
                 .fillMaxWidth()
@@ -189,7 +181,6 @@ fun ListRow(
     chevron: Boolean = false,
     destructive: Boolean = false,
     titleColor: Color? = null,
-    role: Role = Role.Button,
     checked: Boolean? = null,
     onCheckedChange: ((Boolean) -> Unit)? = null,
     switchEnabled: Boolean = true,
@@ -217,19 +208,19 @@ fun ListRow(
             .then(
                 when {
                     isSwitch -> Modifier.toggleable(
-                        value = checked!!,
+                        value = checked,
                         interactionSource = source,
                         indication = null,
                         enabled = switchEnabled,
                         role = Role.Switch,
                     ) {
                         haptics.perform(Haptic.Selection)
-                        onCheckedChange!!(it)
+                        onCheckedChange(it)
                     }
                     onClick != null -> Modifier.combinedClickable(
                         interactionSource = source,
                         indication = null,
-                        role = role,
+                        role = Role.Button,
                         onClickLabel = onClickLabel,
                         onLongClickLabel = onLongClickLabel,
                         onLongClick = onLongClick?.let { long -> { haptics.perform(Haptic.Medium); long() } },
@@ -291,7 +282,7 @@ fun ListRow(
         trailing?.invoke()
         if (isSwitch) {
             // Drawn only: the whole row is the control.
-            WSwitch(checked!!, onCheckedChange = null, enabled = switchEnabled, interactionSource = source)
+            WSwitch(checked, onCheckedChange = null, enabled = switchEnabled, interactionSource = source)
         }
         if (chevron) {
             Icon(WIcons.ChevronRight, null, tint = colors.labelTertiary, modifier = Modifier.size(16.dp))
@@ -319,18 +310,3 @@ fun IconTile(icon: ImageVector, color: Color, size: Dp = 36.dp) {
         Icon(icon, null, tint = androidx.compose.ui.graphics.lerp(color, Color.White, 0.35f), modifier = Modifier.size(size * 0.5f))
     }
 }
-
-/** Large title placed at the top of scrolling content. */
-@Composable
-fun LargeTitle(text: String, modifier: Modifier = Modifier, subtitle: String? = null) {
-    Column(modifier.padding(horizontal = 4.dp)) {
-        Text(text, style = Type.pageTitle, color = Wallhop.colors.label, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        if (subtitle != null) {
-            Spacer(Modifier.height(6.dp))
-            Text(subtitle, style = Type.callout, color = Wallhop.colors.labelSecondary)
-        }
-    }
-}
-
-@Composable
-fun SectionGap() = Spacer(Modifier.height(32.dp).width(1.dp))

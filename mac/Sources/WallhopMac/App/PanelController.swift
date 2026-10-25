@@ -2,7 +2,7 @@ import AppKit
 import Combine
 import SwiftUI
 
-/// Shows Wallhop's panel: dropping out of the notch in notch mode, or under the menu bar icon in
+/// Shows Lync's panel: dropping out of the notch in notch mode, or under the menu bar icon in
 /// menu bar mode. Closes on Esc, on a click elsewhere, and — when it opened by hovering the
 /// notch — shortly after the pointer leaves it.
 final class PanelController {
@@ -360,7 +360,6 @@ private final class SensorView: NSView {
     private let onClick: () -> Void
     private let drop: FileDropHandler
     private let makeMenu: () -> NSMenu
-    private var hoverWork: DispatchWorkItem?
 
     init(onHover: @escaping () -> Void, onClick: @escaping () -> Void, drop: FileDropHandler, menu: @escaping () -> NSMenu) {
         self.onHover = onHover
@@ -391,10 +390,9 @@ private final class SensorView: NSView {
     // of the screen (menus, tabs, fullscreen toolbars) never pops the panel open by accident.
     override func mouseEntered(with event: NSEvent) {}
 
-    override func mouseExited(with event: NSEvent) { hoverWork?.cancel() }
+    override func mouseExited(with event: NSEvent) {}
 
     override func mouseDown(with event: NSEvent) {
-        hoverWork?.cancel()
         if event.modifierFlags.contains(.control) {
             rightMouseDown(with: event)
         } else {
@@ -403,7 +401,6 @@ private final class SensorView: NSView {
     }
 
     override func rightMouseDown(with event: NSEvent) {
-        hoverWork?.cancel()
         NSMenu.popUpContextMenu(makeMenu(), with: event, for: self)
     }
 

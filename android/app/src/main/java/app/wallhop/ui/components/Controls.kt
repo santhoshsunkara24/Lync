@@ -1,7 +1,6 @@
 package app.wallhop.ui.components
 
 import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.foundation.Canvas
@@ -9,7 +8,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.ui.draw.alpha
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.border
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Box
@@ -28,9 +26,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.withFrameNanos
-import androidx.compose.runtime.mutableLongStateOf
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -39,7 +34,6 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Size
 import androidx.compose.animation.core.tween
 import kotlinx.coroutines.flow.first
-import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
@@ -136,35 +130,31 @@ fun WSwitch(
 
 /**
  * Filter chips in a row (like the reference's Episodes / In Progress / Liked): see-through
- * pills, with a pale pill that slides to the selected one. Pass [position] (fractional index,
- * e.g. a pager's) to have the selection follow a swipe live.
+ * pills, with a pale pill at [position] (fractional index, e.g. a pager's), so the selection
+ * follows a swipe live.
  */
 @Composable
 fun SegmentedControl(
     options: List<String>,
     selected: Int,
     onSelect: (Int) -> Unit,
+    position: () -> Float,
     modifier: Modifier = Modifier,
-    position: (() -> Float)? = null,
-    haptic: Boolean = true,
 ) {
     val colors = Wallhop.colors
     val home = Wallhop.home
-    val haptics = rememberHaptics()
     // 48 dp at the default font, taller as the font grows so labels never clip.
     val fontScale = androidx.compose.ui.platform.LocalDensity.current.fontScale
     BoxWithConstraints(modifier.fillMaxWidth().height(48.dp * fontScale.coerceAtLeast(1f))) {
         val gap = 8.dp
         val segment = (maxWidth - gap * (options.size - 1)) / options.size
         val stepPx = with(androidx.compose.ui.platform.LocalDensity.current) { (segment + gap).toPx() }
-        val sprung = animateFloatAsState(selected.toFloat(), Springs.snappy(), label = "segment")
-        val at = position ?: { sprung.value }
         Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(gap)) {
             options.forEach { _ -> Box(Modifier.weight(1f).fillMaxHeight().clip(capsule()).background(Color.White.copy(alpha = 0.12f))) }
         }
         Box(
             Modifier
-                .offset { androidx.compose.ui.unit.IntOffset((stepPx * at()).roundToInt(), 0) }
+                .offset { androidx.compose.ui.unit.IntOffset((stepPx * position()).roundToInt(), 0) }
                 .width(segment)
                 .fillMaxHeight()
                 .clip(capsule())
@@ -181,10 +171,7 @@ fun SegmentedControl(
                         .pressScale(source, 0.95f)
                         .clip(capsule())
                         .tappable(source, role = Role.Tab) {
-                            if (index != selected) {
-                                if (haptic) haptics.perform(Haptic.Selection)
-                                onSelect(index)
-                            }
+                            if (index != selected) onSelect(index)
                         }
                         .semantics { this.selected = on },
                     contentAlignment = Alignment.Center,
@@ -201,7 +188,8 @@ fun SegmentedControl(
 
 /** iOS-style spinner: 8 spokes fading in turn, one turn per second. Still with Reduce Motion. */
 @Composable
-fun ActivityIndicator(color: Color = Wallhop.colors.labelSecondary, size: Dp = 20.dp) {
+fun ActivityIndicator(size: Dp = 20.dp) {
+    val color = Wallhop.colors.labelSecondary
     if (Wallhop.a11y.reduceMotion) {
         Canvas(Modifier.size(size)) {
             val center = Offset(this.size.width / 2, this.size.height / 2)
@@ -306,7 +294,6 @@ fun ProgressCheck(
     done: Boolean,
     modifier: Modifier = Modifier,
     color: Color = Wallhop.colors.green,
-    track: Color = Color.White.copy(alpha = 0.25f),
 ) {
     val reduceMotion = Wallhop.a11y.reduceMotion
     val shownState = animateFloatAsState(
@@ -330,7 +317,7 @@ fun ProgressCheck(
             val stroke = size.minDimension * 0.18f
             val inset = stroke / 2
             val arc = androidx.compose.ui.geometry.Size(size.width - stroke, size.height - stroke)
-            drawCircle(track, radius = size.minDimension / 2 - inset, style = androidx.compose.ui.graphics.drawscope.Stroke(stroke))
+            drawCircle(Color.White.copy(alpha = 0.25f), radius = size.minDimension / 2 - inset, style = androidx.compose.ui.graphics.drawscope.Stroke(stroke))
             drawArc(
                 color, -90f, 360f * shown, false,
                 topLeft = Offset(inset, inset), size = arc,

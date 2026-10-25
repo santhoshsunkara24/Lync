@@ -14,14 +14,13 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.semantics.Role
 
 // Touch response and haptics. See docs/DESIGN.md §5.3 and §8.
 
-/** Press state (0 or 1) for an interaction source, for driving glass highlight and scale. */
+/** Press state (0 or 1) for an interaction source, for driving highlight and scale. */
 @Composable
 fun MutableInteractionSource.pressedFraction(): Float {
     val pressed by collectIsPressedAsState()
@@ -45,11 +44,13 @@ fun Modifier.pressScale(source: MutableInteractionSource, pressedScale: Float = 
 }
 
 /**
- * Row-style press (DESIGN.md §5.5): the background lights to [color] the instant a finger lands
- * and fades back over 250 ms on release. For rows and menu items, where scaling would look odd.
+ * Row-style press (DESIGN.md §5.5): the background lights to the fill colour the instant a
+ * finger lands and fades back over 250 ms on release. For rows and menu items, where scaling
+ * would look odd.
  */
 @Composable
-fun Modifier.pressHighlight(source: MutableInteractionSource, color: Color = Wallhop.colors.fill): Modifier {
+fun Modifier.pressHighlight(source: MutableInteractionSource): Modifier {
+    val color = Wallhop.colors.fill
     val pressed by source.collectIsPressedAsState()
     val highlight by animateColorAsState(
         if (pressed) color else color.copy(alpha = 0f),
@@ -81,7 +82,7 @@ fun Modifier.tappable(
     onClick: () -> Unit,
 ): Modifier = clickable(interactionSource = source, indication = null, enabled = enabled, role = role, onClick = onClick)
 
-/** Haptic events from DESIGN.md §8. Shorthands (tick, confirm, reject, longPress) are in Motion.kt. */
+/** Haptic events from DESIGN.md §8. Shorthands (confirm, reject) are in Motion.kt. */
 enum class Haptic { Selection, Light, Medium, Success, Failure }
 
 class Haptics(private val view: View) {

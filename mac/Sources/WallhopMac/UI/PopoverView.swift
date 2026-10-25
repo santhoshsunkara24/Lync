@@ -1,6 +1,5 @@
 import AppKit
 import SwiftUI
-import UniformTypeIdentifiers
 
 /// Which page the panel shows.
 enum PanelPage: Equatable {
@@ -9,7 +8,7 @@ enum PanelPage: Equatable {
     case addPhone
 }
 
-/// Wallhop's panel, in the phone app's style (DESIGN.md "Current direction"): the phone's colour
+/// Lync's panel, in the phone app's style (DESIGN.md "Current direction"): the phone's colour
 /// fading to ink, calm medium titles, pale pills for main actions, see-through chips, cards.
 /// The same view opens from the notch (notch mode) or the menu bar icon (menu bar mode).
 struct PanelView: View {
@@ -569,7 +568,6 @@ private struct SectionTitle: View {
 /// The newest unexpired code, big, in the contrasting colour. Already on the clipboard.
 private struct LatestCodeCard: View {
     @ObservedObject var model: AppModel
-    @EnvironmentObject var theme: ThemeStore
     let code: (code: String, sender: String, item: ActivityItem)
 
     var body: some View {
@@ -1112,18 +1110,16 @@ private struct OnboardingPage: View {
             .accessibilityElement(children: .combine)
             .padding(.top, 20)
             .revealSection(2)
-            Button("Get Lync for Android") { NSWorkspace.shared.open(Self.downloadURL) }
+            Button("Get Lync for Android") { NSWorkspace.shared.open(lyncReleasesURL) }
                 .buttonStyle(WPlainPress())
                 .font(.wh(13, .medium)).foregroundStyle(WTheme.codeMint)
-                .help(Self.downloadURL.absoluteString)
+                .help(lyncReleasesURL.absoluteString)
                 .padding(.top, 24)
                 .revealSection(3)
         }
         // Clears the settings button above the title.
         .padding(.top, 44).padding(.bottom, 4)
     }
-
-    static let downloadURL = URL(string: "https://github.com/santhoshsunkara24/Lync/releases")!
 }
 
 /// A small turning arc in the label's colour: "still waiting". Still with Reduce Motion.

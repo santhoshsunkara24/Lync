@@ -3,9 +3,6 @@ package app.wallhop.ui.screens
 import app.wallhop.ui.design.WIcons
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.fadeIn
@@ -13,19 +10,15 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.produceState
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material3.Icon
@@ -41,9 +34,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import app.wallhop.link.DiscoveredMac
 import app.wallhop.link.LinkManager
@@ -51,31 +42,16 @@ import app.wallhop.link.LinkState
 import app.wallhop.ui.components.ActivityIndicator
 import app.wallhop.ui.components.AlertAction
 import app.wallhop.ui.components.AlertSpec
-import app.wallhop.ui.components.ButtonStyle
-import app.wallhop.ui.components.CodeDisplay
-import app.wallhop.ui.components.GlassStage
-import app.wallhop.ui.components.HopDots
-import app.wallhop.ui.components.IconTile
-import app.wallhop.ui.components.InsetSection
-import app.wallhop.ui.components.ListRow
 import app.wallhop.ui.components.Overlays
 import app.wallhop.ui.components.TextAction
-import app.wallhop.ui.components.WButton
 import app.wallhop.ui.components.WTextField
-import app.wallhop.ui.design.DrawnCheck
 import app.wallhop.ui.design.Fades
-import app.wallhop.ui.design.Radius
-import app.wallhop.ui.design.confirm
-import app.wallhop.ui.design.rememberAnimatedRows
-import app.wallhop.ui.design.rememberHaptics
-import app.wallhop.ui.design.staggerIn
 import app.wallhop.ui.design.Springs
 import app.wallhop.ui.design.Type
 import app.wallhop.ui.design.Wallhop
 import app.wallhop.ui.design.capsule
 import app.wallhop.ui.design.pressScale
 import app.wallhop.ui.design.tappable
-import app.wallhop.ui.design.rounded
 import kotlinx.coroutines.delay
 
 /** First run: find a Mac on this Wi-Fi (DESIGN.md §6.2). */
@@ -299,24 +275,6 @@ private fun isHostName(host: String): Boolean =
     host.isNotEmpty() && host.length <= 253 && !host.all { it.isDigit() || it == '.' } &&
         host.split('.').all { label -> label.isNotEmpty() && label.length <= 63 && label.all { it.isLetterOrDigit() || it == '-' } }
 
-/** Phone · hopping dots · laptop, on a large rounded card. */
-@Composable
-fun HeroIllustration(active: Boolean, modifier: Modifier = Modifier) {
-    val colors = Wallhop.colors
-    Row(
-        modifier
-            .fillMaxWidth()
-            .clip(rounded(Radius.xl))
-            .background(colors.backgroundElevated)
-            .padding(horizontal = 28.dp, vertical = 30.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Icon(WIcons.Phone, null, tint = colors.label, modifier = Modifier.size(34.dp))
-        HopDots(active = active, modifier = Modifier.weight(1f).padding(horizontal = 18.dp))
-        Icon(WIcons.Laptop, null, tint = colors.label, modifier = Modifier.size(40.dp))
-    }
-}
-
 /**
  * The 6-digit code to compare with the Mac (DESIGN.md §6.3). With [success] the Mac said yes:
  * the capsule turns green and a check draws in, just before the app moves on to the tabs.
@@ -393,5 +351,5 @@ private fun shareMacLink(context: android.content.Context) {
         .putExtra(android.content.Intent.EXTRA_SUBJECT, "Lync for Mac")
         .putExtra(android.content.Intent.EXTRA_TEXT, "Get Lync for your Mac: ${app.wallhop.core.Wording.RELEASES_URL}")
     runCatching { context.startActivity(android.content.Intent.createChooser(send, "Send the Mac link")) }
-        .onFailure { openLink(context, app.wallhop.core.Wording.RELEASES_URL) }
+        .onFailure { app.wallhop.core.Open.link(context, app.wallhop.core.Wording.RELEASES_URL) }
 }

@@ -93,7 +93,7 @@ final class MacInfoReporter {
 
         var result: (hash: String, jpeg: Data)?
         if let image = NSImage(contentsOf: url), let jpeg = thumbnail(image, width: 480) {
-            let hash = SHA256.hash(data: jpeg).prefix(8).map { String(format: "%02x", $0) }.joined()
+            let hash = Data(SHA256.hash(data: jpeg).prefix(8)).hex
             result = (hash, jpeg)
         }
         wallpaperCache = (key, result)

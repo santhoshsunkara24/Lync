@@ -1,15 +1,11 @@
 package app.wallhop.ui.design
 
 import android.content.Context
-import android.os.PowerManager
 import android.provider.Settings
-import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.SpringSpec
 import androidx.compose.animation.core.spring
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.Immutable
@@ -52,8 +48,6 @@ data class Palette(
     val orange: Color,
     val indigo: Color,
     val gray: Color,
-    /** Base colour mixed into glass. */
-    val glassTint: Color,
 )
 
 val LightPalette = Palette(
@@ -72,7 +66,6 @@ val LightPalette = Palette(
     orange = Color(0xFFFF9500),
     indigo = Color(0xFF5856D6),
     gray = Color(0xFF8E8E93),
-    glassTint = Color(0xFFFFFFFF),
 )
 
 val DarkPalette = Palette(
@@ -91,7 +84,6 @@ val DarkPalette = Palette(
     orange = Color(0xFFFF9F0A),
     indigo = Color(0xFF5E5CE6),
     gray = Color(0xFF8E8E93),
-    glassTint = Color(0xFF000000),
 )
 
 /**
@@ -126,7 +118,6 @@ object Type {
     val pageTitle = TextStyle(fontFamily = Galindo, fontSize = 30.sp, lineHeight = 38.sp, letterSpacing = 0.sp)
     /** A section's title within a page ("On your Mac", "Recent"), also in Galindo. */
     val sectionTitle = TextStyle(fontFamily = Galindo, fontSize = 18.sp, lineHeight = 24.sp, letterSpacing = 0.sp)
-    val title1 = style(26, 32, 500, -0.8f)
     val title2 = style(22, 28, 500, -0.4f)
     val title3 = style(19, 24, 600, -0.2f)
     val headline = style(16, 21, 600, 0f)
@@ -136,22 +127,14 @@ object Type {
     val footnote = style(13, 18, 500, 0f)
     val caption1 = style(12, 16, 500, 0f)
     val caption2 = style(11, 13, 600, 0.6f)
-    val code = style(44, 50, 600, 1f).copy(fontFeatureSettings = "tnum")
 }
 
 /** Continuous corner radii (DESIGN.md §3.2). */
 object Radius {
-    val xs = 6.dp
     val s = 10.dp
-    val m = 14.dp
     val l = 22.dp
     val xl = 28.dp
     val sheet = 34.dp
-}
-
-object Space {
-    val margin = 16.dp
-    val section = 32.dp
 }
 
 /** Springs matched to SwiftUI's presets (DESIGN.md §7.1). */
@@ -160,9 +143,6 @@ object Springs {
     fun <T> snappy(): SpringSpec<T> = spring(dampingRatio = 0.85f, stiffness = 400f)
     fun <T> smooth(): SpringSpec<T> = spring(dampingRatio = 1f, stiffness = 160f)
     fun <T> bouncy(): SpringSpec<T> = spring(dampingRatio = 0.7f, stiffness = 250f)
-    fun <T> instant(): SpringSpec<T> = spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessHigh)
-    /** Under-damped swell of glass under a finger (DESIGN.md §4, property 4). */
-    fun <T> gel(): SpringSpec<T> = spring(dampingRatio = 0.55f, stiffness = 600f)
     /** Glass materializing: sheets, alerts, toasts appearing (DESIGN.md §4.2). */
     fun <T> materialize(): SpringSpec<T> = spring(dampingRatio = 0.8f, stiffness = 300f)
     /** Glass dematerializing: the same things going away. */
@@ -180,7 +160,7 @@ object Springs {
 
 /** System accessibility state that changes how things draw and move. */
 @Immutable
-data class Accessibility(val reduceMotion: Boolean, val reduceTransparency: Boolean)
+data class Accessibility(val reduceMotion: Boolean)
 
 /** Ink: the near-black every screen fades into. */
 val Ink = Color(0xFF0B0B0C)
@@ -201,7 +181,7 @@ fun expressivePalette(home: HomeColors) = DarkPalette.copy(
 
 val LocalPalette = staticCompositionLocalOf { LightPalette }
 val LocalHomeColors = staticCompositionLocalOf { HomeColors.Default }
-val LocalAccessibility = staticCompositionLocalOf { Accessibility(reduceMotion = false, reduceTransparency = false) }
+val LocalAccessibility = staticCompositionLocalOf { Accessibility(reduceMotion = false) }
 
 object Wallhop {
     val colors: Palette @Composable get() = LocalPalette.current
@@ -216,9 +196,7 @@ fun readAccessibility(context: Context): Accessibility {
         Settings.Global.getFloat(context.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 1f),
         Settings.Global.getFloat(context.contentResolver, Settings.Global.TRANSITION_ANIMATION_SCALE, 1f),
     )
-    val highContrast = Settings.Secure.getInt(context.contentResolver, "high_text_contrast_enabled", 0) == 1
-    val powerSave = context.getSystemService(PowerManager::class.java)?.isPowerSaveMode == true
-    return Accessibility(reduceMotion = animationScale == 0f, reduceTransparency = highContrast || powerSave)
+    return Accessibility(reduceMotion = animationScale == 0f)
 }
 
 @Composable
@@ -227,8 +205,8 @@ fun WallhopTheme(brand: Boolean = false, content: @Composable () -> Unit) {
     // [brand]: Lync's own mint instead of the wallpaper's colours (sample data, so screenshots match).
     val home = if (brand) HomeColors.Default else rememberHomeColors()
     val palette = remember(home) { expressivePalette(home) }
-    // Read again whenever the animation scale or high-contrast text changes, so Reduce Motion
-    // (Remove animations) applies straight away, not on the next launch.
+    // Read again whenever the animation scale changes, so Reduce Motion (Remove animations)
+    // applies straight away, not on the next launch.
     var accessibility by remember { androidx.compose.runtime.mutableStateOf(readAccessibility(context)) }
     androidx.compose.runtime.DisposableEffect(context) {
         val observer = object : android.database.ContentObserver(android.os.Handler(android.os.Looper.getMainLooper())) {
@@ -238,7 +216,6 @@ fun WallhopTheme(brand: Boolean = false, content: @Composable () -> Unit) {
         runCatching {
             resolver.registerContentObserver(Settings.Global.getUriFor(Settings.Global.ANIMATOR_DURATION_SCALE), false, observer)
             resolver.registerContentObserver(Settings.Global.getUriFor(Settings.Global.TRANSITION_ANIMATION_SCALE), false, observer)
-            resolver.registerContentObserver(Settings.Secure.getUriFor("high_text_contrast_enabled"), false, observer)
         }
         onDispose { runCatching { resolver.unregisterContentObserver(observer) } }
     }
@@ -254,13 +231,10 @@ fun WallhopTheme(brand: Boolean = false, content: @Composable () -> Unit) {
         outline = palette.separator,
         error = palette.red,
     )
-    // No glass any more, so no tilt sensor: the light stays put (the little Mac's glare uses it).
-    val lightAngle = remember { androidx.compose.runtime.mutableFloatStateOf(45f) }
     CompositionLocalProvider(
         LocalPalette provides palette,
         LocalHomeColors provides home,
         LocalAccessibility provides accessibility,
-        LocalLightAngle provides lightAngle,
     ) {
         MaterialTheme(colorScheme = scheme, content = content)
     }

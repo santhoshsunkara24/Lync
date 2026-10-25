@@ -23,7 +23,6 @@ class WordingTest {
     @Test fun codeLabels() {
         assertEquals("Copy code 482 913", Wording.copyCodeLabel("482913"))
         assertEquals("Copy code G-12345", Wording.copyCodeLabel("G-12345"))
-        assertEquals("Pairing code 4 8 2, 9 1 3", Wording.pairingCodeDescription("482913"))
     }
 
     @Test fun miniMac() {

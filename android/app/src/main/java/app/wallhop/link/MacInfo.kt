@@ -25,8 +25,6 @@ internal class MacInfoStore(private val context: Context) {
     private val prefs = context.getSharedPreferences("mac_info", Context.MODE_PRIVATE)
     private val file get() = File(context.filesDir, "mac_wallpaper.jpg")
 
-    val wallpaperHash: String? get() = prefs.getString("wp", null)
-
     fun load(): MacInfo = MacInfo(
         battery = prefs.getInt("battery", -1).takeIf { it >= 0 },
         charging = prefs.getBoolean("charging", false),

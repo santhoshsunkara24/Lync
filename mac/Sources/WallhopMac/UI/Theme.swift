@@ -130,12 +130,6 @@ struct WTheme: Equatable {
         return problems
     }
 
-    /// The screen gradient: colour at the top fading to ink.
-    var background: LinearGradient {
-        LinearGradient(stops: [.init(color: top, location: 0), .init(color: mid, location: 0.38), .init(color: Self.ink, location: 0.75)],
-                       startPoint: .top, endPoint: .bottom)
-    }
-
     private static func hsl(_ argb: UInt32) -> (Double, Double, Double) {
         let r = Double((argb >> 16) & 0xFF) / 255, g = Double((argb >> 8) & 0xFF) / 255, b = Double(argb & 0xFF) / 255
         let maxV = max(r, g, b), minV = min(r, g, b), l = (maxV + minV) / 2
@@ -185,8 +179,6 @@ enum WRadius {
     static let group: CGFloat = 24
     /// Text fields, the QR's white tile, artwork.
     static let field: CGFloat = 14
-    /// Thumbnails and small tiles.
-    static let small: CGFloat = 10
 }
 
 /// Motion tokens (DESIGN.md: calm motion, physical response). Every animation in the app uses one

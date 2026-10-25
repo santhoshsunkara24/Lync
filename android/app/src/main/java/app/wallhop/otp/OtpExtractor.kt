@@ -52,7 +52,7 @@ object OtpExtractor {
         val keywordPositions = keywords.flatMap { word -> lower.indicesOf(word) }
         if (keywordPositions.isEmpty()) return null
 
-        data class Candidate(val code: String, val start: Int, val end: Int, val score: Int)
+        data class Candidate(val code: String, val score: Int)
 
         val phoneRanges = phoneNumber.findAll(text).map { it.range }.toList()
         val candidates = mutableListOf<Candidate>()
@@ -78,7 +78,7 @@ object OtpExtractor {
             if (code.length in 5..8) score += 4
             if (strongBefore.containsMatchIn(before)) score += 20
             if (strongAfter.containsMatchIn(after)) score += 20
-            candidates += Candidate(code, start, end, score)
+            candidates += Candidate(code, score)
         }
 
         candidates.maxByOrNull { it.score }?.let { return it.code }

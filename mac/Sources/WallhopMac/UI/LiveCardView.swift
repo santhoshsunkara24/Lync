@@ -3,7 +3,6 @@ import SwiftUI
 /// The content of a live moment. Always drawn on black so it blends with the notch.
 struct LiveCardView: View {
     @ObservedObject var model: AppModel
-    @EnvironmentObject var theme: ThemeStore
     let card: LiveCard
 
     var body: some View {

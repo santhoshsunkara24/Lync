@@ -163,7 +163,6 @@ final class AppModel: ObservableObject {
     @Published private(set) var connectedPhone: PairedPhone?
     /// A phone reaching this Mac over Bluetooth only (codes, calls and notifications; no files).
     @Published private(set) var bluetoothPhone: PairedPhone?
-    @Published private(set) var phoneHost: String?
     @Published private(set) var battery: Int?
     @Published private(set) var charging = false
     /// When the current phone connected, for the phone card's "connected 5 min ago".
@@ -335,10 +334,7 @@ final class AppModel: ObservableObject {
         return nil
     }
 
-    var appVersion: String {
-        let info = Bundle.main.infoDictionary
-        return info?["CFBundleShortVersionString"] as? String ?? "dev"
-    }
+    var appVersion: String { PhoneConnection.appVersion }
 
     /// `scrollTo`: a row id the home page scrolls to, e.g. "notif-<key>".
     func openPanel(_ page: PanelPage = .home, scrollTo: String? = nil) {
@@ -569,12 +565,11 @@ final class AppModel: ObservableObject {
             if live == .pairing(id) { hideLive() }
             reloadPaired()
 
-        case .connected(let phone, let host):
+        case .connected(let phone):
             let wasConnected = connectedPhone != nil
             connectedPhone = phone
             waitWork?.cancel()
             waitedLong = false
-            phoneHost = host
             if !wasConnected { connectedAt = Date(); themeStore.phoneConnected() }
             reloadPaired()
             // Just paired: "Linked with …" is still saying it, so no second note on top.
@@ -606,7 +601,6 @@ final class AppModel: ObservableObject {
                 connectedPhone = nil
                 connectedAt = nil
                 themeStore.phoneDisconnected()
-                phoneHost = nil
                 battery = nil
                 nowPlaying = nil
                 ringing = false
@@ -1768,12 +1762,6 @@ enum Clipboard {
         return board.changeCount
     }
 
-    static func copyFile(_ url: URL) {
-        let board = NSPasteboard.general
-        board.clearContents()
-        board.writeObjects([url as NSURL])
-    }
-
     /// Files as both images (when they are) and file references, so they paste into chat apps,
     /// documents and Finder alike.
     static func copyFiles(_ urls: [URL]) {
@@ -1783,17 +1771,6 @@ enum Clipboard {
         if urls.count == 1, urls[0].isImage, let image = NSImage(contentsOf: urls[0]) { objects.append(image) }
         objects.append(contentsOf: urls.map { $0 as NSURL })
         board.writeObjects(objects)
-    }
-
-    /// Puts an image on the clipboard as both image data and a file, so it pastes into any app.
-    static func copyImage(_ url: URL) {
-        let board = NSPasteboard.general
-        board.clearContents()
-        if let image = NSImage(contentsOf: url) {
-            board.writeObjects([image, url as NSURL])
-        } else {
-            board.writeObjects([url as NSURL])
-        }
     }
 
     /// A copy of everything on the clipboard, to put back later.

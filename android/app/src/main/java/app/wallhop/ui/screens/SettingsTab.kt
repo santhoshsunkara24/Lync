@@ -71,7 +71,6 @@ class SettingsActions(
     val allowCalls: () -> Unit,
     val allowTexts: () -> Unit,
     val allowNotifications: () -> Unit,
-    val openNotificationAccess: () -> Unit,
     val allowBackground: () -> Unit,
     val allowBluetooth: () -> Unit,
     /** Wallhop's own switch for a feature (Features); off never needs Android's settings. */

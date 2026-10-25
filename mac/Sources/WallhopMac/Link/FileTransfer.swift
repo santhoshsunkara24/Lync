@@ -3,7 +3,7 @@ import CryptoKit
 import Foundation
 
 /// Where files from the phone go. They arrive in a private inbox and move to Downloads › From Phone
-/// as soon as the batch is complete; anything that couldn't move stays in the inbox for a day.
+/// when the user saves them; anything never saved stays in the inbox for a day.
 enum ReceivedFiles {
     /// ~/Library/Application Support/Wallhop/Inbox/<batch>/<name>
     static var inbox: URL {

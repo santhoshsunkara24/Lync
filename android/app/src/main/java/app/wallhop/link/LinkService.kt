@@ -46,7 +46,7 @@ class LinkService : Service() {
                 this,
                 Notifications.LINK_NOTIFICATION_ID,
                 Notifications.linkNotification(this, link.state.value),
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE else 0,
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE,
             )
         } catch (e: IllegalStateException) {
             // ForegroundServiceStartNotAllowedException (an IllegalStateException) when the system
@@ -141,12 +141,12 @@ class LinkService : Service() {
             stop(context)
         }
 
-        /** Starts the service. Only call while the app is in the foreground or from an allowed broadcast. */
         /** Stops the foreground service; the link then only lives while the app is open. */
         fun stop(context: Context) {
             runCatching { context.stopService(Intent(context, LinkService::class.java)) }
         }
 
+        /** Starts the service. Only call while the app is in the foreground or from an allowed broadcast. */
         fun start(context: Context) {
             runCatching { ContextCompat.startForegroundService(context, Intent(context, LinkService::class.java)) }
         }

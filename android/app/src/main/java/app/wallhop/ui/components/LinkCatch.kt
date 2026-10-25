@@ -127,8 +127,8 @@ fun LinkCatch(connected: Boolean, modifier: Modifier = Modifier, shaded: Boolean
             rotate(-45f, Offset(128f, 128f))
             scale(1f + 0.05f * sq, 1f - 0.06f * sq, Offset(128f, 128f))
         }) {
-            hook(hookB, dx, Color.Unspecified, soft = 1f - lit.value, alpha = 1f, shaded, glint.value)
-            hook(hookA, -dx, Color.Unspecified, soft = if (connected) 0f else 0.55f, alpha = 1f, shaded, glint.value)
+            hook(hookB, dx, soft = 1f - lit.value, shaded, glint.value)
+            hook(hookA, -dx, soft = if (connected) 0f else 0.55f, shaded, glint.value)
         }
     }
 }
@@ -146,28 +146,28 @@ private fun mix(a: Color, b: Color, t: Float) = Color(
     a.red + (b.red - a.red) * t, a.green + (b.green - a.green) * t, a.blue + (b.blue - a.blue) * t, a.alpha + (b.alpha - a.alpha) * t,
 )
 
-private fun DrawScope.hook(path: Path, dx: Float, color: Color, soft: Float, alpha: Float, shaded: Boolean, glint: Float) {
+private fun DrawScope.hook(path: Path, dx: Float, soft: Float, shaded: Boolean, glint: Float) {
     translate(dx, 0f) {
         if (!shaded) {
             // Small sizes: one solid stroke, mint once caught, muted while waiting.
-            drawPath(path, mix(MintLight, Muted, soft).copy(alpha = alpha), style = Stroke(SW + 2f, cap = StrokeCap.Round))
+            drawPath(path, mix(MintLight, Muted, soft), style = Stroke(SW + 2f, cap = StrokeCap.Round))
             return@translate
         }
         // A soft shadow below (two wide, faint strokes stand in for a blur).
         translate(3f, 5f) {
-            drawPath(path, Color.Black.copy(alpha = 0.14f * alpha), style = Stroke(SW + 10f, cap = StrokeCap.Round))
-            drawPath(path, Color.Black.copy(alpha = 0.22f * alpha), style = Stroke(SW + 3f, cap = StrokeCap.Round))
+            drawPath(path, Color.Black.copy(alpha = 0.14f), style = Stroke(SW + 10f, cap = StrokeCap.Round))
+            drawPath(path, Color.Black.copy(alpha = 0.22f), style = Stroke(SW + 3f, cap = StrokeCap.Round))
         }
         // The deep edge, then the body shading lighter towards the top, then a fine highlight.
-        drawPath(path, mix(MintDeep, Muted, soft).copy(alpha = alpha), style = Stroke(SW + 1f, cap = StrokeCap.Round))
+        drawPath(path, mix(MintDeep, Muted, soft), style = Stroke(SW + 1f, cap = StrokeCap.Round))
         val tube = Brush.verticalGradient(
-            0f to mix(MintTop, MutedTop, soft).copy(alpha = alpha),
-            0.5f to mix(MintLight, Muted, soft).copy(alpha = alpha),
-            1f to mix(MintBody, Muted, soft).copy(alpha = alpha),
+            0f to mix(MintTop, MutedTop, soft),
+            0.5f to mix(MintLight, Muted, soft),
+            1f to mix(MintBody, Muted, soft),
             startY = 128f - R * 1.25f, endY = 128f + R * 1.25f,
         )
         translate(-1f, -1.5f) { drawPath(path, tube, style = Stroke(SW - 4f, cap = StrokeCap.Round)) }
-        translate(-3f, -3.5f) { drawPath(path, Color.White.copy(alpha = (0.75f - 0.4f * soft) * alpha), style = Stroke(2.5f, cap = StrokeCap.Round)) }
+        translate(-3f, -3.5f) { drawPath(path, Color.White.copy(alpha = 0.75f - 0.4f * soft), style = Stroke(2.5f, cap = StrokeCap.Round)) }
         if (glint in 0.001f..0.999f) {
             val g = sin(glint * PI).toFloat()
             drawPath(

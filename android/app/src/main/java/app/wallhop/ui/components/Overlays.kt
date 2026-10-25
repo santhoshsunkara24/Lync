@@ -2,10 +2,8 @@ package app.wallhop.ui.components
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.EnterExitState
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.MutableTransitionState
-import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.scaleIn
@@ -33,13 +31,11 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
-import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material3.Icon
@@ -75,7 +71,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
-import app.wallhop.ui.design.GlassVariant
 import app.wallhop.ui.design.Durations
 import app.wallhop.ui.design.Easings
 import app.wallhop.ui.design.Haptic
@@ -114,7 +109,7 @@ class AlertSpec(val title: String, val message: String?, val actions: List<Alert
 
 data class AlertAction(val label: String, val destructive: Boolean = false, val default: Boolean = false, val onClick: () -> Unit = {})
 
-class ActionSheetSpec(val message: String?, val actions: List<AlertAction>, val cancel: String = "Cancel")
+class ActionSheetSpec(val message: String?, val actions: List<AlertAction>)
 
 data class MenuItem(val label: String, val icon: ImageVector? = null, val destructive: Boolean = false, val onClick: () -> Unit)
 
@@ -217,10 +212,6 @@ private fun Modifier.focusOnShow(): Modifier {
     return focusRequester(requester).focusable()
 }
 
-/** How glass materializes: refraction and light ramp up rather than a plain fade. */
-private val materialize = Springs.materialize<Float>()
-private val dematerialize = Springs.dematerialize<Float>()
-
 /** Slides for things entering and leaving; plain fades with Reduce Motion (DESIGN.md §7.3). */
 private fun slideUpIn(reduceMotion: Boolean, from: (Int) -> Int) =
     if (reduceMotion) fadeIn(tween(Durations.Quick)) else slideInVertically(Springs.materialize(), from)
@@ -289,7 +280,6 @@ private fun BoxScope.SheetLayer(overlays: Overlays) {
         // Fully drawn as soon as it's on screen; the enter/exit transition does the motion.
         // (An animated "appear" here could stop short on some phones and leave the sheet
         // half see-through, blended with the screen behind it.)
-        val appear = 1f
         val scope = rememberCoroutineScope()
         val drag = remember { Animatable(0f) }
         var height by remember { mutableStateOf(1) }
@@ -411,7 +401,7 @@ private fun BoxScope.MenuLayer(overlays: Overlays) {
                     shape = MenuReveal(from, p, growsLeft, from.height / 2, radiusTo)
                     alpha = (0.6f + 0.4f * p).coerceIn(0f, 1f)
                 }
-                .glass(RoundedRectangle(Radius.l), GlassVariant.Regular, appear = { 1f })
+                .glass(RoundedRectangle(Radius.l))
                 .semantics { paneTitle = "Menu" }
                 .padding(vertical = 6.dp)
                 .graphicsLayer { alpha = ((progress.value - 0.4f) / 0.6f).coerceIn(0f, 1f) },
@@ -466,18 +456,16 @@ private fun BoxScope.AlertLayer(overlays: Overlays) {
         // Fully drawn as soon as it's on screen; the enter/exit transition does the motion.
         // (An animated "appear" here could stop short on some phones and leave the alert
         // half see-through, blended with the screen behind it.)
-        val appear = 1f
         val spec = shown ?: return@AnimatedVisibility
         Column(
             Modifier
                 .width(270.dp)
-                .glass(rounded(Radius.xl), GlassVariant.Regular, appear = { appear })
+                .glass(rounded(Radius.xl))
                 .semantics {
                     paneTitle = spec.title
                     dialog()
                 }
-                .padding(20.dp)
-                .alpha(((appear - 0.3f) / 0.7f).coerceIn(0f, 1f)),
+                .padding(20.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             Text(spec.title, style = Type.headline, color = colors.label, textAlign = TextAlign.Center,
@@ -544,17 +532,16 @@ private fun BoxScope.ActionSheetLayer(overlays: Overlays) {
         // Fully drawn as soon as it's on screen; the enter/exit transition does the motion.
         // (An animated "appear" here could stop short on some phones and leave the actions
         // half see-through, blended with the screen behind it.)
-        val appear = 1f
         val spec = shown ?: return@AnimatedVisibility
         Column(
-            Modifier.fillMaxWidth().navigationBarsPadding().padding(10.dp).alpha(((appear - 0.2f) / 0.8f).coerceIn(0f, 1f))
+            Modifier.fillMaxWidth().navigationBarsPadding().padding(10.dp)
                 .semantics {
                     paneTitle = spec.message ?: "Actions"
                     dialog()
                 },
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Column(Modifier.fillMaxWidth().glass(rounded(Radius.xl), GlassVariant.Regular, appear = { appear }).padding(8.dp)) {
+            Column(Modifier.fillMaxWidth().glass(rounded(Radius.xl)).padding(8.dp)) {
                 if (spec.message != null) {
                     Text(spec.message, style = Type.footnote, color = colors.labelSecondary, textAlign = TextAlign.Center,
                         modifier = Modifier.fillMaxWidth().padding(12.dp).focusOnShow())
@@ -573,11 +560,11 @@ private fun BoxScope.ActionSheetLayer(overlays: Overlays) {
                     .fillMaxWidth()
                     .height(56.dp)
                     .pressScale(source)
-                    .glass(capsule(), GlassVariant.Regular, appear = { appear })
+                    .glass(capsule())
                     .tappable(source) { overlays.dismissActionSheet() },
                 contentAlignment = Alignment.Center,
             ) {
-                Text(spec.cancel, style = Type.headline, color = colors.tint)
+                Text("Cancel", style = Type.headline, color = colors.tint)
             }
         }
     }
@@ -616,7 +603,6 @@ private fun BoxScope.ToastLayer(overlays: Overlays, bottom: androidx.compose.ui.
         // Fully drawn as soon as it's on screen; the enter/exit transition does the motion.
         // (An animated "appear" here could stop short on some phones and leave the toast
         // half see-through, blended with the screen behind it.)
-        val appear = 1f
         val showing = shown ?: return@AnimatedVisibility
         // A new toast while one is up: the old one fades as the new one settles in its place,
         // rather than its words changing in one frame.
@@ -638,7 +624,6 @@ private fun BoxScope.ToastLayer(overlays: Overlays, bottom: androidx.compose.ui.
                 .padding(bottom = bottom + 8.dp)
                 .padding(horizontal = 16.dp)
                 .widthIn(max = 360.dp)
-                .alpha(appear.coerceIn(0f, 1f))
                 .clip(capsule())
                 .background(Wallhop.home.pale)
                 // TalkBack reads it out without moving focus.

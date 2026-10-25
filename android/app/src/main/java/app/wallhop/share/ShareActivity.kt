@@ -37,7 +37,6 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -46,7 +45,6 @@ import java.util.UUID
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.semantics.LiveRegionMode
@@ -282,7 +280,6 @@ private fun ShareSheet(
                     Text("Pair a Mac first", style = Type.title3, color = colors.label)
                     Text("Open Lync, pair it with your Mac, then share again.", style = Type.subheadline,
                         color = colors.labelSecondary, modifier = Modifier.padding(top = 4.dp, bottom = 20.dp))
-                    val context = androidx.compose.ui.platform.LocalContext.current
                     WButton("Open Lync", onClick = {
                         context.startActivity(Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
                         close()
@@ -372,7 +369,6 @@ private fun ShareSheet(
                             )
                             if (problem != null) {
                                 Spacer(Modifier.height(12.dp))
-                                val context = androidx.compose.ui.platform.LocalContext.current
                                 when (val fix = problem.fix) {
                                     // Files from another app can't be picked here: Try again resends what was shared.
                                     null, app.wallhop.core.Fix.TryAgain, app.wallhop.core.Fix.ChooseAgain ->
@@ -395,7 +391,7 @@ private fun ShareSheet(
                                 when {
                                     ahead > 0 -> if (ahead == 1) "Next in line, after 1 other share" else "Waiting behind $ahead other shares"
                                     shared is ShareActivity.Shared.Text && (sending || state is LinkState.Connected) -> "Sending…"
-                                    sending -> "Sending · ${formatBytes(transfer?.sentBytes ?: 0)} of ${formatBytes(transfer?.totalBytes ?: 0)}"
+                                    sending -> "Sending · ${formatBytes(transfer.sentBytes)} of ${formatBytes(transfer.totalBytes)}"
                                     state is LinkState.Connected -> "Starting…"
                                     // Why it's waiting, once known: "Waiting · Wi‑Fi is off. Turn on Wi‑Fi to reach your Mac."
                                     else -> link.reachProblem(files = true)?.takeIf { (state as? LinkState.Searching)?.reason != null }
@@ -406,7 +402,7 @@ private fun ShareSheet(
                                 color = colors.labelSecondary,
                             )
                             Spacer(Modifier.height(12.dp))
-                            if (sending && shared is ShareActivity.Shared.Files) ProgressBar(transfer?.progress) else HopDots(active = true, modifier = Modifier.fillMaxWidth())
+                            if (sending && shared is ShareActivity.Shared.Files) ProgressBar(transfer.progress) else HopDots(active = true, modifier = Modifier.fillMaxWidth())
                         }
                     }
                 }

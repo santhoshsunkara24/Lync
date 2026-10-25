@@ -327,13 +327,12 @@ object Notifications {
     }
 
     /**
-     * Android won't show Lync's notifications (all of them, or this [channel]): turned off for the
-     * app, the channel set to off, or notification permission denied.
+     * Android won't show Lync's notifications on this [channel]: turned off for the app, the
+     * channel set to off, or notification permission denied.
      */
-    fun blocked(context: Context, channel: String? = null): Boolean {
+    fun blocked(context: Context, channel: String): Boolean {
         val manager = NotificationManagerCompat.from(context)
         if (!manager.areNotificationsEnabled()) return true
-        if (channel == null) return false
         return manager.getNotificationChannel(channel)?.importance == NotificationManager.IMPORTANCE_NONE
     }
 

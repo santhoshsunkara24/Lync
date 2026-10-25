@@ -243,8 +243,8 @@ struct OverlayRoot: View {
                     .brightness(0.08 * pulse)
                     .shake(model.dropShake)
                     .transition(transition)
-            } else if let drag = model.fileDrag, placement.placement != .menuBar {
-                DragGlow(model: model, drag: drag, placement: placement.placement, notchWidth: placement.notchWidth)
+            } else if model.fileDrag != nil, placement.placement != .menuBar {
+                DragGlow(model: model, placement: placement.placement, notchWidth: placement.notchWidth)
                     .transition(WMotion.transition(.opacity.combined(with: .scale(scale: 0.9, anchor: .top))))
             }
             Spacer(minLength: 0)
@@ -438,7 +438,6 @@ struct OverlayRoot: View {
 /// highlight under Reduce Motion.
 struct DragGlow: View {
     @ObservedObject var model: AppModel
-    let drag: FileDragInfo
     let placement: OverlayPlacement
     var notchWidth: CGFloat
     @State private var breathe = false

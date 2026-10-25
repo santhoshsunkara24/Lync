@@ -1,11 +1,6 @@
 package app.wallhop.ui.screens
 
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.slideInVertically
-import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -23,12 +18,9 @@ import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBars
-import androidx.compose.foundation.layout.statusBarsPadding
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.LazyListState
@@ -50,18 +42,12 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import app.wallhop.ui.components.GlassStage
-import app.wallhop.ui.components.LargeTitle
-import app.wallhop.ui.components.ScrollEdge
-import app.wallhop.ui.design.GlassVariant
 import app.wallhop.ui.design.LocalStagger
 import app.wallhop.ui.design.rememberStaggerClock
 import app.wallhop.ui.design.staggerIn
 import app.wallhop.ui.design.Springs
 import app.wallhop.ui.design.Type
 import app.wallhop.ui.design.Wallhop
-import app.wallhop.ui.design.capsule
-import app.wallhop.ui.design.glass
 
 /** Widest the content column gets on tablets and in landscape. */
 val MaxContentWidth: Dp = 640.dp
@@ -80,7 +66,6 @@ fun Page(
     modifier: Modifier = Modifier,
     subtitle: String? = null,
     state: LazyListState = rememberLazyListState(),
-    bottomClearance: Dp = TabBarClearance,
     leading: (@Composable () -> Unit)? = null,
     trailing: (@Composable () -> Unit)? = null,
     content: LazyListScope.() -> Unit,
@@ -112,7 +97,7 @@ fun Page(
         LazyColumn(
             state = state,
             modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(start = start + extra + 20.dp, end = end + extra + 20.dp, top = statusBar + 14.dp, bottom = navBar + bottomClearance),
+            contentPadding = PaddingValues(start = start + extra + 20.dp, end = end + extra + 20.dp, top = statusBar + 14.dp, bottom = navBar + TabBarClearance),
         ) {
             item(key = "title") {
                 Column(
@@ -162,30 +147,27 @@ fun Page(
             Text(title, style = Type.headline, color = colors.label, maxLines = 1, overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.align(Alignment.TopCenter).padding(top = statusBar + 18.dp))
         }
-        if (bottomClearance > 40.dp) {
-            val canScroll by remember { derivedStateOf { state.canScrollForward } }
-            val bottomFade by animateFloatAsState(if (canScroll) 1f else 0f, Springs.smooth(), label = "bottomEdge")
-            Box(
-                Modifier
-                    .align(Alignment.BottomCenter)
-                    .fillMaxWidth()
-                    .height(navBar + 72.dp)
-                    .graphicsLayer { alpha = bottomFade }
-                    .background(Brush.verticalGradient(listOf(colors.background.copy(alpha = 0f), colors.background))),
-            )
-        }
+        val canScroll by remember { derivedStateOf { state.canScrollForward } }
+        val bottomFade by animateFloatAsState(if (canScroll) 1f else 0f, Springs.smooth(), label = "bottomEdge")
+        Box(
+            Modifier
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth()
+                .height(navBar + 72.dp)
+                .graphicsLayer { alpha = bottomFade }
+                .background(Brush.verticalGradient(listOf(colors.background.copy(alpha = 0f), colors.background))),
+        )
     }
 }
 
-/** Section header text with an optional trailing element (e.g. a spinner). */
+/** Section header text. */
 @Composable
-fun SectionHeader(text: String, trailing: (@Composable () -> Unit)? = null) {
+fun SectionHeader(text: String) {
     Row(
         Modifier.fillMaxWidth().padding(start = 4.dp, end = 4.dp, bottom = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         Text(text, style = Type.sectionTitle, color = Wallhop.colors.label, modifier = Modifier.semantics { heading() })
-        trailing?.invoke()
     }
 }

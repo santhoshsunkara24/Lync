@@ -5,8 +5,6 @@ import androidx.core.net.toUri
 import app.wallhop.core.Features
 import app.wallhop.ui.design.WIcons
 import android.Manifest
-import android.annotation.SuppressLint
-import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -66,10 +64,6 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
-import androidx.compose.ui.input.nestedscroll.NestedScrollSource
-import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.core.app.NotificationManagerCompat
@@ -94,13 +88,10 @@ import app.wallhop.ui.components.WButton
 import app.wallhop.ui.design.Type
 import app.wallhop.ui.screens.LicencesScreen
 import app.wallhop.ui.screens.MacDetails
-import app.wallhop.ui.screens.openAppDetails
-import app.wallhop.ui.screens.openLink
 import app.wallhop.ui.screens.showEntryActions
 import app.wallhop.ui.screens.tapEntry
 import app.wallhop.ui.screens.GuidedSetup
 import app.wallhop.ui.screens.SetupSteps
-import app.wallhop.ui.components.FloatingTabBar
 import app.wallhop.ui.components.GlassStage
 import app.wallhop.ui.components.MenuItem
 import app.wallhop.ui.components.IncomingBanner
@@ -172,7 +163,6 @@ fun WallhopRoot(link: LinkManager, demo: Boolean = false) {
     LaunchedEffect(link) { link.notices.collect { overlays.problem(it) { fix -> app.wallhop.core.Open.run(context, fix) } } }
     var showApps by rememberSaveable { mutableStateOf(false) }
     var showLicences by rememberSaveable { mutableStateOf(false) }
-    var minimized by remember { mutableStateOf(false) }
     var scanning by rememberSaveable { mutableStateOf(false) }
     // The scanner's "Enter address": the connect screen opens its address sheet.
     var askAddress by remember { mutableStateOf(false) }
@@ -251,18 +241,7 @@ fun WallhopRoot(link: LinkManager, demo: Boolean = false) {
     // Files arriving from the Mac: a small banner at the top, not a takeover.
     val incomingNow by link.incomingTransfer.collectAsStateWithLifecycle()
 
-    // Scrolling down tucks the tab bar away; scrolling up brings it back (DESIGN.md §5.2).
-    val minimizer = remember {
-        object : NestedScrollConnection {
-            override fun onPostScroll(consumed: Offset, available: Offset, source: NestedScrollSource): Offset {
-                // Only when content actually moved, so drags on screens that don't scroll leave the bar alone.
-                if (consumed.y < -6f) minimized = true else if (consumed.y > 6f) minimized = false
-                return Offset.Zero
-            }
-        }
-    }
-
-    // One recorded content layer for the whole app; the tab bar and overlays float above it.
+    // One content layer for the whole app; the tab bar and overlays float above it.
     CompositionLocalProvider(LocalOverlays provides overlays) {
     GlassStage(
         modifier = Modifier.fillMaxSize(),
@@ -272,7 +251,6 @@ fun WallhopRoot(link: LinkManager, demo: Boolean = false) {
                 targetState = screen,
                 // While a sheet, alert or menu is up, TalkBack only sees that.
                 modifier = Modifier
-                    .nestedScroll(minimizer)
                     // Home sinks back a little while the sending screen is over it.
                     .graphicsLayer {
                         if (reduceMotionApp) return@graphicsLayer
@@ -326,7 +304,7 @@ fun WallhopRoot(link: LinkManager, demo: Boolean = false) {
                     else -> CompositionLocalProvider(app.wallhop.ui.components.LocalScreenActive provides !homeCovered) { Tabs(
                         link, state, setup, overlays, demo,
                         tab = tab, showApps = showApps, showLicences = showLicences,
-                        onTab = { tab = it; showApps = false; showLicences = false; minimized = false; overlays.dismissToast() },
+                        onTab = { tab = it; showApps = false; showLicences = false; overlays.dismissToast() },
                         onShowApps = { showApps = it },
                         onShowLicences = { showLicences = it },
                         onPermissionChange = { resumes++ },
@@ -348,7 +326,7 @@ fun WallhopRoot(link: LinkManager, demo: Boolean = false) {
                         TabItem("Settings", WIcons.Settings, badge = !setup.essentialsDone),
                     ),
                     selected = tab,
-                    onSelect = { if (tab != it) overlays.dismissToast(); tab = it; showApps = false; showLicences = false; minimized = false },
+                    onSelect = { if (tab != it) overlays.dismissToast(); tab = it; showApps = false; showLicences = false },
                     modifier = Modifier
                         .navigationBarsPadding()
                         .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal))
@@ -820,7 +798,6 @@ private fun Tabs(
                     launchPicker(lastPicker)
                 }
             },
-            openSettings = { currentOnTab(2) },
             openActivity = { currentOnTab(1) },
             macDetails = { showMacDetails() },
             entryActions = { entry -> entryActions(entry) },
@@ -875,7 +852,6 @@ private fun Tabs(
                     }
                 }
             },
-            openNotificationAccess = { requestNotificationAccess() },
             allowBackground = { askBackground() },
             runFix = { fix -> runFix(fix) },
             allowBluetooth = {
@@ -890,7 +866,7 @@ private fun Tabs(
             sendTestCode = { link.sendOtp((100000..999999).random().toString(), "Lync test", "debug") },
             macDetails = { showMacDetails() },
             openLicences = { currentOnShowLicences(true) },
-            openPrivacy = { openLink(context, PRIVACY_URL) },
+            openPrivacy = { app.wallhop.core.Open.link(context, PRIVACY_URL) },
             finishSetup = { openSetup() },
             addTile = { addClipboardTile(context, overlays) },
         )
@@ -918,7 +894,6 @@ private fun Tabs(
                         0 -> HomeSlot(link, state, macName, !setup.essentialsDone, macActions, activity, demo)
                         1 -> ActivityTab(
                             activity, overlays,
-                            onDelete = { deleteEntry(it) },
                             onTap = { entryTap(it) },
                             onActions = { entryActions(it) },
                             onClearOld = { clearOlderThanAWeek() },
@@ -1105,18 +1080,17 @@ private fun HomeSlot(
     if (active) heldTransfer[0] = liveTransfer
     val transfer = heldTransfer[0]
     val macInfo by link.macInfo.collectAsStateWithLifecycle()
-    val latency by link.latencyMs.collectAsStateWithLifecycle()
     val connectedSince by link.connectedSince.collectAsStateWithLifecycle()
     val card = if (demo) {
         app.wallhop.ui.screens.MacCardData(
             // A plain screen rather than the real Mac's wallpaper: sample data shows nothing personal.
-            macInfo.copy(battery = 82, charging = true, laptop = true, locked = false, wallpaper = null), latencyMs = 9,
+            macInfo.copy(battery = 82, charging = true, laptop = true, locked = false, wallpaper = null),
             connectedSince = remember { System.currentTimeMillis() - 134 * 60_000L }, latest = activity.firstOrNull(), transfer = transfer,
             recent = activity.drop(1).take(4),
         )
     } else {
         // The newest entry has its own card beside the Mac, so Recent starts with the one after it.
-        app.wallhop.ui.screens.MacCardData(macInfo, latency, connectedSince, activity.firstOrNull(), transfer, activity.drop(1).take(4))
+        app.wallhop.ui.screens.MacCardData(macInfo, connectedSince, activity.firstOrNull(), transfer, activity.drop(1).take(4))
     }
     val ringing by app.wallhop.extras.PhoneFinder.ringing.collectAsStateWithLifecycle()
     val bluetooth by link.bluetooth.collectAsStateWithLifecycle()
@@ -1160,7 +1134,7 @@ private fun showBlockedAlert(overlays: Overlays, context: Context, key: Features
         title = "Allow $permission in Settings",
         message = "Android won't ask again. To use $feature, open Lync's settings, tap Permissions and allow $permission.",
         actions = listOf(
-            AlertAction("Open Settings", default = true) { openAppDetails(context) },
+            AlertAction("Open Settings", default = true) { app.wallhop.core.Open.appSettings(context) },
             AlertAction("Not now"),
         ),
     ))

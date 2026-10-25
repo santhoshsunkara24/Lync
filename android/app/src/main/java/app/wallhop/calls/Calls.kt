@@ -137,9 +137,6 @@ object CallTracker {
                 ?.use { if (it.moveToFirst()) it.getString(0) else null }
         }.getOrNull()
     }
-
-    private fun granted(context: Context, permission: String) =
-        ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
 }
 
 /**
@@ -173,9 +170,6 @@ object CallControl {
         }.getOrDefault("failed")
     }
 
-    private fun granted(context: Context, permission: String) =
-        ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
-
     /** Calls needs these: call state, the caller's number (call log) and answering. */
     val required = arrayOf(
         Manifest.permission.READ_PHONE_STATE,
@@ -185,3 +179,6 @@ object CallControl {
     /** Optional: names instead of numbers. Calls still work without it. */
     val optional = arrayOf(Manifest.permission.READ_CONTACTS)
 }
+
+private fun granted(context: Context, permission: String) =
+    ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED

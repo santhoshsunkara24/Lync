@@ -21,7 +21,7 @@ enum LinkEvent {
     case theme(seed: UInt32, accent: UInt32?)
     /// A phone paired by scanning this Mac's QR code; no confirmation needed.
     case pairedWithQR(name: String)
-    case connected(PairedPhone, host: String)
+    case connected(PairedPhone)
     case disconnected(PairedPhone)
     case text(String, from: PairedPhone)
     case otp(code: String, sender: String, app: String)
@@ -349,7 +349,6 @@ final class LinkServer {
         }
     }
 
-    /// Stops the QR on screen from working, e.g. when the panel closes.
     /// Stops `url`'s invite working, if it's still the current one: a QR leaving the screen must
     /// not cancel the newer QR that just replaced it.
     func cancelInvite(_ url: URL?) {
@@ -451,7 +450,7 @@ final class LinkServer {
     /// `connected`, after what the phone said about its version.
     private func emitConnected(_ connection: PhoneConnection, _ phone: PairedPhone) {
         emit(.phoneVersion(app: connection.phoneApp, protocolVersion: connection.phoneProtocol))
-        emit(.connected(phone, host: connection.remoteHost))
+        emit(.connected(phone))
     }
 
     func connectionClosed(_ connection: PhoneConnection) {

@@ -2,7 +2,6 @@ package app.wallhop.ui.screens
 
 import androidx.annotation.DrawableRes
 import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
@@ -32,7 +31,6 @@ import androidx.compose.foundation.layout.requiredWidth
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -65,7 +63,6 @@ import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.wallhop.R
@@ -101,7 +98,6 @@ fun OnboardingFrame(
     modifier: Modifier = Modifier,
     onBack: (() -> Unit)? = null,
     action: Pair<String, () -> Unit>? = null,
-    centered: Boolean = false,
     hero: @Composable BoxScope.() -> Unit,
     foot: @Composable ColumnScope.() -> Unit = {},
 ) {
@@ -116,7 +112,7 @@ fun OnboardingFrame(
     ) {
         OnboardingBar(onBack, action)
         Box(Modifier.weight(1f).fillMaxWidth(), content = hero)
-        OnboardingText(title, body, centered)
+        OnboardingText(title, body)
         Spacer(Modifier.height(28.dp))
         Column(Modifier.fillMaxWidth().heightIn(min = 56.dp), content = foot)
     }
@@ -139,16 +135,15 @@ private fun OnboardingBar(onBack: (() -> Unit)?, action: Pair<String, () -> Unit
 }
 
 @Composable
-private fun OnboardingText(title: String, body: String?, centered: Boolean) {
-    val align = if (centered) TextAlign.Center else TextAlign.Start
-    Column(Modifier.fillMaxWidth().heightIn(min = 104.dp), horizontalAlignment = if (centered) Alignment.CenterHorizontally else Alignment.Start) {
+private fun OnboardingText(title: String, body: String?) {
+    Column(Modifier.fillMaxWidth().heightIn(min = 104.dp)) {
         Text(
-            title, color = Color.White, textAlign = align,
+            title, color = Color.White, textAlign = TextAlign.Start,
             style = Type.pageTitle.copy(fontSize = 32.sp, lineHeight = 38.sp),
             modifier = Modifier.semantics { heading() },
         )
         if (body != null) {
-            Text(body, color = Muted, textAlign = align, style = Type.body.copy(fontSize = 16.sp, lineHeight = 23.sp), modifier = Modifier.padding(top = 10.dp))
+            Text(body, color = Muted, textAlign = TextAlign.Start, style = Type.body.copy(fontSize = 16.sp, lineHeight = 23.sp), modifier = Modifier.padding(top = 10.dp))
         }
     }
 }
@@ -175,24 +170,24 @@ fun QuietButton(label: String, onClick: () -> Unit, modifier: Modifier = Modifie
 }
 
 /** A soft mint light behind the hero. */
-private fun Modifier.mintGlow(strength: Float = 0.17f): Modifier = drawBehind {
+private fun Modifier.mintGlow(): Modifier = drawBehind {
     val r = size.minDimension * 0.62f
     drawCircle(
-        Brush.radialGradient(listOf(Mint.copy(alpha = strength), Mint.copy(alpha = strength * 0.25f), Color.Transparent), center, r),
+        Brush.radialGradient(listOf(Mint.copy(alpha = 0.17f), Mint.copy(alpha = 0.17f * 0.25f), Color.Transparent), center, r),
         radius = r, center = center,
     )
 }
 
 /** Progress for a one-off entrance, waiting until the screen is actually on show. */
 @Composable
-private fun rememberEntrance(delayMs: Long, stiffness: Float = 280f): Animatable<Float, *> {
+private fun rememberEntrance(delayMs: Long): Animatable<Float, *> {
     val reduceMotion = Wallhop.a11y.reduceMotion
     val active = LocalScreenActive.current
     val progress = remember { Animatable(if (reduceMotion) 1f else 0f) }
     LaunchedEffect(active) {
         if (!active || progress.value >= 1f) return@LaunchedEffect
         delay(delayMs)
-        progress.animateTo(1f, spring(dampingRatio = 0.82f, stiffness = stiffness))
+        progress.animateTo(1f, spring(dampingRatio = 0.82f, stiffness = 280f))
     }
     return progress
 }
@@ -299,10 +294,10 @@ fun IntroTour(onDone: () -> Unit) {
                         }
                     }
                     when (index) {
-                        0 -> OnboardingText("Your phone, on your Mac.", "Codes, files and calls, right where you work.", false)
-                        1 -> OnboardingText("Codes, already copied.", "A code arrives on your phone. Press ⌘V on your Mac.", false)
-                        2 -> OnboardingText("Send it. Paste it.", "Share anything to Lync, then ⌘V on your Mac.", false)
-                        else -> OnboardingText("Calls, on your Mac.", "See who's calling and read messages at your desk.", false)
+                        0 -> OnboardingText("Your phone, on your Mac.", "Codes, files and calls, right where you work.")
+                        1 -> OnboardingText("Codes, already copied.", "A code arrives on your phone. Press ⌘V on your Mac.")
+                        2 -> OnboardingText("Send it. Paste it.", "Share anything to Lync, then ⌘V on your Mac.")
+                        else -> OnboardingText("Calls, on your Mac.", "See who's calling and read messages at your desk.")
                     }
                 }
             }

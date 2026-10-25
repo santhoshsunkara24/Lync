@@ -254,7 +254,6 @@ class LinkManager private constructor(private val context: Context) {
 
     // MARK: - Lifecycle
 
-    /** Starts discovery and the reconnect loop. Safe to call many times. */
     init {
         // When the Mac reappears on the network (for example after it wakes), reconnect right away.
         discovery.onFound = { found ->
@@ -263,6 +262,7 @@ class LinkManager private constructor(private val context: Context) {
         }
     }
 
+    /** Starts discovery and the reconnect loop. Safe to call many times. */
     @Synchronized
     fun start() {
         discovery.start()
@@ -961,7 +961,6 @@ class LinkManager private constructor(private val context: Context) {
         }
     }
 
-    /** Sends a one-time code. Duplicates within three minutes (SMS plus its notification) are dropped. */
     /** Newest SMS already checked by [scanInboxForCodes]; starts at launch, so old texts are skipped. */
     @Volatile private var smsScannedUntil = System.currentTimeMillis()
 
@@ -997,6 +996,7 @@ class LinkManager private constructor(private val context: Context) {
         }
     }
 
+    /** Sends a one-time code. Duplicates within three minutes (SMS plus its notification) are dropped. */
     fun sendOtp(code: String, sender: String, app: String): Job? {
         val now = System.currentTimeMillis()
         recentCodes.entries.removeAll { now - it.value > 3 * 60_000 }
@@ -1384,10 +1384,6 @@ class LinkManager private constructor(private val context: Context) {
     }
 
     // MARK: - Helpers
-
-    fun removeActivity(id: String) {
-        _activity.update { list -> list.filterNot { it.id == id } }
-    }
 
     fun removeActivity(ids: Collection<String>) {
         val set = ids.toHashSet()

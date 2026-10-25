@@ -31,7 +31,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
@@ -52,7 +51,6 @@ import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
-import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.Constraints
@@ -62,18 +60,15 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.core.view.WindowCompat
 import app.wallhop.link.ActivityEntry
 import app.wallhop.link.LinkManager
 import app.wallhop.link.LinkState
 import app.wallhop.link.TransferPhase
 import app.wallhop.link.TransferState
 import app.wallhop.ui.components.LocalOverlays
-import app.wallhop.ui.components.LocalScreenActive
 import app.wallhop.ui.components.DisabledAlpha
 import app.wallhop.ui.components.ProgressBar
 import app.wallhop.ui.components.copyCode
-import app.wallhop.ui.components.spacedCode
 import app.wallhop.ui.design.Figtree
 import app.wallhop.ui.design.HomeColors
 import app.wallhop.ui.design.Ink
@@ -96,8 +91,6 @@ import app.wallhop.ui.design.staggerIn
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.SizeTransform
-import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -106,7 +99,6 @@ import androidx.compose.animation.scaleOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
-import androidx.compose.foundation.Canvas
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
@@ -133,7 +125,6 @@ class MacActions(
     val dismissTransfer: () -> Unit,
     /** Sends a failed transfer's files again. */
     val retryTransfer: (TransferState) -> Unit,
-    val openSettings: () -> Unit,
     val openActivity: () -> Unit,
     /** The Mac details sheet (DESIGN.md §6.4). */
     val macDetails: () -> Unit,
@@ -453,7 +444,7 @@ private fun Banner(
             Text(title, style = Label, color = Color.White)
             if (message != null) Text(message, style = Body, color = Color.White.copy(alpha = 0.78f), modifier = Modifier.padding(top = 2.dp))
         }
-        PillButton(null, action, home.pale, home.onPale, true, onAction)
+        PillButton(null, action, home.pale, home.onPale, onAction)
     }
 }
 
@@ -510,7 +501,7 @@ private fun AwayCard(macName: String, bluetooth: Boolean, reason: app.wallhop.co
                 val first = index == 0
                 PillButton(
                     fixIcon(fix), fix.label,
-                    if (first) home.pale else Color.White.copy(alpha = 0.12f), if (first) home.onPale else Color.White, true,
+                    if (first) home.pale else Color.White.copy(alpha = 0.12f), if (first) home.onPale else Color.White,
                     { if (fix == app.wallhop.core.Fix.TryAgain) actions.retryConnect() else actions.runFix(fix) },
                 )
             }
@@ -628,7 +619,7 @@ private fun cardRowHeight(name: String, meta: String, heroWidth: Dp, transfer: T
             text(transferMessage(it), Meta, small, 4)
     } ?: 0.dp
     val latestCard = latest?.let {
-        val title = if (it.kind == ActivityEntry.Kind.Otp) text(spacedCode(it.title), codeStyle(density.fontScale), small)
+        val title = if (it.kind == ActivityEntry.Kind.Otp) text(app.wallhop.core.Wording.spaced(it.title), codeStyle(density.fontScale), small)
             else text(it.title, TransferTitle, small, 3)
         32.dp + 8.dp + 48.dp + text(latestLabel(it), Overline, small) + title + text(it.detail, Meta, small, 2)
     } ?: 0.dp
@@ -762,10 +753,10 @@ private fun LatestCard(entry: ActivityEntry, home: HomeColors, actions: MacActio
             if (isCode) {
                 // A new code rolls in like an odometer, digit by digit (an old one just shows).
                 val fresh = remember(entry.id) { System.currentTimeMillis() - entry.time < 15_000 }
-                val groups = spacedCode(entry.title).split(' ')
+                val groups = app.wallhop.core.Wording.spaced(entry.title).split(' ')
                 // One line, "482 913", like everywhere else the code appears.
                 Row(
-                    Modifier.clearAndSetSemantics { contentDescription = spacedCode(entry.title) },
+                    Modifier.clearAndSetSemantics { contentDescription = app.wallhop.core.Wording.spaced(entry.title) },
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
                     var offset = 0L
@@ -783,7 +774,7 @@ private fun LatestCard(entry: ActivityEntry, home: HomeColors, actions: MacActio
             if (isCode) {
                 PillButton(
                     if (copied) WIcons.CheckCircle else WIcons.Clipboard, if (copied) "Copied" else "Copy",
-                    HomeColors.CodeMint, HomeColors.CodeForest, true,
+                    HomeColors.CodeMint, HomeColors.CodeForest,
                     onClick = {
                         copyCode(context, entry.title)
                         haptics.confirm()
@@ -794,7 +785,7 @@ private fun LatestCard(entry: ActivityEntry, home: HomeColors, actions: MacActio
                     description = if (copied) "Copied" else app.wallhop.core.Wording.copyCodeLabel(entry.title),
                 )
             } else {
-                PillButton(WIcons.Activity, "Activity", home.peekPale, home.onPeekPale, true, actions.openActivity, Modifier.fillMaxWidth())
+                PillButton(WIcons.Activity, "Activity", home.peekPale, home.onPeekPale, actions.openActivity, Modifier.fillMaxWidth())
             }
         }
     }
@@ -836,14 +827,14 @@ private fun TransferCard(transfer: TransferState, home: HomeColors, actions: Mac
                 // Files that couldn't be opened are picked again; anything else is sent again.
                 val choose = transfer.problem?.fix == app.wallhop.core.Fix.ChooseAgain
                 PillButton(if (choose) WIcons.Image else WIcons.Retry, if (choose) "Choose again" else "Try again",
-                    home.pale, home.onPale, true, { actions.retryTransfer(transfer) }, Modifier.fillMaxWidth())
+                    home.pale, home.onPale, { actions.retryTransfer(transfer) }, Modifier.fillMaxWidth())
                 Spacer(Modifier.height(8.dp))
-                PillButton(WIcons.XCircle, "Dismiss", Color.White.copy(alpha = 0.12f), Color.White, true,
+                PillButton(WIcons.XCircle, "Dismiss", Color.White.copy(alpha = 0.12f), Color.White,
                     actions.dismissTransfer, Modifier.fillMaxWidth())
             } else {
                 PillButton(
                     if (done) WIcons.CheckCircle else WIcons.XCircle, if (done) "Done" else "Cancel",
-                    home.pale, home.onPale, true,
+                    home.pale, home.onPale,
                     if (done) actions.dismissTransfer else actions.cancelTransfer,
                     Modifier.fillMaxWidth(),
                 )
@@ -857,10 +848,10 @@ private fun CardBox(width: Dp, color: Color, modifier: Modifier = Modifier, cont
     Column(modifier.width(width).clip(RoundedCornerShape(28.dp)).background(color)) { content() }
 }
 
-/** Pale pill button, the card's main action. Not [enabled]: dimmed, but a tap still explains why. */
+/** Pale pill button, the card's main action. */
 @Composable
 private fun PillButton(
-    icon: ImageVector?, label: String, container: Color, content: Color, enabled: Boolean,
+    icon: ImageVector?, label: String, container: Color, content: Color,
     onClick: () -> Unit, modifier: Modifier = Modifier,
     /** Cross-fade icon (with a little overshoot) and label when they change, e.g. Copy → Copied. */
     morph: Boolean = false,
@@ -877,7 +868,6 @@ private fun PillButton(
             .background(container)
             .tappable(source, onClick = onClick)
             .then(if (description != null) Modifier.semantics { contentDescription = description } else Modifier)
-            .alpha(if (enabled) 1f else DisabledAlpha)
             .padding(horizontal = 16.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.Center,

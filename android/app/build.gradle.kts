@@ -109,7 +109,6 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.10.0")
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.material3:material3")
-    implementation("androidx.compose.ui:ui-tooling-preview")
     // Installs the Compose libraries' baseline profiles on sideloaded APKs, so they start compiled.
     implementation("androidx.profileinstaller:profileinstaller:1.4.1")
     // QR pairing: CameraX for the preview, ZXing (Apache 2.0, no Google services) to decode.
@@ -119,8 +118,7 @@ dependencies {
     implementation("com.google.zxing:core:3.5.3")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
     implementation("com.google.crypto.tink:tink-android:1.15.0")
-    // Liquid Glass: backdrop blur, lens refraction, highlights and continuous (squircle) corners.
-    implementation("io.github.kyant0:backdrop:2.0.1")
+    // Continuous (squircle) corners.
     implementation("io.github.kyant0:shapes:1.2.1")
     if (glyphSdk.exists()) implementation(files(glyphSdk))
     debugImplementation("androidx.compose.ui:ui-tooling")

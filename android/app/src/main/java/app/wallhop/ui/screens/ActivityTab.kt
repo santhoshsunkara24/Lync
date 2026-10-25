@@ -2,11 +2,6 @@ package app.wallhop.ui.screens
 
 import app.wallhop.ui.design.WIcons
 import android.text.format.DateUtils
-import androidx.compose.animation.core.Animatable
-import androidx.compose.foundation.background
-import androidx.compose.foundation.gestures.Orientation
-import androidx.compose.foundation.gestures.draggable
-import androidx.compose.foundation.gestures.rememberDraggableState
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -25,17 +20,13 @@ import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.layout
-import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import app.wallhop.link.ActivityEntry
 import app.wallhop.ui.components.ActionSheetSpec
@@ -47,7 +38,6 @@ import app.wallhop.ui.components.ListRow
 import app.wallhop.ui.components.Overlays
 import app.wallhop.ui.components.SegmentedControl
 import app.wallhop.ui.components.copyCode
-import app.wallhop.ui.components.spacedCode
 import app.wallhop.ui.design.Haptic
 import app.wallhop.ui.design.Haptics
 import app.wallhop.ui.design.RollingCode
@@ -62,7 +52,6 @@ import app.wallhop.ui.design.Type
 import app.wallhop.ui.design.Wallhop
 import app.wallhop.ui.design.rememberHaptics
 import kotlinx.coroutines.launch
-import kotlin.math.roundToInt
 
 private val filters = listOf("All", "Codes", "Sent", "Calls")
 
@@ -74,7 +63,6 @@ private val filters = listOf("All", "Codes", "Sent", "Calls")
 fun ActivityTab(
     activity: List<ActivityEntry>,
     overlays: Overlays,
-    onDelete: (String) -> Unit,
     /** A tap on a row: copy a code, open a file or link, or the actions. */
     onTap: (ActivityEntry) -> Unit,
     /** Long press: the actions (Copy code, Send again, Delete). */
@@ -82,7 +70,6 @@ fun ActivityTab(
     /** "Clear older than a week" in the ⋯ menu; asks first, and offers Undo. */
     onClearOld: () -> Unit,
 ) {
-    val context = LocalContext.current
     val haptics = rememberHaptics()
     val scope = rememberCoroutineScope()
     val pager = rememberPagerState { filters.size }
@@ -132,7 +119,6 @@ fun ActivityTab(
                 selected = pager.targetPage,
                 onSelect = { scope.launch { pager.animateScrollToPage(it, animationSpec = Springs.smooth()) } },
                 position = { pager.currentPage + pager.currentPageOffsetFraction },
-                haptic = false,
             )
             Spacer(Modifier.height(24.dp))
             }
@@ -240,7 +226,7 @@ internal fun showEntryActions(
             if (entry.kind == ActivityEntry.Kind.FilesSent && entry.uris.isNotEmpty() && onSendAgain != null) {
                 add(AlertAction("Send again") { onSendAgain(entry) })
             }
-            linkOf(entry)?.let { url -> add(AlertAction("Open link") { openLink(context, url) }) }
+            linkOf(entry)?.let { url -> add(AlertAction("Open link") { app.wallhop.core.Open.link(context, url) }) }
             add(AlertAction("Delete", destructive = true) { onDelete(entry.id) })
         },
     ))
@@ -296,7 +282,7 @@ internal fun tapEntry(
     when {
         entry.kind == ActivityEntry.Kind.Otp -> copyEntryCode(overlays, context, entry, haptics)
         entry.kind == ActivityEntry.Kind.FromMac && entry.uris.isNotEmpty() -> openReceived(overlays, context, entry)
-        link != null -> openLink(context, link)
+        link != null -> app.wallhop.core.Open.link(context, link)
         else -> onActions(entry)
     }
 }
@@ -316,7 +302,7 @@ internal fun ActivityRow(entry: ActivityEntry, onLongClick: () -> Unit, onClick:
         ActivityEntry.Kind.FromMac -> WIcons.Laptop to colors.gray
         ActivityEntry.Kind.Call -> WIcons.CallMissed to colors.red
     }
-    val title = if (entry.kind == ActivityEntry.Kind.Otp) spacedCode(entry.title) else entry.title
+    val title = if (entry.kind == ActivityEntry.Kind.Otp) app.wallhop.core.Wording.spaced(entry.title) else entry.title
     // A code that just arrived rolls in digit by digit; older ones simply show.
     val fresh = remember(entry.id) { System.currentTimeMillis() - entry.time < 15_000 }
     ListRow(
