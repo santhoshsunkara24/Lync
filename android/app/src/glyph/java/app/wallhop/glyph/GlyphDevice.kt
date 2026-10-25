@@ -173,45 +173,48 @@ internal object GlyphDevice {
         manager.animate(frame)
     }
 
-    /** Glyph Matrix: the Lync droid. It blinks once for a connection and bobs while ringing. */
+    /**
+     * Glyph Matrix: Lync's link. For a connection its two hooks slide in from either side and clasp,
+     * like the logo's own animation; while the Mac rings the phone they squeeze together and back.
+     */
     private fun playMatrix(context: Context, effect: Glyphs.Effect) {
         val manager = matrixManager ?: return
         val n = Common.getDeviceMatrixLength()
-        fun show(dy: Int = 0, blink: Boolean = false) =
-            safely { manager.setAppMatrixFrame(frame(context, n, dy, blink)) }
-        show()
+        fun show(apart: Int = 0) = safely { manager.setAppMatrixFrame(frame(context, n, apart)) }
         when (effect) {
             Glyphs.Effect.Connected -> {
-                later(1_200) { show(blink = true) }
-                later(1_380) { show() }
+                show(apart = 2)
+                later(110) { show(apart = 1) }
+                later(200) { show() }
             }
             Glyphs.Effect.Ringing -> {
-                var down = false
-                val bob = object : Runnable {
+                show()
+                var squeezed = false
+                val pulse = object : Runnable {
                     override fun run() {
-                        down = !down
-                        show(dy = if (down) 1 else 0)
+                        squeezed = !squeezed
+                        show(apart = if (squeezed) -1 else 0)
                         main.postDelayed(this, 350)
                     }
                 }
-                steps += bob
-                main.postDelayed(bob, 350)
+                steps += pulse
+                main.postDelayed(pulse, 350)
             }
         }
     }
 
-    private fun frame(context: Context, n: Int, dy: Int, blink: Boolean): IntArray {
-        val grid = Glyphs.matrix(n, dy, blink)
+    private fun frame(context: Context, n: Int, apart: Int): IntArray {
+        val grid = Glyphs.matrix(n, apart)
         val bitmap = Bitmap.createBitmap(n, n, Bitmap.Config.ARGB_8888)
         for (i in grid.indices) bitmap.setPixel(i % n, i / n, if (grid[i]) Color.WHITE else Color.BLACK)
-        val droid = GlyphMatrixObject.Builder()
+        val link = GlyphMatrixObject.Builder()
             .setImageSource(bitmap)
             .setScale(100)
             .setOrientation(0)
             .setPosition(0, 0)
             .setBrightness(255)
             .build()
-        return GlyphMatrixFrame.Builder().addTop(droid).build(context).render()
+        return GlyphMatrixFrame.Builder().addTop(link).build(context).render()
     }
 
     // ---- Helpers -----------------------------------------------------------------------------

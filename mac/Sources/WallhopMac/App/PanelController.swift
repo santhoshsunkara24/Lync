@@ -64,9 +64,10 @@ final class PanelController {
     /// `fromKeyboard`: opened with ⌥⌘L, so it's there at once (a 100 ms fade, no reveal).
     func open(byHover: Bool, user: Bool = true, fromKeyboard: Bool = false) {
         if user { model.noteUserOpenedPanel() }
-        if model.panelOpen { if !byHover { openedByHover = false }; panel.makeKey(); return }
+        if model.panelOpen { if !byHover { openedByHover = false }; if user { panel.makeKey() }; return }
         openedByHover = byHover
         opening.instant = fromKeyboard
+        opening.takesKeys = user && !byHover
         model.openPanel()
     }
 
@@ -93,7 +94,9 @@ final class PanelController {
             panel.alphaValue = 0
         }
         panel.orderFrontRegardless()
-        panel.makeKey()
+        // Typing stays with the app you're in unless you opened Lync yourself; a click inside
+        // takes it then.
+        if opening.takesKeys { panel.makeKey() }
         if instant || !inNotch {
             NSAnimationContext.runAnimationGroup { context in
                 context.duration = instant ? WMotion.instantFade : WMotion.panelFade
@@ -182,6 +185,19 @@ final class PanelController {
         // Esc goes back from Settings or Add a phone, then closes.
         if let keys = NSEvent.addLocalMonitorForEvents(matching: .keyDown, handler: { [weak self] event in
             guard let self, event.window === self.panel else { return event }
+            let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+            // ⌘W closes, like any window; ⌘, opens Settings (again: back Home).
+            if mods == .command, event.keyCode == 13 { self.model.closePanel(); return nil }
+            if mods == .command, event.keyCode == 43 {
+                self.model.panelPage = self.model.panelPage == .settings ? .home : .settings
+                return nil
+            }
+            // ↓ and ↑ move through the rows and buttons, like Tab and ⇧Tab, unless typing.
+            if mods.isEmpty || mods == .numericPad || mods == [.numericPad, .function],
+               event.keyCode == 125 || event.keyCode == 126, !(self.panel.firstResponder is NSText) {
+                if event.keyCode == 125 { self.panel.selectNextKeyView(nil) } else { self.panel.selectPreviousKeyView(nil) }
+                return nil
+            }
             // ⌘C with no text field focused copies the latest code.
             if event.keyCode == 8, event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command,
                !(self.panel.firstResponder is NSText) {
@@ -199,6 +215,12 @@ final class PanelController {
             }
             return nil
         }) { monitors.append(keys) }
+        // A click on the notch itself closes it again, as it opened.
+        if let notchClick = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown, handler: { [weak self] event in
+            guard let self, event.window === self.panel, self.inNotch, self.onNotch(NSEvent.mouseLocation) else { return event }
+            self.model.closePanel()
+            return nil
+        }) { monitors.append(notchClick) }
         // A click anywhere else closes.
         if let clicks = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown], handler: { [weak self] _ in
             guard let self, !self.panel.frame.contains(NSEvent.mouseLocation) else { return }
@@ -219,6 +241,14 @@ final class PanelController {
         }
     }
 
+    /// The point is on the notch's black area (the panel is drawn under it while open).
+    private func onNotch(_ point: NSPoint) -> Bool {
+        guard let screen = NSScreen.screens.first(where: { $0.safeAreaInsets.top > 0 }),
+              let left = screen.auxiliaryTopLeftArea, let right = screen.auxiliaryTopRightArea else { return false }
+        return point.y >= screen.frame.maxY - screen.safeAreaInsets.top
+            && point.x > screen.frame.minX + left.width && point.x < screen.frame.maxX - right.width
+    }
+
     private func removeMonitors() {
         monitors.forEach(NSEvent.removeMonitor)
         monitors.removeAll()
@@ -232,6 +262,8 @@ final class PanelController {
 private final class PanelOpening {
     /// Opened from the keyboard: no reveal, everything there at once.
     var instant = false
+    /// Opened by the user, so it takes the keyboard; opened by Lync itself, typing stays put.
+    var takesKeys = true
 }
 
 /// The panel's shape: square top under the notch (it grows out of it), rounded elsewhere.
@@ -260,10 +292,12 @@ private struct PanelRoot: View {
             ? AnyShape(NotchRevealShape(progress: shown || reduce ? 1 : 0, notch: Self.notchSize))
             : AnyShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
         PanelView(model: model, theme: theme, fromNotch: inNotch)
+            // Increase Contrast or Reduce Transparency changed: everything redraws with the new colours.
+            .id(motion.appearanceKey)
             .environment(\.panelRevealed, inNotch ? shown : true)
             .environment(\.panelRevealInstant, instant)
             .clipShape(shape)
-            .overlay(shape.stroke(Color.white.opacity(inNotch ? 0 : 0.08), lineWidth: 1))
+            .overlay(shape.stroke(inNotch ? Color.clear : WTheme.edge, lineWidth: 1))
             .fixedSize()
             .background(GeometryReader { proxy in
                 Color.clear.onAppear { onSize(proxy.size) }.onChange(of: proxy.size) { _, size in onSize(size) }
@@ -323,6 +357,9 @@ private final class PanelDropView: NSView {
 final class NotchSensor {
     private let window: NSPanel
     private let view: SensorView
+    /// The notch swelling a touch under the pointer: drawn in its own window that takes no clicks,
+    /// so the menu bar around the notch stays exactly as clickable as before.
+    private let lip = NotchLip()
 
     init(onHover: @escaping () -> Void, onClick: @escaping () -> Void, drop: FileDropHandler, menu: @escaping () -> NSMenu) {
         window = NSPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)
@@ -334,6 +371,7 @@ final class NotchSensor {
         window.ignoresMouseEvents = false
         view = SensorView(onHover: onHover, onClick: onClick, drop: drop, menu: menu)
         window.contentView = view
+        view.onPointer = { [lip] inside in lip.swell(inside) }
     }
 
     /// Covers the notch on the built-in display; hidden when there's no notch or in menu bar mode.
@@ -342,6 +380,7 @@ final class NotchSensor {
         guard active, let screen = NSScreen.screens.first(where: { $0.safeAreaInsets.top > 0 }),
               let left = screen.auxiliaryTopLeftArea, let right = screen.auxiliaryTopRightArea else {
             window.orderOut(nil)
+            lip.hide()
             if ProcessInfo.processInfo.environment["WALLHOP_CAPTURE"] == "1" { NSLog("Lync: sensor visible=\(window.isVisible)") }
             return
         }
@@ -352,6 +391,77 @@ final class NotchSensor {
         view.frame = NSRect(origin: .zero, size: window.frame.size)
         view.resetTracking()
         window.orderFrontRegardless()
+        lip.place(notch: window.frame)
+    }
+}
+
+/// A black notch-shaped layer exactly over the notch, invisible at rest (black on black). Under
+/// the pointer it springs 6 pt wider and 3 pt deeper, and back when the pointer leaves: the notch
+/// answers before the click. Nothing moves with Reduce Motion.
+private final class NotchLip {
+    private let window: NSPanel
+    private let shape = CAShapeLayer()
+    private var notch = NSRect.zero
+    private static let grow = CGSize(width: 6, height: 3)
+
+    init() {
+        window = NSPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)
+        window.isOpaque = false
+        window.backgroundColor = .clear
+        window.hasShadow = false
+        window.ignoresMouseEvents = true
+        window.level = NSWindow.Level(rawValue: NSWindow.Level.statusBar.rawValue + 1)
+        window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
+        let view = NSView()
+        view.wantsLayer = true
+        shape.fillColor = NSColor.black.cgColor
+        view.layer?.addSublayer(shape)
+        window.contentView = view
+        CapturePrivacy.apply(window)
+    }
+
+    func place(notch: NSRect) {
+        self.notch = notch
+        let frame = NSRect(x: notch.minX - Self.grow.width, y: notch.minY - Self.grow.height,
+                           width: notch.width + Self.grow.width * 2, height: notch.height + Self.grow.height)
+        window.setFrame(frame, display: true)
+        shape.frame = CGRect(origin: .zero, size: frame.size)
+        shape.path = path(swollen: false)
+        window.orderFrontRegardless()
+    }
+
+    func hide() { window.orderOut(nil) }
+
+    func swell(_ inside: Bool) {
+        guard notch.width > 0, !WMotion.reduceMotion else { return }
+        let to = path(swollen: inside)
+        let spring = CASpringAnimation(keyPath: "path")
+        spring.fromValue = shape.presentation()?.path ?? shape.path
+        spring.toValue = to
+        // Apple's numbers for a small, quick, no-bounce response.
+        spring.mass = 1; spring.stiffness = 420; spring.damping = 2 * sqrt(420) * (inside ? 0.85 : 1)
+        spring.duration = spring.settlingDuration
+        shape.path = to
+        shape.add(spring, forKey: "swell")
+    }
+
+    /// The notch's shape in the window: flat top, rounded bottom corners, grown or not.
+    private func path(swollen: Bool) -> CGPath {
+        let w = notch.width + (swollen ? Self.grow.width * 2 : 0)
+        let h = notch.height + (swollen ? Self.grow.height : 0)
+        let x = (shape.bounds.width - w) / 2
+        let top = shape.bounds.height
+        let rect = CGRect(x: x, y: top - h, width: w, height: h)
+        let r: CGFloat = swollen ? 11 : 9
+        let p = CGMutablePath()
+        p.move(to: CGPoint(x: rect.minX, y: rect.maxY))
+        p.addLine(to: CGPoint(x: rect.minX, y: rect.minY + r))
+        p.addQuadCurve(to: CGPoint(x: rect.minX + r, y: rect.minY), control: CGPoint(x: rect.minX, y: rect.minY))
+        p.addLine(to: CGPoint(x: rect.maxX - r, y: rect.minY))
+        p.addQuadCurve(to: CGPoint(x: rect.maxX, y: rect.minY + r), control: CGPoint(x: rect.maxX, y: rect.minY))
+        p.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY))
+        p.closeSubpath()
+        return p
     }
 }
 
@@ -388,9 +498,16 @@ private final class SensorView: NSView {
 
     // The notch opens on a click only: hovering it does nothing, so moving the pointer to the top
     // of the screen (menus, tabs, fullscreen toolbars) never pops the panel open by accident.
-    override func mouseEntered(with event: NSEvent) {}
+    /// The pointer arriving on or leaving the notch: it swells to say it's clickable (it still
+    /// opens only on a click).
+    var onPointer: (Bool) -> Void = { _ in }
 
-    override func mouseExited(with event: NSEvent) {}
+    override func mouseEntered(with event: NSEvent) {
+        guard NSEvent.pressedMouseButtons == 0 else { return }
+        onPointer(true)
+    }
+
+    override func mouseExited(with event: NSEvent) { onPointer(false) }
 
     override func mouseDown(with event: NSEvent) {
         if event.modifierFlags.contains(.control) {

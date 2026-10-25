@@ -18,6 +18,10 @@ import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.clickable
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.layout.onSizeChanged
+import kotlinx.coroutines.launch
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBars
@@ -73,6 +77,7 @@ fun Page(
     val colors = Wallhop.colors
     val home = Wallhop.home
     val density = LocalDensity.current
+    app.wallhop.ui.design.ScrollToTopOnReselect(state)
     val collapseAt = with(density) { 72.dp.toPx() }
     val collapsed by remember {
         derivedStateOf { state.firstVisibleItemIndex > 0 || state.firstVisibleItemScrollOffset > collapseAt }
@@ -92,6 +97,8 @@ fun Page(
     ) {
         // Tablets and landscape: content stays a readable column, centred (the background still fills).
         val extra = ((maxWidth - start - end - MaxContentWidth) / 2).coerceAtLeast(0.dp)
+        // The Back row is pinned above the list (see below); the list leaves room for it.
+        var pinnedHeight by remember { androidx.compose.runtime.mutableIntStateOf(0) }
         // The page's first rows fade up in turn each time it comes on show.
         androidx.compose.runtime.CompositionLocalProvider(LocalStagger provides rememberStaggerClock()) {
         LazyColumn(
@@ -112,11 +119,7 @@ fun Page(
                         .padding(bottom = 22.dp),
                 ) {
                     if (leading != null) {
-                        Row(Modifier.fillMaxWidth().padding(bottom = 18.dp), verticalAlignment = Alignment.CenterVertically) {
-                            leading()
-                            Spacer(Modifier.weight(1f))
-                            trailing?.invoke()
-                        }
+                        Spacer(Modifier.height(with(density) { pinnedHeight.toDp() } + 18.dp))
                     }
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(title, style = Type.pageTitle, color = colors.label, modifier = Modifier.weight(1f).semantics { heading() })
@@ -144,8 +147,37 @@ fun Page(
                 .graphicsLayer { alpha = fade }
                 .background(Brush.verticalGradient(0f to home.top, solid / total to home.top, 1f to home.top.copy(alpha = 0f))),
         ) {
+            // Tapping the small title goes back to the top, like the status bar on iOS.
+            val scope = androidx.compose.runtime.rememberCoroutineScope()
+            val reduceMotion = Wallhop.a11y.reduceMotion
             Text(title, style = Type.headline, color = colors.label, maxLines = 1, overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.align(Alignment.TopCenter).padding(top = statusBar + 18.dp))
+                modifier = Modifier.align(Alignment.TopCenter).padding(top = statusBar + 6.dp)
+                    .then(if (collapsed) Modifier.clickable(
+                        interactionSource = null, indication = null, onClickLabel = "Scroll to top",
+                    ) { scope.launch { if (reduceMotion) state.scrollToItem(0) else state.animateScrollToItem(0) } } else Modifier)
+                    .padding(horizontal = 16.dp, vertical = 12.dp))
+        }
+        // The page's buttons stay where the thumb expects them while the content scrolls under:
+        // Back (and its partner) always; a lone button beside the large title joins the small one.
+        if (leading != null) {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(start = start + extra + 20.dp, end = end + extra + 20.dp, top = statusBar + 14.dp)
+                    .onSizeChanged { pinnedHeight = it.height },
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                leading()
+                Spacer(Modifier.weight(1f))
+                trailing?.invoke()
+            }
+        } else if (trailing != null && collapsed) {
+            Box(
+                Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(end = end + extra + 20.dp, top = statusBar + 10.dp)
+                    .graphicsLayer { alpha = fade },
+            ) { trailing() }
         }
         val canScroll by remember { derivedStateOf { state.canScrollForward } }
         val bottomFade by animateFloatAsState(if (canScroll) 1f else 0f, Springs.smooth(), label = "bottomEdge")

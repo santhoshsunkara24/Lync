@@ -182,8 +182,10 @@ struct ToastView: View {
         .frame(minHeight: 36)
         .frame(maxWidth: toast.detail == nil ? nil : 340)
         .background(shape.fill(theme.theme.card))
-        .overlay(shape.strokeBorder(Color.white.opacity(0.12), lineWidth: 1))
+        .overlay(shape.strokeBorder(WTheme.edge, lineWidth: 1))
         .shadow(color: .black.opacity(0.35), radius: 10, y: 4)
+        // Reading it, or reaching for Undo: it waits.
+        .onHover { model.toastHovered = $0 }
         .accessibilityElement(children: .combine)
     }
 
@@ -457,7 +459,19 @@ private struct PhoneCard: View {
             .background(theme.theme.card)
         }
         .clipShape(RoundedRectangle(cornerRadius: WRadius.card, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: WRadius.card, style: .continuous).strokeBorder(Color.white.opacity(0.06), lineWidth: 1))
+        .overlay(RoundedRectangle(cornerRadius: WRadius.card, style: .continuous).strokeBorder(WTheme.edge, lineWidth: 1))
+        // Right-click: what you'd do with the phone, without hunting for the buttons.
+        .contextMenu {
+            if connected {
+                Button("Ring phone") { model.ringPhone() }
+                Button("Send clipboard") { model.sendClipboardToPhone() }
+                Button("Send files…") { model.chooseFilesToSend() }
+                Button("Texts") { model.openMessages() }
+                Divider()
+            }
+            Button("Add a phone") { model.panelPage = .addPhone }
+            Button("Settings") { model.panelPage = .settings }
+        }
         .accessibilityElement(children: .combine)
         .animation(WMotion.animation(WMotion.smooth), value: connected)
     }
@@ -569,6 +583,8 @@ private struct SectionTitle: View {
 private struct LatestCodeCard: View {
     @ObservedObject var model: AppModel
     let code: (code: String, sender: String, item: ActivityItem)
+    /// A click anywhere on the card copies, with the button's own tick.
+    @State private var copyTrigger = 0
 
     var body: some View {
         // Codes use Lync's fixed Forest and Mint, not the phone's accent.
@@ -583,10 +599,16 @@ private struct LatestCodeCard: View {
                     .font(.wh(12, .medium)).foregroundStyle(WTheme.codeSecondary).lineLimit(1)
             }
             Spacer(minLength: 0)
-            CopyButton(style: CodePill(), label: "Copy code \(spaced(code.code))") { model.copy(code.item) }
+            CopyButton(style: CodePill(), label: "Copy code \(spaced(code.code))", trigger: copyTrigger) { model.copy(code.item) }
         }
         .padding(16)
         .background(RoundedRectangle(cornerRadius: WRadius.card, style: .continuous).fill(WTheme.codeForest))
+        .contentShape(RoundedRectangle(cornerRadius: WRadius.card, style: .continuous))
+        .onTapGesture { copyTrigger += 1 }
+        .contextMenu {
+            Button("Copy code") { copyTrigger += 1 }
+            Button("Remove", role: .destructive) { model.remove(code.item) }
+        }
         .accessibilityElement(children: .contain)
     }
 }
@@ -661,6 +683,7 @@ private struct NotificationRow: View {
     @FocusState private var focus: Field?
 
     private var replying: Bool { model.inlineReplyKey == notification.key }
+    private var showActions: Bool { !replying && (hovering || (focus != nil && focus != .field && focus != .send)) }
     private var title: String {
         model.hideNotificationText || notification.title.isEmpty ? notification.appName : notification.title
     }
@@ -696,21 +719,34 @@ private struct NotificationRow: View {
                     }
                     .padding(.top, 8)
                     .onAppear { DispatchQueue.main.async { focus = .field } }
-                } else if hovering || focus != nil {
-                    HStack(spacing: 6) {
-                        if notification.canReply {
-                            Button("Reply", action: startReply).buttonStyle(WPill(compact: true))
-                                .focused($focus, equals: .reply)
-                        }
-                        Button("Clear") { model.dismissNotification(notification.key) }
-                            .buttonStyle(WPill(prominent: false, compact: true))
-                            .help("Also clears it on your phone")
-                            .focused($focus, equals: .clear)
-                    }
-                    .padding(.top, 6)
                 }
             }
+            // Under the buttons the words fade out rather than being covered.
+            .mask(
+                LinearGradient(stops: [.init(color: .black, location: 0),
+                                       .init(color: .black, location: showActions ? 0.42 : 1),
+                                       .init(color: .black.opacity(showActions ? 0 : 1), location: showActions ? 0.6 : 1)],
+                               startPoint: .leading, endPoint: .trailing)
+            )
         }
+        // The buttons float over the row's end instead of adding a line, so the list never shifts
+        // under the pointer as it moves down it.
+        .overlay(alignment: .trailing) {
+            if showActions {
+                HStack(spacing: 6) {
+                    if notification.canReply {
+                        Button("Reply", action: startReply).buttonStyle(WPill(compact: true))
+                            .focused($focus, equals: .reply)
+                    }
+                    Button("Clear") { model.clearNotification(notification.key) }
+                        .buttonStyle(WPill(prominent: false, compact: true))
+                        .help("Also clears it on your phone")
+                        .focused($focus, equals: .clear)
+                }
+                .transition(.opacity)
+            }
+        }
+        .animation(WMotion.reduceMotion ? nil : .easeOut(duration: 0.12), value: showActions)
         .padding(12)
         .contentShape(Rectangle())
         .rowHover()
@@ -823,6 +859,9 @@ private struct RecentRow: View {
         .contentShape(Rectangle())
         .rowHover()
         .onChange(of: failed) { _, now in if now { failShakes += 1 } }
+        // Files: double-click opens them, as in Finder. Only rows with files wait to tell a
+        // double-click from a click; codes still copy on the first.
+        .modifier(OpenOnDoubleClick(files: files))
         .onTapGesture { if copyable { copyTrigger += 1 } }
         .modifier(FileDrag(url: files.first))
         // Keyboard: Tab to the row; Return copies. Only keyboard navigation focuses it (a click
@@ -1041,7 +1080,10 @@ private struct OnboardingPage: View {
         ZStack(alignment: .topTrailing) {
             Group {
                 switch model.onboardingStep {
-                case .hotkey: hotkeyStep
+                case .hotkey:
+                    // Shown once: counted as seen as soon as it appears, so the next launch starts
+                    // at the QR even if this one was closed without pressing the keys.
+                    hotkeyStep.onAppear { UserDefaults.standard.set(true, forKey: "onboardingHotkeySeen") }
                 case .scan: scanStep
                 }
             }
@@ -1140,8 +1182,8 @@ private struct WaitingArc: View {
 }
 
 /// A keyboard key for "Lync lives here": a dark cap on a thicker bottom edge. The accent key has a
-/// mint edge and, while `pulsing`, presses itself down every couple of seconds (never with Reduce
-/// Motion).
+/// mint edge and, while `pulsing`, presses itself down three times, a couple of seconds apart
+/// (never with Reduce Motion).
 private struct Keycap: View {
     let label: String
     var accent = false
@@ -1164,7 +1206,8 @@ private struct Keycap: View {
         .frame(height: 54, alignment: .bottom)
         .task(id: pulsing) {
             guard pulsing else { down = false; return }
-            while !Task.isCancelled {
+            // Three presses show what to do; then it rests, rather than tapping away forever.
+            for _ in 0..<3 where !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(1.6))
                 guard !Task.isCancelled, !WMotion.reduceMotion else { continue }
                 withAnimation(WMotion.press) { down = true }
@@ -1410,7 +1453,10 @@ private struct SettingsPage: View {
     }
 
     private func toggle(_ title: String, _ value: Binding<Bool>) -> some View {
+        // The whole row is the target, as in System Settings: a click on the words toggles too.
         row(title) { WSwitch(isOn: value, label: title) }
+            .contentShape(Rectangle())
+            .onTapGesture { value.wrappedValue.toggle() }
     }
 
     private func row<Trailing: View>(_ title: String, @ViewBuilder trailing: () -> Trailing) -> some View {
@@ -1458,7 +1504,9 @@ struct MaybeScroll<Content: View>: View {
     @ViewBuilder let content: () -> Content
 
     var body: some View {
-        if Self.scrolls { ScrollView(showsIndicators: false, content: content) } else { content() }
+        // The system's overlay scroller: it shows only while scrolling, so there's a sign of more
+        // below without a permanent bar.
+        if Self.scrolls { ScrollView(content: content).scrollIndicators(.automatic) } else { content() }
     }
 }
 
@@ -1528,6 +1576,18 @@ struct CopyButton<S: ButtonStyle>: View {
         let token = resetToken
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.4) {
             if token == resetToken { copied = false }
+        }
+    }
+}
+
+/// Double-click opens the row's files in their apps (several: each one).
+private struct OpenOnDoubleClick: ViewModifier {
+    let files: [URL]
+    func body(content: Content) -> some View {
+        if files.isEmpty {
+            content
+        } else {
+            content.onTapGesture(count: 2) { files.forEach { NSWorkspace.shared.open($0) } }
         }
     }
 }

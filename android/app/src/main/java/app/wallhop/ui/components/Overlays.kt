@@ -1,5 +1,7 @@
 package app.wallhop.ui.components
 
+import app.wallhop.ui.design.pressDim
+
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
@@ -11,6 +13,8 @@ import androidx.compose.animation.scaleOut
 import androidx.compose.animation.togetherWith
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.ExitTransition
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -58,6 +62,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.liveRegion
@@ -139,6 +146,8 @@ class Overlays {
     var actionSheet by mutableStateOf<ActionSheetSpec?>(null); private set
     var menu by mutableStateOf<MenuSpec?>(null); private set
     var toast by mutableStateOf<ToastSpec?>(null); private set
+    /** The open sheet's drag, so the dim behind it follows the finger. */
+    internal var sheetDrag by mutableStateOf<SwipeDismiss?>(null)
 
     /** Something modal is up: the screen behind is hidden from TalkBack until it closes. */
     val modal: Boolean get() = sheet != null || alert != null || actionSheet != null || menu != null
@@ -229,6 +238,8 @@ fun BoxScope.OverlayHost(overlays: Overlays, toastBottom: androidx.compose.ui.un
         Box(
             Modifier
                 .fillMaxSize()
+                // Lighter as a sheet is pulled down, so the screen behind comes back with the finger.
+                .graphicsLayer { alpha = if (overlays.alert != null) 1f else 1f - (overlays.sheetDrag?.progress ?: 0f) }
                 .background(Color.Black.copy(alpha = if (overlays.alert != null) 0.2f else 0.25f))
                 .tappable(source) {
                     when {
@@ -269,23 +280,27 @@ private fun BoxScope.SheetLayer(overlays: Overlays) {
     if (visible.isIdle && !visible.currentState && overlays.sheet == null) shown = null
     val spec = shown ?: return
     BackHandler(enabled = overlays.sheet != null) { overlays.dismissSheet() }
+    // One drag per sheet, so a new one always starts at rest.
+    val drag = rememberSwipeDismiss(spec) { overlays.dismissSheet() }
+    DisposableEffect(drag) {
+        overlays.sheetDrag = drag
+        onDispose { if (overlays.sheetDrag === drag) overlays.sheetDrag = null }
+    }
 
     AnimatedVisibility(
         visibleState = visible,
         modifier = Modifier.align(Alignment.BottomCenter),
-        // From fully below the screen, so it never shows up half-cut at the bottom edge.
-        enter = slideUpIn(reduceMotion) { it },
-        exit = slideDownOut(reduceMotion),
+        // From fully below the screen, so it never shows up half-cut at the bottom edge. A sheet
+        // is a big surface arriving without momentum behind it: it settles, it doesn't bounce.
+        enter = if (reduceMotion) fadeIn(tween(Durations.Quick)) else slideInVertically(Springs.sheetIn()) { it },
+        // Thrown off by the finger, it's already gone: nothing more to animate.
+        exit = if (drag.gone) ExitTransition.None else slideDownOut(reduceMotion),
     ) {
         // Fully drawn as soon as it's on screen; the enter/exit transition does the motion.
         // (An animated "appear" here could stop short on some phones and leave the sheet
         // half see-through, blended with the screen behind it.)
         val scope = rememberCoroutineScope()
-        val drag = remember { Animatable(0f) }
-        var height by remember { mutableStateOf(1) }
-        val dragState = rememberDraggableState { delta ->
-            scope.launch { drag.snapTo((drag.value + delta).coerceAtLeast(0f)) }
-        }
+        val dragState = rememberDraggableState { delta -> drag.drag(delta) }
         val shape = rounded(Radius.sheet)
         Column(
             Modifier
@@ -294,8 +309,8 @@ private fun BoxScope.SheetLayer(overlays: Overlays) {
                 .navigationBarsPadding()
                 .imePadding()
                 .padding(bottom = if (spec.large) 0.dp else 8.dp)
-                .offset { IntOffset(0, drag.value.roundToInt()) }
-                .onSizeChanged { height = it.height }
+                .offset { IntOffset(0, drag.offset.value.roundToInt()) }
+                .onSizeChanged { drag.extent = it.height.toFloat() }
                 // Always a solid surface: the slide is the entrance.
                 .clip(shape)
                 .background(colors.backgroundElevated)
@@ -304,20 +319,15 @@ private fun BoxScope.SheetLayer(overlays: Overlays) {
                     paneTitle = spec.title ?: "Sheet"
                     dialog()
                 }
+                // Scrolling content inside hands its overscroll to the sheet.
+                .swipeDismissScroll(drag)
                 .draggable(
                     dragState,
                     Orientation.Vertical,
-                    onDragStopped = { velocity ->
-                        if (drag.value > height * 0.25f || velocity > 1800f) {
-                            // Leaves from where the finger let go: no reset here, or the sheet would
-                            // jump back up for a frame before sliding away. A new sheet starts at 0.
-                            overlays.dismissSheet()
-                        } else {
-                            drag.animateTo(0f, Springs.snappy())
-                        }
-                    },
+                    onDragStarted = { drag.grab() },
+                    // Thrown or let go: it leaves at the finger's speed, or springs back the same way.
+                    onDragStopped = { velocity -> drag.release(velocity, { overlays.dismissSheet() }) },
                 )
-                
         ) {
             Box(
                 Modifier
@@ -351,14 +361,13 @@ private fun BoxScope.MenuLayer(overlays: Overlays) {
     val colors = Wallhop.colors
     val reduceMotion = Wallhop.a11y.reduceMotion
     val density = LocalDensity.current
-    val haptics = rememberHaptics()
     var shown by remember { mutableStateOf<MenuSpec?>(null) }
     val progress = remember { Animatable(0f) }
     LaunchedEffect(overlays.menu) {
         val target = overlays.menu
         if (target != null) {
             shown = target
-            haptics.perform(Haptic.Light)
+            // No buzz for a menu opened by a tap: the menu growing out of the button is the answer.
             if (reduceMotion) progress.snapTo(1f) else progress.animateTo(1f, Springs.menu())
         } else if (shown != null) {
             if (reduceMotion) progress.snapTo(0f) else progress.animateTo(0f, Springs.dematerialize())
@@ -581,23 +590,37 @@ private fun BoxScope.ToastLayer(overlays: Overlays, bottom: androidx.compose.ui.
     var shown by remember { mutableStateOf<ToastSpec?>(null) }
     val current = overlays.toast
     if (current != null) shown = current
+    // A finger on the toast (reading it, reaching for Undo, dragging it) stops the clock.
+    var held by remember { mutableStateOf(false) }
     LaunchedEffect(current?.id) {
         if (current != null) {
             if (current.tint == colors.red || current.failure) haptics.perform(Haptic.Failure)
             // Longer when there's a button to reach (Undo) or a second line to read, and as long
             // as the user's accessibility settings ask for (TalkBack, "Time to take action").
-            delay(toastDuration(context, current.action != null || current.detail != null))
+            var left = toastDuration(context, current.action != null || current.detail != null)
+            var wasHeld = false
+            while (left > 0) {
+                delay(100)
+                if (held) wasHeld = true
+                else {
+                    // Let go: at least a moment more to finish reading.
+                    if (wasHeld) { left = maxOf(left, 1_500); wasHeld = false }
+                    left -= 100
+                }
+            }
             overlays.clearToast(current.id)
         }
     }
+    val drag = rememberSwipeDismiss(current?.id ?: shown?.id) { current?.let { overlays.clearToast(it.id) } }
     AnimatedVisibility(
         current != null,
         modifier = Modifier.align(Alignment.BottomCenter),
         // Rises just above the tab bar (and the keyboard), clear of the screen's title; leaves back
         // down. Never from scale 0: a short rise with a fade.
         enter = if (reduceMotion) fadeIn(tween(Durations.Quick))
-            else slideInVertically(Springs.materialize()) { it / 2 } + fadeIn(tween(Durations.Quick, easing = Easings.Out)),
-        exit = if (reduceMotion) fadeOut(tween(Durations.Quick))
+            else slideInVertically(Springs.sheetIn()) { it / 2 } + fadeIn(tween(Durations.Quick, easing = Easings.Out)),
+        // Swiped away, it has already left at the finger's speed.
+        exit = if (drag.gone) ExitTransition.None else if (reduceMotion) fadeOut(tween(Durations.Quick))
             else slideOutVertically(Springs.dematerialize()) { it / 2 } + fadeOut(tween(Durations.Quick, easing = Easings.Out)),
     ) {
         // Fully drawn as soon as it's on screen; the enter/exit transition does the motion.
@@ -617,6 +640,7 @@ private fun BoxScope.ToastLayer(overlays: Overlays, bottom: androidx.compose.ui.
             },
             label = "toast",
         ) { spec ->
+        val dragState = androidx.compose.foundation.gestures.rememberDraggableState { delta -> drag.drag(delta) }
         Row(
             Modifier
                 .navigationBarsPadding()
@@ -624,6 +648,24 @@ private fun BoxScope.ToastLayer(overlays: Overlays, bottom: androidx.compose.ui.
                 .padding(bottom = bottom + 8.dp)
                 .padding(horizontal = 16.dp)
                 .widthIn(max = 360.dp)
+                // Swipe it down to put it away; it follows the finger and resists going up.
+                .offset { IntOffset(0, drag.offset.value.roundToInt()) }
+                .onSizeChanged { drag.extent = it.height.toFloat() }
+                .pointerInput(Unit) {
+                    awaitEachGesture {
+                        awaitFirstDown(requireUnconsumed = false)
+                        held = true
+                        do { val event = awaitPointerEvent(androidx.compose.ui.input.pointer.PointerEventPass.Initial) }
+                        while (event.changes.any { it.pressed })
+                        held = false
+                    }
+                }
+                .draggable(
+                    dragState,
+                    Orientation.Vertical,
+                    onDragStarted = { drag.grab() },
+                    onDragStopped = { velocity -> drag.release(velocity, { overlays.clearToast(spec.id) }, commitAt = 0.35f) },
+                )
                 .clip(capsule())
                 .background(Wallhop.home.pale)
                 // TalkBack reads it out without moving focus.
@@ -647,13 +689,13 @@ private fun BoxScope.ToastLayer(overlays: Overlays, bottom: androidx.compose.ui.
             }
             spec.action?.let { action ->
                 val source = remember { MutableInteractionSource() }
+                // Just the word, bold: one shape (the toast), not a button inside a button.
                 Box(
                     Modifier
                         .heightIn(min = 48.dp)
                         .widthIn(min = 48.dp)
-                        .pressScale(source)
+                        .pressDim(source)
                         .clip(capsule())
-                        .background(Wallhop.home.onPale.copy(alpha = 0.1f))
                         .tappable(source) {
                             overlays.clearToast(spec.id)
                             action.onClick()

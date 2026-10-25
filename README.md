@@ -1,4 +1,4 @@
-<p align="center"><img src="brand/kit/out/play-feature-1024x500.png" width="600" alt="Lync"></p>
+<p align="center"><img src="brand/icon/out/lync-icon-1024.png" width="160" alt="Lync"></p>
 
 # Lync
 
@@ -48,4 +48,4 @@ cd mac
 - [Link protocol](docs/PROTOCOL.md)
 - [Design notes](docs/DESIGN.md)
 - [Publishing on Google Play](docs/PLAY_STORE.md)
-- [Logo and brand kit](brand/kit/README.md)
+- [App icon source](brand/icon/final.py): builds the icon for both apps

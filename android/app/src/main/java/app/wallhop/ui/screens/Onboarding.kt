@@ -1,5 +1,7 @@
 package app.wallhop.ui.screens
 
+import kotlin.math.roundToInt
+
 import androidx.annotation.DrawableRes
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.RepeatMode
@@ -258,11 +260,17 @@ private fun KeyCap(label: String) {
     ) { Text(label, color = Color.White, style = Type.title3.copy(fontWeight = FontWeight.Bold)) }
 }
 
+/** The pages as dots; [position] is fractional, so the long dot slides with the finger mid-swipe. */
 @Composable
-private fun Dots(page: Int, count: Int) {
+private fun Dots(position: Float, count: Int) {
+    val page = position.roundToInt().coerceIn(0, count - 1)
     Row(Modifier.semantics { contentDescription = "Page ${page + 1} of $count" }, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
         repeat(count) { i ->
-            Box(Modifier.height(6.dp).width(if (i == page) 20.dp else 6.dp).clip(capsule()).background(if (i == page) Color.White else Faint))
+            val near = (1f - kotlin.math.abs(position - i)).coerceIn(0f, 1f)
+            Box(
+                Modifier.height(6.dp).width(6.dp + 14.dp * near).clip(capsule())
+                    .background(androidx.compose.ui.graphics.lerp(Faint, Color.White, near)),
+            )
         }
     }
 }
@@ -275,6 +283,10 @@ fun IntroTour(onDone: () -> Unit) {
     val pager = rememberPagerState { 4 }
     val scope = rememberCoroutineScope()
     val page = pager.currentPage
+    // Where the swipe is, between pages: the dots and the buttons follow it.
+    val position by remember { androidx.compose.runtime.derivedStateOf { pager.currentPage + pager.currentPageOffsetFraction } }
+    // Back steps back through the tour rather than leaving it.
+    androidx.activity.compose.BackHandler(enabled = page > 0) { scope.launch { pager.animateScrollToPage(page - 1) } }
     Column(Modifier.fillMaxSize().background(Color.Black).statusBarsPadding().navigationBarsPadding().padding(bottom = 20.dp)) {
         Box(Modifier.padding(horizontal = 24.dp)) {
             OnboardingBar(
@@ -303,16 +315,24 @@ fun IntroTour(onDone: () -> Unit) {
             }
         }
         Spacer(Modifier.height(28.dp))
-        Row(Modifier.fillMaxWidth().padding(horizontal = 24.dp).height(56.dp), verticalAlignment = Alignment.CenterVertically) {
-            if (page == 0) {
-                OnboardingPill("Get started", { scope.launch { pager.animateScrollToPage(1) } }, Modifier.fillMaxWidth())
-            } else {
-                Dots(page - 1, 3)
-                Spacer(Modifier.weight(1f))
-                OnboardingPill(if (page == 3) "Pair my Mac" else "Next", {
-                    if (page == 3) onDone() else scope.launch { pager.animateScrollToPage(page + 1) }
-                })
+        // "Get started" hands over to the dots and Next as the first swipe goes, not in one frame;
+        // whichever is mostly showing is on top and takes the tap.
+        val handover = position.coerceIn(0f, 1f)
+        Box(Modifier.fillMaxWidth().padding(horizontal = 24.dp).height(56.dp)) {
+            val start: @Composable () -> Unit = {
+                OnboardingPill("Get started", { scope.launch { pager.animateScrollToPage(1) } },
+                    Modifier.fillMaxWidth().graphicsLayer { alpha = 1f - handover })
             }
+            val next: @Composable () -> Unit = {
+                Row(Modifier.fillMaxSize().graphicsLayer { alpha = handover }, verticalAlignment = Alignment.CenterVertically) {
+                    Dots(position - 1f, 3)
+                    Spacer(Modifier.weight(1f))
+                    OnboardingPill(if (page == 3) "Pair my Mac" else "Next", {
+                        if (page == 3) onDone() else scope.launch { pager.animateScrollToPage(page + 1) }
+                    })
+                }
+            }
+            if (handover < 0.5f) { next(); start() } else { start(); next() }
         }
     }
 }

@@ -25,6 +25,10 @@ final class OverlayController {
     private let placementState = PlacementState()
     private var cancellables = Set<AnyCancellable>()
     private var hideWorkItem: DispatchWorkItem?
+    private var flingMonitor: Any?
+    /// Where the fingers would put the card, before the resistance going down.
+    private var flingRaw: CGFloat = 0
+    private var flingSamples: [(time: TimeInterval, offset: CGFloat)] = []
 
     init(model: AppModel, anchorFrame: @escaping () -> NSRect?) {
         self.model = model
@@ -63,8 +67,16 @@ final class OverlayController {
             .removeDuplicates()
             .sink { [weak self] _ in DispatchQueue.main.async { self?.update() } }
             .store(in: &cancellables)
+        // A new card starts where cards start, whatever the last one was swiped to.
+        model.$live.removeDuplicates().sink { [weak self] _ in self?.placementState.fling = 0; self?.flingRaw = 0 }
+            .store(in: &cancellables)
+        flingMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
+            guard let self, event.window === self.panel else { return event }
+            return self.fling(event) ? nil : event
+        }
         model.$fileDrag
-            .map { $0 != nil }
+            .combineLatest(model.$dragApproach)
+            .map { drag, approach in drag != nil && approach > 0 }
             .removeDuplicates()
             .sink { [weak self] _ in DispatchQueue.main.async { self?.update() } }
             .store(in: &cancellables)
@@ -97,18 +109,69 @@ final class OverlayController {
         return false
     }
 
-    /// Something to show: a card, or the glow while files are dragged (not in menu bar mode,
-    /// where the menu bar icon glows instead).
+    /// Something to show: a card, or the glow while files are dragged towards the notch (not in
+    /// menu bar mode, where the menu bar icon takes the colour instead).
     private var hasContent: Bool {
         guard !model.panelOpen else { return false }
         if model.live != nil { return true }
-        return model.fileDrag != nil && placementState.placement != .menuBar
+        return showsGlow && placementState.placement != .menuBar
+    }
+
+    private var showsGlow: Bool { model.fileDrag != nil && model.dragApproach > 0 }
+
+    /// Two fingers on the trackpad move the card with them: up and away toward the notch, like a
+    /// notification banner; down, it resists. Let go far enough (40 pt) or fast enough (300 pt/s)
+    /// and it carries on into the notch at the fingers' speed; otherwise it springs back.
+    private func fling(_ event: NSEvent) -> Bool {
+        guard let card = model.live, card.isFlingable, !event.momentumPhase.contains(.changed),
+              !event.momentumPhase.contains(.began), !event.momentumPhase.contains(.ended) else { return false }
+        let phase = event.phase
+        if phase.contains(.began) {
+            flingRaw = placementState.fling
+            flingSamples.removeAll()
+        }
+        if phase.contains(.changed) || phase.contains(.began) {
+            // Follows the fingers whichever scroll direction is set.
+            let dy = event.isDirectionInvertedFromDevice ? event.scrollingDeltaY : -event.scrollingDeltaY
+            flingRaw += dy
+            let shown = flingRaw <= 0 ? flingRaw : 60 * (1 - 1 / (flingRaw * 0.55 / 60 + 1))
+            placementState.fling = shown
+            flingSamples.append((event.timestamp, flingRaw))
+            if flingSamples.count > 6 { flingSamples.removeFirst() }
+            return true
+        }
+        if phase.contains(.ended) || phase.contains(.cancelled) {
+            var velocity: CGFloat = 0
+            if let first = flingSamples.first, let last = flingSamples.last, last.time > first.time {
+                velocity = (last.offset - first.offset) / CGFloat(last.time - first.time)
+            }
+            let current = placementState.fling
+            if current < -40 || velocity < -300 {
+                let target: CGFloat = -240
+                withAnimation(.interpolatingSpring(stiffness: 300, damping: 2 * sqrt(300),
+                                                   initialVelocity: Double(velocity / min(-1, target - current)))) {
+                    placementState.fling = target
+                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) { [weak self] in
+                    guard let self, self.model.live == card else { return }
+                    self.model.hideLive()
+                }
+            } else {
+                withAnimation(.interpolatingSpring(stiffness: 420, damping: 2 * sqrt(420),
+                                                   initialVelocity: Double(current == 0 ? 0 : -velocity / current))) {
+                    placementState.fling = 0
+                }
+                flingRaw = 0
+            }
+            return true
+        }
+        return false
     }
 
     private func update() {
         hideWorkItem?.cancel()
         let card = model.live
-        if card != nil || model.fileDrag != nil { position() }
+        if card != nil || showsGlow { position() }
         if hasContent {
             // Quiet notes and the glow let clicks and drops through; the drop zone takes drops.
             let passive = card == nil || card?.isQuiet == true
@@ -197,6 +260,8 @@ final class OverlayController {
 final class PlacementState: ObservableObject {
     @Published var placement: OverlayPlacement = .pill
     @Published var notchWidth: CGFloat = 200
+    /// How far a two-finger swipe has moved the card, in points (negative is up, toward the notch).
+    @Published var fling: CGFloat = 0
 }
 
 /// Holds the overlay's SwiftUI content and takes files dropped on the drop zone.
@@ -235,23 +300,33 @@ struct OverlayRoot: View {
             if let card = model.live, card.isQuiet {
                 quietView(card)
                     .transition(transition)
-            } else if let card = model.live {
+            } else if let card = model.live, !(card == .dropZone && placement.placement != .menuBar) {
                 cardView(card)
+                    // Moved by a two-finger swipe; fading as it heads back into the notch.
+                    .offset(y: placement.fling)
+                    .opacity(1 + Double(min(0, placement.fling)) / 180)
                     // Files dragged over the notch: it swells a little while they're held there.
                     .scaleEffect(swells(card) ? 1.03 : 1, anchor: .top)
                     .scaleEffect(1 + 0.05 * pulse, anchor: .top)
                     .brightness(0.08 * pulse)
                     .shake(model.dropShake)
                     .transition(transition)
-            } else if model.fileDrag != nil, placement.placement != .menuBar {
-                DragGlow(model: model, placement: placement.placement, notchWidth: placement.notchWidth)
+            } else if placement.placement != .menuBar, model.live == .dropZone || (model.fileDrag != nil && model.dragApproach > 0) {
+                // The same glow and pill from approaching to dropping: at the notch it brightens and
+                // says "Release". One view throughout, so it grows rather than swapping for a card.
+                DragGlow(model: model, placement: placement.placement, notchWidth: placement.notchWidth,
+                         ready: model.live == .dropZone)
+                    .scaleEffect(1 + 0.05 * pulse, anchor: .top)
+                    .brightness(0.08 * pulse)
                     .transition(WMotion.transition(.opacity.combined(with: .scale(scale: 0.9, anchor: .top))))
             }
             Spacer(minLength: 0)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        // Increase Contrast or Reduce Transparency changed: redraw with the new colours.
+        .id(motion.appearanceKey)
         .animation(WMotion.animation(WMotion.smooth), value: model.live)
-        .animation(WMotion.animation(WMotion.smooth), value: model.fileDrag != nil)
+        .animation(WMotion.animation(WMotion.smooth), value: model.fileDrag != nil && model.dragApproach > 0)
         .onChange(of: model.dropPulse) { _, _ in
             guard !WMotion.reduceMotion else { return }
             withAnimation(WMotion.press) { pulse = 1 }
@@ -282,13 +357,20 @@ struct OverlayRoot: View {
                 label
                     .padding(.horizontal, 14).frame(height: 32)
                     .background(Capsule().fill(theme.theme.card).shadow(color: .black.opacity(0.3), radius: 8, y: 3))
-                    .overlay(Capsule().strokeBorder(Color.white.opacity(0.1), lineWidth: 1))
+                    .overlay(Capsule().strokeBorder(WTheme.edge, lineWidth: 1))
                     .padding(.top, 8)
             }
         }
     }
 
     /// The "Drop to send" card, with a phone to send to.
+    /// The drop card keeps the drag glow's colour, so glow and card read as one thing.
+    @ViewBuilder private func dropGlow<S: Shape>(_ card: LiveCard, _ shape: S) -> some View {
+        if card == .dropZone {
+            shape.fill(theme.theme.glow).blur(radius: 16).opacity(0.45)
+        }
+    }
+
     private func swells(_ card: LiveCard) -> Bool {
         model.connectedPhone != nil && model.isDropHint(card) && !WMotion.reduceMotion
     }
@@ -331,9 +413,10 @@ struct OverlayRoot: View {
                         .fill(LinearGradient(colors: [theme.theme.mid, theme.theme.card], startPoint: .top, endPoint: .bottom))
                         .shadow(color: .black.opacity(0.35), radius: 14, y: 6)
                 )
+                .background(dropGlow(card, RoundedRectangle(cornerRadius: 24, style: .continuous)))
                 .overlay(
                     RoundedRectangle(cornerRadius: 24, style: .continuous)
-                        .strokeBorder(Color.white.opacity(0.08), lineWidth: 1)
+                        .strokeBorder(WTheme.edge, lineWidth: 1)
                 )
                 .overlay(alignment: .topLeading) { closeButton(card).offset(x: -6, y: -6) }
                 .padding(.top, 8)
@@ -370,7 +453,8 @@ struct OverlayRoot: View {
     }
 
     private func hover(_ inside: Bool) {
-        hovering = inside
+        // The ✕ eases in and out with the pointer instead of popping.
+        withAnimation(WMotion.animation(WMotion.snappy)) { hovering = inside }
         model.setHovering(inside)
     }
 
@@ -399,12 +483,15 @@ struct OverlayRoot: View {
     @ViewBuilder private func closeButton(_ card: LiveCard) -> some View {
         if hovering && isPassive(card) {
             Button { model.hideLive() } label: {
-                NudgeImage("xmark")
+                Image(systemName: "xmark")
                     .font(.wh(11, .bold))
                     .foregroundStyle(.white)
                     .frame(width: 24, height: 24)
                     .background(Circle().fill(Color(white: 0.25)))
                     .overlay(Circle().strokeBorder(Color.white.opacity(0.15), lineWidth: 0.5))
+                    // A little more to aim at than it shows.
+                    .padding(2)
+                    .contentShape(Circle())
             }
             .buttonStyle(WShapePress(shape: Circle()))
             .help("Dismiss")
@@ -432,47 +519,108 @@ struct OverlayRoot: View {
     }
 }
 
-/// While files are dragged anywhere on the Mac: the notch grows a little with a soft Mint glow
-/// and "Send to <phone>" (or a small pill at the top of a screen without a notch). The glow is
-/// blurred once and only its opacity breathes, so the blur isn't redrawn every frame. A static
-/// highlight under Reduce Motion.
+/// A file drag heading for the notch: a bloom of the phone's colour spreading from under the
+/// notch, a chevron pointing into it, and a small floating pill, "Drop to send to <phone>",
+/// once the pointer is close. All of it grows with `AppModel.dragApproach`; nothing shows for
+/// drags elsewhere on the Mac, and on the way it lets clicks and drops through. At the notch
+/// (`ready`, the drop zone) it is the drop target: full strength, "Release to send", what's coming. The bloom is a gradient (no blur to redraw); close up it breathes and the chevron bobs,
+/// except under Reduce Motion.
 struct DragGlow: View {
     @ObservedObject var model: AppModel
     let placement: OverlayPlacement
     var notchWidth: CGFloat
+    /// At the notch: the drop zone is open and letting go sends the files.
+    var ready = false
+    @EnvironmentObject private var theme: ThemeStore
     @State private var breathe = false
 
     var body: some View {
-        let label = Text("Send to \(model.connectedPhone?.name ?? "your phone")")
-            .font(.wh(11, .semibold)).foregroundStyle(WTheme.codeMint).lineLimit(1)
-        Group {
-            switch placement {
-            case .notch(let notchHeight):
-                label
-                    .padding(.top, notchHeight + 4).padding(.bottom, 8).padding(.horizontal, 16)
-                    .frame(width: notchWidth + 36)
-                    .background(NotchShape(cornerRadius: 14).fill(Color.black).background(glow(NotchShape(cornerRadius: 14), radius: 12)))
-            case .pill, .menuBar:
-                label
-                    .padding(.horizontal, 14).frame(height: 28)
-                    .background(Capsule().fill(Color.black).background(glow(Capsule(), radius: 10)))
-                    .overlay(Capsule().strokeBorder(WTheme.codeMint.opacity(0.4), lineWidth: 1))
-                    .padding(.top, 8)
+        let approach = ready ? 1 : model.dragApproach
+        let drag = model.fileDrag
+        let phone = model.connectedPhone?.name ?? "your phone"
+        let color = theme.theme.glow
+        let top: CGFloat = { if case .notch(let height) = placement { return height } else { return 4 } }()
+        // The pill comes in over the last half of the approach; its space is kept so nothing jumps.
+        let pill = min(max((approach - 0.4) / 0.4, 0), 1)
+        ZStack(alignment: .top) {
+            bloom(color, approach: approach, width: max(notchWidth * 1.7, 300), top: top)
+            VStack(spacing: 4) {
+                Image(systemName: "chevron.compact.down")
+                    .font(.system(size: 20, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.55 + 0.4 * approach))
+                    .shadow(color: color, radius: 6)
+                    .offset(y: breathe ? 3 : 0)
+                HStack(spacing: 8) {
+                    if ready, let images = drag?.images, !images.isEmpty {
+                        ThumbnailStack(urls: images, size: 22)
+                    } else {
+                        Image(systemName: ready ? "arrow.up.doc.fill" : "hand.point.up.left.fill")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(color)
+                    }
+                    // At the notch the phone's name has been said already: what matters is letting go.
+                    (Text(ready ? "Release to send" : "Drop to send to \(phone)").foregroundStyle(.white)
+                        + Text(ready ? drag.map { "  ·  \($0.summary)" } ?? "" : "").foregroundStyle(.white.opacity(0.6)))
+                        .font(.wh(13, .semibold)).lineLimit(1)
+                }
+                .padding(.horizontal, 16).frame(height: ready ? 40 : 36)
+                .background(Capsule().fill(Color.black.opacity(0.9)))
+                .overlay(Capsule().strokeBorder(color.opacity(ready ? 0.9 : 0.45), lineWidth: ready ? 1.5 : 1))
+                .shadow(color: color.opacity(ready ? 0.7 : 0.45), radius: ready ? 16 : 12)
+                .opacity(pill)
+                .scaleEffect(0.9 + 0.1 * pill, anchor: .top)
+            }
+            .padding(.top, top + 4)
+        }
+        .frame(maxWidth: .infinity, alignment: .top)
+        .animation(WMotion.animation(WMotion.smooth), value: approach)
+        .animation(WMotion.animation(WMotion.smooth), value: ready)
+        .onAppear {
+            guard approach >= 0.6, !WMotion.reduceMotion, !PanelSnapshots.active else { return }
+            withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) { breathe = true }
+        }
+        .onChange(of: approach >= 0.6) { _, close in
+            // Breathes only once the pointer is close: a hint, not a call for attention.
+            guard !WMotion.reduceMotion, !PanelSnapshots.active else { return }
+            if close {
+                withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) { breathe = true }
+            } else {
+                withAnimation(.easeOut(duration: 0.2)) { breathe = false }
             }
         }
-        .padding(.bottom, 20) // Room for the glow.
-        .onAppear {
-            guard !WMotion.reduceMotion, !PanelSnapshots.active else { return }
-            withAnimation(.easeInOut(duration: 1.1).repeatForever(autoreverses: true)) { breathe = true }
-        }
-        .accessibilityHidden(true)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(ready ? "Drop to send to \(phone)\(drag.map { ", \($0.summary)" } ?? "")" : "")
+        .accessibilityHidden(!ready)
     }
 
-    /// The shape in Mint, blurred (a fixed radius), behind the black shape: only its opacity changes.
-    private func glow<S: Shape>(_ shape: S, radius: CGFloat) -> some View {
-        shape.fill(WTheme.codeMint)
-            .blur(radius: radius)
-            .opacity(breathe ? 0.55 : 0.3)
+    /// The phone's colours pouring out from under the notch, like light: a bright core in its main
+    /// colour, a neighbouring colour mixed in to the sides (`WTheme.glowAccent`), everything fading to nothing at the edge (no
+    /// straight sides). Starts at the top of the screen, so the notch sits in its middle.
+    private func bloom(_ color: Color, approach: Double, width: CGFloat, top: CGFloat) -> some View {
+        let accent = theme.theme.glowAccent
+        let height = top + 110
+        func light(_ color: Color, _ strength: Double, width: CGFloat, x: CGFloat) -> some View {
+            let radius = width / 2
+            return RadialGradient(
+                stops: [.init(color: color.opacity(strength), location: 0), .init(color: color.opacity(strength * 0.65), location: 0.3),
+                        .init(color: color.opacity(strength * 0.22), location: 0.65), .init(color: color.opacity(0), location: 1)],
+                center: .top, startRadius: 0, endRadius: radius
+            )
+            .frame(width: width, height: radius)
+            .scaleEffect(x: 1, y: height / radius, anchor: .top)
+            .frame(height: height, alignment: .top)
+            .offset(x: x)
+        }
+        return ZStack(alignment: .top) {
+            light(accent, 0.75, width: width * 0.8, x: -width * 0.14)
+            light(accent, 0.75, width: width * 0.8, x: width * 0.14)
+            // The main colour on top, adding to the accent like light does, not averaging to grey.
+            light(color, 0.9, width: width * 0.7, x: 0).blendMode(.plusLighter)
+            light(color, 0.45, width: width * 0.32, x: 0).blendMode(.plusLighter)
+        }
+        .compositingGroup()
+        .frame(width: width, height: height, alignment: .top)
+        .opacity((0.5 + 0.5 * approach) * (breathe ? 0.88 : 1))
     }
 }
 
@@ -503,4 +651,15 @@ struct NotchShape: Shape {
 final class KeyablePanel: NSPanel {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
+}
+
+extension LiveCard {
+    /// Cards a two-finger swipe can put away: not a pairing request or a call waiting for an
+    /// answer, and not the drop zone or a send in progress.
+    var isFlingable: Bool {
+        switch self {
+        case .pairing, .call, .dropZone, .sending, .quiet: return false
+        default: return true
+        }
+    }
 }

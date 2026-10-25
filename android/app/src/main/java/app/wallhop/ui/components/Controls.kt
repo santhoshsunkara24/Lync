@@ -1,5 +1,7 @@
 package app.wallhop.ui.components
 
+import app.wallhop.ui.design.pressedVisibly
+
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.animateFloat
@@ -78,7 +80,7 @@ fun WSwitch(
     val haptics = rememberHaptics()
     val reduceMotion = Wallhop.a11y.reduceMotion
     val source = interactionSource ?: remember { MutableInteractionSource() }
-    val pressed by source.collectIsPressedAsState()
+    val pressed = source.pressedVisibly()
     // Under a finger the thumb also stretches sideways, toward the middle (DESIGN.md §5.6).
     // Everything moving here is drawn, not laid out, so flicking switches costs no measuring.
     val stretch by animateFloatAsState(if (pressed && enabled && !reduceMotion) 6f else 0f, Springs.snappy(), label = "thumbStretch")

@@ -1,5 +1,10 @@
 package app.wallhop.ui.components
 
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
+
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
@@ -59,8 +64,9 @@ import kotlin.math.roundToInt
 
 /**
  * "3 photos from MacBook Air": files that arrived while Lync is open pop up from the bottom with
- * thumbnails, Open and Share. Goes by itself after about 6 s (longer with TalkBack), or with a
- * swipe down or a tap elsewhere. [bottom] keeps it clear of the tab bar.
+ * thumbnails, Open and Share. Goes by itself after about 6 s (longer with TalkBack; never while
+ * a finger is on it), or with a swipe down. It doesn't block the screen: taps elsewhere go
+ * straight through to the app. [bottom] keeps it clear of the tab bar.
  */
 @Composable
 fun BoxScope.ReceivedPopup(batch: ReceivedBatch?, onDismiss: () -> Unit, bottom: androidx.compose.ui.unit.Dp) {
@@ -69,26 +75,28 @@ fun BoxScope.ReceivedPopup(batch: ReceivedBatch?, onDismiss: () -> Unit, bottom:
     val reduceMotion = Wallhop.a11y.reduceMotion
     var shown by remember { mutableStateOf(batch) }
     if (batch != null) shown = batch
+    var held by remember { mutableStateOf(false) }
     LaunchedEffect(batch) {
         if (batch != null) {
-            delay(recommendedTimeout(context, 6_000, controls = true))
+            var left = recommendedTimeout(context, 6_000, controls = true)
+            while (left > 0) {
+                delay(100)
+                if (held) left = maxOf(left, 1_500) else left -= 100
+            }
             onDismiss()
         }
     }
-    if (batch != null) {
-        val outside = remember { MutableInteractionSource() }
-        Box(Modifier.fillMaxSize().tappable(outside, onClick = onDismiss).semantics { contentDescription = "Dismiss" })
-    }
+    val drag = rememberSwipeDismiss(shown) { onDismiss() }
     AnimatedVisibility(
         batch != null,
         modifier = Modifier.align(Alignment.BottomCenter),
-        enter = if (reduceMotion) fadeIn(tween(Durations.Quick)) else slideInVertically(Springs.smooth()) { it } + fadeIn(),
-        exit = if (reduceMotion) fadeOut(tween(Durations.Quick)) else slideOutVertically(Springs.smooth()) { it } + fadeOut(),
+        enter = if (reduceMotion) fadeIn(tween(Durations.Quick)) else slideInVertically(Springs.sheetIn()) { it } + fadeIn(),
+        // Swiped away, it has already left at the finger's speed.
+        exit = if (drag.gone) androidx.compose.animation.ExitTransition.None
+            else if (reduceMotion) fadeOut(tween(Durations.Quick)) else slideOutVertically(Springs.dematerialize()) { it } + fadeOut(),
     ) {
         val current = shown ?: return@AnimatedVisibility
-        val scope = rememberCoroutineScope()
-        val drag = remember { Animatable(0f) }
-        val dragState = rememberDraggableState { delta -> scope.launch { drag.snapTo((drag.value + delta).coerceAtLeast(0f)) } }
+        val dragState = rememberDraggableState { delta -> drag.drag(delta) }
         val announce = current.summary.replaceFirst(" from ", " received from ")
         Column(
             Modifier
@@ -96,10 +104,22 @@ fun BoxScope.ReceivedPopup(batch: ReceivedBatch?, onDismiss: () -> Unit, bottom:
                 .padding(start = 12.dp, end = 12.dp, bottom = bottom)
                 .widthIn(max = 520.dp)
                 .fillMaxWidth()
-                .offset { IntOffset(0, drag.value.roundToInt()) }
-                .draggable(dragState, Orientation.Vertical, onDragStopped = { velocity ->
-                    if (drag.value > 80f || velocity > 1500f) onDismiss() else drag.animateTo(0f, Springs.snappy())
-                })
+                .offset { IntOffset(0, drag.offset.value.roundToInt()) }
+                .onSizeChanged { drag.extent = it.height.toFloat() }
+                .pointerInput(Unit) {
+                    awaitEachGesture {
+                        awaitFirstDown(requireUnconsumed = false)
+                        held = true
+                        do { val event = awaitPointerEvent(androidx.compose.ui.input.pointer.PointerEventPass.Initial) }
+                        while (event.changes.any { it.pressed })
+                        held = false
+                    }
+                }
+                .draggable(
+                    dragState, Orientation.Vertical,
+                    onDragStarted = { drag.grab() },
+                    onDragStopped = { velocity -> drag.release(velocity, onDismiss, commitAt = 0.35f) },
+                )
                 .clip(rounded(28.dp))
                 .background(colors.backgroundElevated)
                 .semantics {

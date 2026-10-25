@@ -74,12 +74,12 @@ Codes, calls, texts and files from your Android phone, in your Mac's notch.
 **Privacy policy URL:** host `docs/PRIVACY.md` publicly. The simplest way is to make the repo public; the
 file's GitHub link then works as the URL. Otherwise use any free page host.
 
-**Graphics** (all in `brand/kit/out/`):
+**Graphics:**
 
 | Asset | File |
 |---|---|
-| App icon, 512 × 512 | `play-icon-512.png` |
-| Feature graphic, 1024 × 500 | `play-feature-1024x500.png` |
+| App icon, 512 × 512 | `brand/icon/out/play-icon-512.png` |
+| Feature graphic, 1024 × 500 | Still to do: the old one showed the retired droid logo |
 | Phone screenshots, 2–8, 9:16 | Still to do: take them on the phone (Home, a code arriving, Calls, Settings) |
 
 ## 4. App content (Policy section)

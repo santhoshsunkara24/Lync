@@ -126,6 +126,7 @@ class LinkManager private constructor(private val context: Context) {
     private val store = MacStore(context)
     private val discovery = MacDiscovery(context)
     private val incoming = IncomingFiles(context)
+    private val locks = TransferLocks(context)
     private val media = app.wallhop.media.MediaWatcher(context) { message ->
         val session = session?.takeIf { !it.closed && notificationsOn }
         if (session != null) scope.launch { runCatching { session.send(message) } }
@@ -163,10 +164,14 @@ class LinkManager private constructor(private val context: Context) {
     /** The live count, published at most every 100 ms so the banner doesn't redraw per chunk. */
     private var incomingNow: IncomingTransfer? = null
     private var incomingPublishedAt = 0L
+    private var incomingPublishedPercent = -1
+    /** Progress only when the percentage on screen changes (or once a second), like sending. */
     private fun publishIncoming(force: Boolean = false) {
         val now = android.os.SystemClock.elapsedRealtime()
-        if (force || now - incomingPublishedAt >= 100) {
+        val percent = incomingNow?.let { (it.progress * 100).toInt() } ?: -1
+        if (force || percent != incomingPublishedPercent && now - incomingPublishedAt >= 100 || now - incomingPublishedAt >= 1_000) {
             incomingPublishedAt = now
+            incomingPublishedPercent = percent
             _incoming.value = incomingNow
         }
     }
@@ -259,6 +264,14 @@ class LinkManager private constructor(private val context: Context) {
         discovery.onFound = { found ->
             val mac = store.get()
             if (mac != null && _state.value !is LinkState.Connected && found.name == mac.name) poke()
+        }
+        // Ringing stopped here (the user silenced it, or it timed out): the Mac stops showing "Ringing".
+        scope.launch {
+            var was = false
+            app.wallhop.extras.PhoneFinder.ringing.collect { ringing ->
+                if (was && !ringing) session?.takeIf { !it.closed }?.let { runCatching { it.send(Message.of("ring", "action" to "stopped")) } }
+                was = ringing
+            }
         }
     }
 
@@ -533,6 +546,7 @@ class LinkManager private constructor(private val context: Context) {
             incoming.cancelAll()?.let { stopped ->
                 reportIncoming(Problems.received(stopped.saved.size, stopped.total, null, stopped = true), stopped.saved)
             }
+            incomingNow?.let { locks.release("in:${it.batch}") }
             incomingNow = null; publishIncoming(force = true)
             if (this.session === session) this.session = null
             disconnectedAt = android.os.SystemClock.elapsedRealtime()
@@ -569,7 +583,7 @@ class LinkManager private constructor(private val context: Context) {
                     wallpaper = wallpaper,
                 )
                 _macInfo.value = info
-                macInfoStore.save(info, jpeg, hash)
+                macInfoStore.save(info, jpeg)
             }
             "ack" -> session.completeAck(message)
             "text" -> {
@@ -666,6 +680,16 @@ class LinkManager private constructor(private val context: Context) {
             "ring" -> if (message.string("action") == "stop") app.wallhop.extras.PhoneFinder.stop(context)
                 else app.wallhop.extras.PhoneFinder.start(context)
             "media_cmd" -> message.string("action")?.let { action -> mainHandler.post { media.command(action) } }
+            // The Mac wants a feature that's off: its ask sheet here, or a notification that opens it.
+            "ask_feature" -> message.string("key")?.takeIf { it in setOf("codes", "calls", "texts", "app_notifications") }?.let { key ->
+                if (AppVisibility.foreground) app.wallhop.ui.AppNav.ask.value = key
+                else Notifications.askFromMac(context, key, when (key) {
+                    "codes" -> "Your Mac would like your codes"
+                    "calls" -> "Your Mac would like to show calls"
+                    "texts" -> "Your Mac would like to show your texts"
+                    else -> "Your Mac would like your notifications"
+                })
+            }
             // The Mac waits up to 3 s for this ack before saying the button didn't work.
             "call_cmd" -> message.string("action")?.let { action ->
                 val err = app.wallhop.calls.CallControl.performErr(context, action)
@@ -675,6 +699,7 @@ class LinkManager private constructor(private val context: Context) {
             "batch_start" -> {
                 runCatching { incoming.batchStart(message) }
                 message.string("batch")?.let { batch ->
+                    locks.hold("in:$batch")
                     incomingNow = IncomingTransfer(batch, message.header.optInt("count", 1), message.header.optLong("bytes", 0L))
                     publishIncoming(force = true)
                 }
@@ -706,6 +731,7 @@ class LinkManager private constructor(private val context: Context) {
             }
             "batch_end" -> {
                 val finished = runCatching { incoming.batchEnd(message, session.macName) }.getOrNull()
+                message.string("batch")?.let { locks.release("in:$it") }
                 incomingNow = null
                 publishIncoming(force = true)
                 finished?.batch?.let { batch ->
@@ -1213,14 +1239,23 @@ class LinkManager private constructor(private val context: Context) {
             return
         }
         updateOne(id) { it.copy(phase = TransferPhase.Sending) }
-        // Progress at most ten times a second: every chunk would redraw the screens for nothing.
+        // Progress only when the percentage on screen changes (or once a second for a slow one):
+        // every chunk, or even ten times a second, would redraw the screens for nothing.
         var shownAt = 0L
-        val streamed = stream(session, id, items) { sent ->
-            val now = android.os.SystemClock.elapsedRealtime()
-            if (now - shownAt >= 100) {
-                shownAt = now
-                updateOne(id) { it.copy(sentBytes = sent) }
+        var shownPercent = -1L
+        locks.hold(id)
+        val streamed = try {
+            stream(session, id, items) { sent ->
+                val now = android.os.SystemClock.elapsedRealtime()
+                val percent = if (total > 0) sent * 100 / total else 0L
+                if (percent != shownPercent && now - shownAt >= 100 || now - shownAt >= 1_000) {
+                    shownAt = now
+                    shownPercent = percent
+                    updateOne(id) { it.copy(sentBytes = sent) }
+                }
             }
+        } finally {
+            locks.release(id)
         }
         // The connection went or the Mac stopped answering: nothing is known to have arrived.
         streamed.problem?.let { fail(id, it); return }

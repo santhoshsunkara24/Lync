@@ -1,5 +1,7 @@
 package app.wallhop.ui.screens
 
+import kotlinx.coroutines.delay
+
 import android.Manifest
 import android.content.pm.PackageManager
 import androidx.activity.compose.BackHandler
@@ -99,6 +101,18 @@ fun QrScanScreen(onScanned: (QrInvite) -> Unit, onClose: () -> Unit, onEnterAddr
     // A Lync code from a newer Mac app than this phone's.
     var newer by remember { mutableStateOf(false) }
     var cameraFailed by remember { mutableStateOf(false) }
+    // A good code: the frame closes in on it and turns mint for a beat, then pairing goes on.
+    var found by remember { mutableStateOf<app.wallhop.link.QrInvite?>(null) }
+    val lock = remember { androidx.compose.animation.core.Animatable(0f) }
+    LaunchedEffect(found) {
+        val invite = found ?: return@LaunchedEffect
+        haptics.perform(Haptic.Success)
+        lock.animateTo(1f, androidx.compose.animation.core.spring(1f, 600f))
+        delay(120)
+        onScanned(invite)
+    }
+    // A code that isn't Lync's buzzes once, not on every frame it stays in view.
+    var lastWrong by remember { mutableStateOf<String?>(null) }
 
     Box(Modifier.fillMaxSize().background(Color.Black)) {
         if (allowed && !cameraFailed) {
@@ -107,17 +121,17 @@ fun QrScanScreen(onScanned: (QrInvite) -> Unit, onClose: () -> Unit, onEnterAddr
                 onCode = { text ->
                     val invite = QrInvite.parse(text)
                     if (invite != null) {
-                        haptics.perform(Haptic.Success)
-                        onScanned(invite)
+                        found = invite
                         true
                     } else {
                         newer = QrInvite.isFromNewerLync(text)
                         notWallhop = !newer
+                        if (text != lastWrong) { lastWrong = text; haptics.perform(Haptic.Failure) }
                         false
                     }
                 },
             )
-            Viewfinder()
+            Viewfinder(lock.value)
         }
         val top = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
         Box(Modifier.padding(top = top + 8.dp, start = 16.dp)) {
@@ -257,11 +271,15 @@ private fun decode(reader: MultiFormatReader, image: ImageProxy): String? {
     }
 }
 
-/** Dims everything but a rounded square, with bright corner marks. */
+/**
+ * Dims everything but a rounded square, with bright corner marks. [lock] 0→1 as a code is found:
+ * the square closes in a little and the marks turn mint.
+ */
 @Composable
-private fun Viewfinder() {
+private fun Viewfinder(lock: Float = 0f) {
+    val mint = Color(0xFF5FD9A0)
     Canvas(Modifier.fillMaxSize().graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }) {
-        val side = size.minDimension * 0.68f
+        val side = size.minDimension * 0.68f * (1f - 0.08f * lock)
         val topLeft = Offset((size.width - side) / 2, (size.height - side) / 2 - size.height * 0.06f)
         val radius = 32.dp.toPx()
         drawRect(Color.Black.copy(alpha = 0.55f))
@@ -281,7 +299,7 @@ private fun Viewfinder() {
                 quadraticTo(corner.x, corner.y, corner.x + dir.x * radius, corner.y)
                 lineTo(corner.x + dir.x * (radius + arm), corner.y)
             }
-            drawPath(path, Color.White, style = stroke)
+            drawPath(path, androidx.compose.ui.graphics.lerp(Color.White, mint, lock), style = stroke)
         }
     }
 }

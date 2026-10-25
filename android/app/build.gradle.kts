@@ -121,7 +121,6 @@ dependencies {
     // Continuous (squircle) corners.
     implementation("io.github.kyant0:shapes:1.2.1")
     if (glyphSdk.exists()) implementation(files(glyphSdk))
-    debugImplementation("androidx.compose.ui:ui-tooling")
 
     testImplementation("junit:junit:4.13.2")
 }

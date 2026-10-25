@@ -31,12 +31,11 @@ import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
-import app.wallhop.ui.design.Haptic
 import app.wallhop.ui.design.Springs
 import app.wallhop.ui.design.Wallhop
 import app.wallhop.ui.design.capsule
-import app.wallhop.ui.design.rememberHaptics
 import app.wallhop.ui.design.tappable
+import app.wallhop.ui.design.pressScale
 import kotlin.math.roundToInt
 import androidx.compose.ui.graphics.Color
 import androidx.compose.foundation.layout.fillMaxSize
@@ -49,8 +48,14 @@ data class TabItem(val label: String, val icon: ImageVector, val badge: Boolean 
  * that slides to the selected tab. A red dot marks a tab that needs attention.
  */
 @Composable
-fun PillNavBar(tabs: List<TabItem>, selected: Int, onSelect: (Int) -> Unit, modifier: Modifier = Modifier) {
-    val haptics = rememberHaptics()
+fun PillNavBar(
+    tabs: List<TabItem>,
+    selected: Int,
+    onSelect: (Int) -> Unit,
+    modifier: Modifier = Modifier,
+    /** The active tab tapped again: back to the top of it, or out of a page opened over it. */
+    onReselect: (Int) -> Unit = {},
+) {
     val red = Wallhop.colors.red
     BoxWithConstraints(
         modifier
@@ -65,7 +70,8 @@ fun PillNavBar(tabs: List<TabItem>, selected: Int, onSelect: (Int) -> Unit, modi
     ) {
         val slot = maxWidth / tabs.size
         val slotPx = with(LocalDensity.current) { slot.toPx() }
-        val at by animateFloatAsState(selected.toFloat(), Springs.snappy(), label = "navPill")
+        // Glides to the tab without overshooting: nothing was thrown, so nothing should bounce.
+        val at by animateFloatAsState(selected.toFloat(), androidx.compose.animation.core.spring(1f, 500f), label = "navPill")
         Box(
             Modifier
                 .offset { IntOffset((slotPx * at).roundToInt(), 0) }
@@ -83,11 +89,9 @@ fun PillNavBar(tabs: List<TabItem>, selected: Int, onSelect: (Int) -> Unit, modi
                         .weight(1f)
                         .fillMaxHeight()
                         .clip(capsule())
+                        // Quiet, like iOS tab bars: the pill moving is the feedback, no buzz.
                         .tappable(source, role = androidx.compose.ui.semantics.Role.Tab) {
-                            if (!active) {
-                                haptics.perform(Haptic.Selection)
-                                onSelect(index)
-                            }
+                            if (active) onReselect(index) else onSelect(index)
                         }
                         .semantics {
                             contentDescription = if (tab.badge) "${tab.label}, needs attention" else tab.label
@@ -96,7 +100,8 @@ fun PillNavBar(tabs: List<TabItem>, selected: Int, onSelect: (Int) -> Unit, modi
                     contentAlignment = Alignment.Center,
                 ) {
                     val tint by animateColorAsState(if (active) Wallhop.home.onPale else Wallhop.home.pale.copy(alpha = 0.72f), Springs.snappy(), label = "navTint")
-                    Icon(tab.icon, null, tint = tint, modifier = Modifier.size(24.dp))
+                    // The icon dips the moment the finger lands, before the tab changes.
+                    Icon(tab.icon, null, tint = tint, modifier = Modifier.size(24.dp).pressScale(source, 0.86f))
                     if (tab.badge) {
                         Box(Modifier.offset(x = 12.dp, y = (-10).dp).size(8.dp).clip(capsule()).background(red))
                     }

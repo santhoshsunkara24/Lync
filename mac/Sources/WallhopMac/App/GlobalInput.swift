@@ -47,6 +47,11 @@ final class FileDragWatcher {
     private var changeCountAtDown = 0
     private var inspected = true
     private var lastCheck = Date.distantPast
+    /// When the current file drag began: a quick flick across the screen shows nothing.
+    private var dragStarted = Date.distantPast
+    /// How far from the drop target (pt) the glow starts to show.
+    private static let approachRadius: CGFloat = 260
+    private static let settle: TimeInterval = 0.25
     /// While a file drag is on: follows the pointer and notices the drag ending (the mouse up
     /// can be swallowed by the drag session of the app it started in).
     private var timer: Timer?
@@ -87,6 +92,7 @@ final class FileDragWatcher {
         guard !files.isEmpty else { return }
         model.fileDragBegan(files: files)
         guard model.fileDrag != nil else { return }
+        dragStarted = now
         timer?.invalidate()
         timer = Timer.scheduledTimer(withTimeInterval: 0.08, repeats: true) { [weak self] _ in self?.follow() }
         follow()
@@ -97,7 +103,20 @@ final class FileDragWatcher {
             end()
             return
         }
-        model.fileDragNear(target()?.contains(NSEvent.mouseLocation) ?? false)
+        let point = NSEvent.mouseLocation
+        guard let rect = target() else {
+            model.fileDragMoved(approach: 0, near: false)
+            return
+        }
+        let near = rect.contains(point)
+        // Distance to the target's edge; nothing at all until the drag has settled for a moment.
+        let dx = max(rect.minX - point.x, 0, point.x - rect.maxX)
+        let dy = max(rect.minY - point.y, 0, point.y - rect.maxY)
+        let closeness = max(0, 1 - hypot(dx, dy) / Self.approachRadius)
+        let settled = Date().timeIntervalSince(dragStarted) >= Self.settle
+        // In tenths, so the glow redraws only when it visibly changes.
+        let approach = near ? 1 : settled ? (closeness * 10).rounded() / 10 : 0
+        model.fileDragMoved(approach: approach, near: near)
     }
 
     private func end() {

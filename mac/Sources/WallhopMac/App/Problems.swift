@@ -384,8 +384,8 @@ extension Problem {
     /// The conversations or a conversation couldn't be loaded; `code` is the reply's `err`.
     static func textsUnavailable(_ code: String?) -> ProblemText {
         switch code {
-        case PhoneError.permission: return ProblemText(title: "Allow texts on your phone", detail: "In Lync on your phone, tap Allow next to \u{201C}Texts on your Mac\u{201D}.")
-        case PhoneError.textsOff: return ProblemText(title: "Texts are off on your phone", detail: "Turn on Texts in Lync on your phone.")
+        case PhoneError.permission, PhoneError.textsOff:
+            return ProblemText(title: "Texts aren't on yet", detail: "Turn them on from your phone to read and reply here.")
         default: return ProblemText(title: "Couldn't load texts", detail: "Try again.")
         }
     }

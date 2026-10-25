@@ -1,5 +1,15 @@
 package app.wallhop.ui.screens
 
+import androidx.compose.runtime.mutableStateOf
+
+import app.wallhop.ui.components.MenuItem
+
+import app.wallhop.ui.components.SwipeToDelete
+
+import androidx.compose.ui.layout.boundsInRoot
+
+import androidx.compose.ui.layout.onGloballyPositioned
+
 import app.wallhop.ui.design.WIcons
 import android.text.format.DateUtils
 import androidx.compose.foundation.layout.Box
@@ -53,7 +63,7 @@ import app.wallhop.ui.design.Wallhop
 import app.wallhop.ui.design.rememberHaptics
 import kotlinx.coroutines.launch
 
-private val filters = listOf("All", "Codes", "Sent", "Calls")
+private val filters = listOf("All", "Codes", "Files", "Calls")
 
 /**
  * Everything that went between phone and Mac (DESIGN.md §6.5). The filters are pages: swipe
@@ -65,18 +75,21 @@ fun ActivityTab(
     overlays: Overlays,
     /** A tap on a row: copy a code, open a file or link, or the actions. */
     onTap: (ActivityEntry) -> Unit,
-    /** Long press: the actions (Copy code, Send again, Delete). */
-    onActions: (ActivityEntry) -> Unit,
+    /** Long press: the actions (Copy code, Send again, Delete), as a menu from the row. */
+    onActions: (ActivityEntry, androidx.compose.ui.geometry.Rect?) -> Unit,
     /** "Clear older than a week" in the ⋯ menu; asks first, and offers Undo. */
     onClearOld: () -> Unit,
+    /** A row swiped away: deleted, with Undo. */
+    onDelete: (ActivityEntry) -> Unit = {},
 ) {
     val haptics = rememberHaptics()
     val scope = rememberCoroutineScope()
     val pager = rememberPagerState { filters.size }
-    // One tick each time the list settles on a new filter, whether swiped or tapped.
-    var lastPage by remember { mutableIntStateOf(pager.settledPage) }
+    // One tick the moment a new filter is chosen (a tap, or a swipe let go past halfway), not
+    // when the list finishes settling: the feel belongs to the decision.
+    var lastPage by remember { mutableIntStateOf(pager.targetPage) }
     LaunchedEffect(pager) {
-        snapshotFlow { pager.settledPage }.collect { page ->
+        snapshotFlow { pager.targetPage }.collect { page ->
             if (page != lastPage) haptics.perform(Haptic.Selection)
             lastPage = page
         }
@@ -85,6 +98,7 @@ fun ActivityTab(
     // The pages fill the rest of the screen, so a swipe works anywhere below the filters, even
     // on an empty filter. Measured once with the list at the top; kept while it scrolls.
     val list = androidx.compose.foundation.lazy.rememberLazyListState()
+    app.wallhop.ui.design.ScrollToTopOnReselect(list)
     val measuredMin by remember {
         derivedStateOf {
             val info = list.layoutInfo
@@ -117,7 +131,7 @@ fun ActivityTab(
             SegmentedControl(
                 filters,
                 selected = pager.targetPage,
-                onSelect = { scope.launch { pager.animateScrollToPage(it, animationSpec = Springs.smooth()) } },
+                onSelect = { scope.launch { pager.animateScrollToPage(it, animationSpec = androidx.compose.animation.core.spring(1f, 500f)) } },
                 position = { pager.currentPage + pager.currentPageOffsetFraction },
             )
             Spacer(Modifier.height(24.dp))
@@ -144,7 +158,7 @@ fun ActivityTab(
                 beyondViewportPageCount = 1,
             ) { page ->
                 Box(Modifier.fillMaxWidth().heightIn(min = pagesMin)) {
-                    ActivityPage(activity.filter { matches(it, page) }, page, onTap, onActions)
+                    ActivityPage(activity.filter { matches(it, page) }, page, onTap, onActions, onDelete)
                 }
             }
         }
@@ -153,13 +167,20 @@ fun ActivityTab(
 
 private fun matches(entry: ActivityEntry, filter: Int) = when (filter) {
     1 -> entry.kind == ActivityEntry.Kind.Otp
-    2 -> entry.kind in setOf(ActivityEntry.Kind.FilesSent, ActivityEntry.Kind.TextSent, ActivityEntry.Kind.FromMac)
+    // Files and photos, both ways. Text and links sent stay under All.
+    2 -> entry.kind == ActivityEntry.Kind.FilesSent || (entry.kind == ActivityEntry.Kind.FromMac && entry.uris.isNotEmpty())
     3 -> entry.kind == ActivityEntry.Kind.Call
     else -> true
 }
 
 @Composable
-private fun ActivityPage(entries: List<ActivityEntry>, filter: Int, onTap: (ActivityEntry) -> Unit, onActions: (ActivityEntry) -> Unit) {
+private fun ActivityPage(
+    entries: List<ActivityEntry>,
+    filter: Int,
+    onTap: (ActivityEntry) -> Unit,
+    onActions: (ActivityEntry, androidx.compose.ui.geometry.Rect?) -> Unit,
+    onDelete: (ActivityEntry) -> Unit,
+) {
     val context = LocalContext.current
     val reduceMotion = Wallhop.a11y.reduceMotion
     val groups = entries.groupBy { dayLabel(context, it.time) }
@@ -172,7 +193,7 @@ private fun ActivityPage(entries: List<ActivityEntry>, filter: Int, onTap: (Acti
                 title = if (filter == 0) "Nothing yet" else "Nothing here yet",
                 message = when (filter) {
                     1 -> "Codes from your messages show up here."
-                    2 -> "Files, photos and text you share show up here."
+                    2 -> "Files and photos sent to or from your Mac show up here."
                     3 -> "Missed calls show up here."
                     else -> "Codes from your messages, files you share and calls show up here."
                 },
@@ -186,8 +207,14 @@ private fun ActivityPage(entries: List<ActivityEntry>, filter: Int, onTap: (Acti
                 InsetSection(dividerInset = 57.dp) {
                     rows.forEach { entry ->
                         row {
-                            AnimatedVisibility(entry.visible, enter = rowEnter(reduceMotion), exit = rowExit(reduceMotion)) {
-                                ActivityRow(entry.item, onLongClick = { onActions(entry.item) }, onClick = { onTap(entry.item) })
+                            // Tied to the entry, not the slot: when a row above leaves, the next one
+                            // mustn't take over its swipe (or anything else it remembered).
+                            key(entry.key) {
+                                AnimatedVisibility(entry.visible, enter = rowEnter(reduceMotion), exit = rowExit(reduceMotion)) {
+                                    SwipeToDelete(onDelete = { onDelete(entry.item) }) {
+                                        ActivityRow(entry.item, onLongClick = { onActions(entry.item, it) }, onClick = { onTap(entry.item) })
+                                    }
+                                }
                             }
                         }
                     }
@@ -205,12 +232,12 @@ internal fun showEntryActions(
     entry: ActivityEntry,
     haptics: Haptics? = null,
     onDelete: (String) -> Unit,
+    /** The row that was long-pressed: the menu grows from it. Without one, a sheet from the bottom. */
+    anchor: androidx.compose.ui.geometry.Rect? = null,
     /** Files sent to the Mac: send them again. */
     onSendAgain: ((ActivityEntry) -> Unit)? = null,
 ) {
-    overlays.showActionSheet(ActionSheetSpec(
-        message = null,
-        actions = buildList {
+    val actions = buildList {
             if (entry.kind == ActivityEntry.Kind.Otp) {
                 add(AlertAction("Copy code") { copyEntryCode(overlays, context, entry, haptics) })
             }
@@ -228,8 +255,24 @@ internal fun showEntryActions(
             }
             linkOf(entry)?.let { url -> add(AlertAction("Open link") { app.wallhop.core.Open.link(context, url) }) }
             add(AlertAction("Delete", destructive = true) { onDelete(entry.id) })
-        },
-    ))
+        }
+    if (anchor != null) {
+        // From the row, like a context menu: the finger is already there.
+        overlays.showMenu(anchor, actions.map { action ->
+            MenuItem(action.label, icon = entryActionIcon(action.label), destructive = action.destructive) { action.onClick() }
+        })
+    } else {
+        overlays.showActionSheet(ActionSheetSpec(message = null, actions = actions))
+    }
+}
+
+private fun entryActionIcon(label: String) = when (label) {
+    "Copy code" -> WIcons.Clipboard
+    "Open", "Open in Downloads" -> WIcons.File
+    "Open link" -> WIcons.Link
+    "Send again" -> WIcons.Retry
+    "Delete" -> WIcons.XCircle
+    else -> null
 }
 
 /** The link a "Link opened on your Mac" or "Link from your Mac" entry is about, if any. */
@@ -292,8 +335,10 @@ internal fun tapEntry(
  * [showDay]: lists that aren't grouped by day (Home's Recent) say "Yesterday" or the date.
  */
 @Composable
-internal fun ActivityRow(entry: ActivityEntry, onLongClick: () -> Unit, onClick: (() -> Unit)? = null, showDay: Boolean = false) {
+internal fun ActivityRow(entry: ActivityEntry, onLongClick: (androidx.compose.ui.geometry.Rect?) -> Unit, onClick: (() -> Unit)? = null, showDay: Boolean = false) {
     val colors = Wallhop.colors
+    // Where the row is, so a long press's menu can grow out of it.
+    var bounds by remember { mutableStateOf<androidx.compose.ui.geometry.Rect?>(null) }
     val context = LocalContext.current
     val (icon, color) = when (entry.kind) {
         ActivityEntry.Kind.Otp -> WIcons.Code to colors.green
@@ -331,8 +376,9 @@ internal fun ActivityRow(entry: ActivityEntry, onLongClick: () -> Unit, onClick:
             linkOf(entry) != null -> "Open link"
             else -> null
         },
-        onLongClick = onLongClick,
+        onLongClick = { onLongClick(bounds) },
         onClick = onClick,
+        modifier = Modifier.onGloballyPositioned { bounds = it.boundsInRoot() },
     )
 }
 

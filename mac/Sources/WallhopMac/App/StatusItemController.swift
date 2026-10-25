@@ -4,7 +4,7 @@ import Combine
 /// The menu bar icon (menu bar mode): click for the panel, drop files on it to send them to the
 /// phone. Hidden in notch mode, where the notch does both.
 final class StatusItemController: NSObject {
-    private let model: AppModel
+    fileprivate let model: AppModel
     private let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private var cancellables = Set<AnyCancellable>()
     /// Opens or closes the panel. Set by the app delegate.
@@ -26,22 +26,30 @@ final class StatusItemController: NSObject {
             button.addSubview(drop)
         }
 
+        // Highlighted while its panel is open, like any menu bar item with its menu showing.
+        model.$panelOpen.combineLatest(model.$displayMode)
+            .sink { [weak self] open, mode in self?.item.button?.highlight(open && mode == .menuBar) }
+            .store(in: &cancellables)
         model.$connectedPhone
             .combineLatest(model.$pairingRequest.map { $0 != nil }, model.$listenerProblem.map { $0 != nil })
             .sink { [weak self] phone, pairing, failing in self?.updateIcon(connected: phone != nil, attention: pairing, failing: failing) }
             .store(in: &cancellables)
-        // Files dragged anywhere on the Mac: the icon glows Mint (pulsing gently; steady under Reduce Motion).
-        model.$fileDrag.map { $0 != nil }.removeDuplicates()
-            .sink { [weak self] dragging in self?.glow(dragging) }
+        // Files dragged towards the icon (not just anywhere on the Mac): it takes the phone's colour,
+        // pulsing gently once the pointer is close (steady under Reduce Motion).
+        model.$fileDrag.combineLatest(model.$dragApproach)
+            .map { drag, approach in drag == nil ? 0 : approach >= 0.6 ? 2 : approach > 0 ? 1 : 0 }
+            .removeDuplicates()
+            .sink { [weak self] level in self?.glow(level) }
             .store(in: &cancellables)
     }
 
-    private func glow(_ on: Bool) {
+    /// 0: as usual; 1: a file drag is heading this way; 2: it's close.
+    private func glow(_ level: Int) {
         guard let button = item.button else { return }
         button.wantsLayer = true
-        button.contentTintColor = on ? NSColor(srgbRed: 0x7F / 255.0, green: 0xE3 / 255.0, blue: 0xB0 / 255.0, alpha: 1) : nil
+        button.contentTintColor = level > 0 ? NSColor(model.themeStore.theme.glow) : nil
         button.layer?.removeAnimation(forKey: "dragGlow")
-        guard on, !WMotion.reduceMotion else { return }
+        guard level == 2, !WMotion.reduceMotion else { return }
         let pulse = CABasicAnimation(keyPath: "opacity")
         pulse.fromValue = 1
         pulse.toValue = 0.55
@@ -150,7 +158,15 @@ private final class DropTargetView: NSView {
     required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
 
     override func mouseDown(with event: NSEvent) {
-        if event.modifierFlags.contains(.control) { rightMouseDown(with: event) } else { onClick() }
+        if event.modifierFlags.contains(.control) { rightMouseDown(with: event); return }
+        // Lights the moment it's pressed; the panel opening keeps it lit (see above).
+        (superview as? NSButton)?.highlight(true)
+        onClick()
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        guard let button = superview as? NSButton, let model = (button.target as? StatusItemController)?.model else { return }
+        button.highlight(model.panelOpen && model.displayMode == .menuBar)
     }
 
     override func rightMouseDown(with event: NSEvent) {

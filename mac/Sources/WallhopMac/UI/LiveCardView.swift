@@ -84,7 +84,7 @@ struct LiveCardView: View {
             if let images = drag?.images, !images.isEmpty {
                 ThumbnailStack(urls: images)
             } else {
-                iconTile("arrow.up.doc.fill", tint: WTheme.codeMint)
+                iconTile("arrow.up.doc.fill", tint: model.themeStore.theme.glow)
             }
             VStack(alignment: .leading, spacing: 2) {
                 Text("Drop to send to \(model.connectedPhone?.name ?? "your phone")")
@@ -382,17 +382,25 @@ private struct NotificationCard: View {
                         .lineLimit(replying ? 2 : 3)
                 }
                 Spacer(minLength: 4)
+                // ✕ means the same on every card: put this card away. Clearing it on the phone
+                // is a separate, named choice (right-click, or Clear in the panel).
                 Button {
-                    model.dismissNotification(notification.key)
+                    model.hideLive()
                 } label: {
-                    NudgeImage("xmark")
+                    Image(systemName: "xmark")
                         .font(.wh(11, .bold))
                         .frame(width: 24, height: 24)
                         .background(Circle().fill(Color.white.opacity(0.12)))
+                        .padding(2)
+                        .contentShape(Circle())
                 }
                 .buttonStyle(WShapePress(shape: Circle()))
-                .help("Clear on phone")
-                .accessibilityLabel("Clear on phone")
+                .help("Dismiss")
+                .accessibilityLabel("Dismiss")
+            }
+            .contextMenu {
+                Button("Dismiss") { model.hideLive() }
+                Button("Clear on phone") { model.dismissNotification(notification.key) }
             }
 
             if replying {
@@ -483,6 +491,8 @@ private struct CallCard: View {
                     CallButton(title: "Decline", symbol: "phone.down.fill", fill: WTheme.danger) { model.declineCall() }
                         .keyboardShortcut(.cancelAction)
                     CallButton(title: "Answer on phone", symbol: "phone.fill", fill: WTheme.success) { model.answerCall() }
+                        // Return answers, Esc declines, once the card has the keyboard (⌥⌘L).
+                        .keyboardShortcut(.defaultAction)
                     Spacer(minLength: 0)
                 }
             } else if call.state == .active {

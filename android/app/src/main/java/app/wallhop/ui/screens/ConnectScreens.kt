@@ -1,5 +1,9 @@
 package app.wallhop.ui.screens
 
+import app.wallhop.ui.design.shake
+
+import androidx.compose.runtime.mutableIntStateOf
+
 import app.wallhop.ui.design.WIcons
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
@@ -186,21 +190,29 @@ private fun showAddressSheet(
     onConnect: (String, Int) -> Unit,
 ) {
     error.value = null
+    // Connect from the button or the keyboard's Go key; a bad address says why and shakes.
+    val shakes = mutableIntStateOf(0)
+    fun connect() {
+        when (val result = parseMacAddress(address.value)) {
+            is AddressInput.Valid -> {
+                overlays.dismissSheet(cancelled = false)
+                onConnect(result.host, result.port)
+            }
+            is AddressInput.Invalid -> { error.value = result.message; shakes.intValue++ }
+        }
+    }
     overlays.showSheet(
         title = "Mac's address",
         leading = { TextAction("Cancel", onClick = { overlays.dismissSheet() }) },
         trailing = {
-            TextAction("Connect", bold = true, enabled = address.value.isNotBlank(), onClick = {
-                when (val result = parseMacAddress(address.value)) {
-                    is AddressInput.Valid -> {
-                        overlays.dismissSheet(cancelled = false)
-                        onConnect(result.host, result.port)
-                    }
-                    is AddressInput.Invalid -> error.value = result.message
-                }
-            })
+            TextAction("Connect", bold = true, enabled = address.value.isNotBlank(), onClick = { connect() })
         },
     ) {
+        val haptics = app.wallhop.ui.design.rememberHaptics()
+        LaunchedEffect(shakes.intValue) { if (shakes.intValue > 0) haptics.perform(app.wallhop.ui.design.Haptic.Failure) }
+        // The keyboard comes up once the sheet has settled, not fighting it on the way in.
+        val focus = remember { androidx.compose.ui.focus.FocusRequester() }
+        LaunchedEffect(Unit) { kotlinx.coroutines.delay(350); runCatching { focus.requestFocus() } }
         Text(
             "On your Mac, open Lync › Settings › Add a phone. The address is under the QR code.",
             style = Type.footnote,
@@ -209,7 +221,11 @@ private fun showAddressSheet(
         Spacer(Modifier.height(12.dp))
         WTextField(
             address.value, { address.value = it; error.value = null }, "192.168.1.20",
+            modifier = Modifier.shake(shakes.intValue % 2 == 1),
             keyboardType = KeyboardType.Uri, label = "Mac's address", error = error.value,
+            focusRequester = focus,
+            imeAction = androidx.compose.ui.text.input.ImeAction.Go,
+            onImeAction = { connect() },
         )
     }
 }
@@ -342,7 +358,8 @@ internal fun rowEnter(reduceMotion: Boolean) =
     if (reduceMotion) fadeIn(Fades.fadeIn()) else expandVertically(Springs.smooth()) + fadeIn(Fades.fadeIn())
 
 internal fun rowExit(reduceMotion: Boolean) =
-    if (reduceMotion) fadeOut(Fades.fadeOut()) else shrinkVertically(Springs.smooth()) + fadeOut(Fades.fadeOut())
+    // Quick and without bounce: a removed row closes up before attention lands on it.
+    if (reduceMotion) fadeOut(Fades.fadeOut()) else shrinkVertically(androidx.compose.animation.core.spring(1f, 500f)) + fadeOut(Fades.fadeOut())
 
 /** Shares the Mac app's download link, so it can be opened on the Mac. */
 private fun shareMacLink(context: android.content.Context) {

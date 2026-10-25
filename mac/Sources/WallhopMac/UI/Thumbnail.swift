@@ -49,7 +49,7 @@ struct Thumbnail: View {
         .clipShape(RoundedRectangle(cornerRadius: corner, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: corner, style: .continuous)
-                .strokeBorder(Color.white.opacity(0.12), lineWidth: 0.5)
+                .strokeBorder(WTheme.edge, lineWidth: 0.5)
         )
         .onAppear {
             image = ThumbnailCache.shared.cached(url)

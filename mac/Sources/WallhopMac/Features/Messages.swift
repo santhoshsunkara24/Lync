@@ -57,6 +57,11 @@ final class MessagesModel: ObservableObject {
         case unavailable(symbol: String, ProblemText, retry: Bool)
     }
 
+    /// Texts are off or not allowed on the phone: the note offers to ask it.
+    @Published private(set) var askable = false
+    /// The phone was asked; its ask sheet (or a notification) is up there.
+    @Published private(set) var askedPhone = false
+
     @Published private(set) var threads: [SmsThread] = []
     @Published private(set) var messages: [SmsMessage] = []
     @Published private(set) var sims: [SimCard] = []
@@ -161,10 +166,23 @@ final class MessagesModel: ObservableObject {
 
     var currentThread: SmsThread? { threads.first { $0.id == selectedThread } }
 
+    /// Opens Texts' ask sheet on the phone: the yes always happens there.
+    func askPhone() {
+        server.send(Message("ask_feature", ["key": "texts"]))
+        askedPhone = true
+    }
+
+    /// Back from the phone: load again, and the note goes back to asking if it's still off.
+    func checkAgain() {
+        askedPhone = false
+        refresh()
+    }
+
     func refresh(quiet: Bool = false) {
         if !quiet { status = .loading }
         server.request("sms_threads") { [weak self] result in
             guard let self else { return }
+            self.askable = false
             let reply: Message
             switch result {
             case .reply(let message):
@@ -185,6 +203,7 @@ final class MessagesModel: ObservableObject {
             }
             if let err = reply.string("err") {
                 let symbol = err == PhoneError.permission ? "lock" : err == PhoneError.textsOff ? "message.badge" : "exclamationmark.circle"
+                self.askable = err == PhoneError.permission || err == PhoneError.textsOff
                 self.status = .unavailable(symbol: symbol, Problem.textsUnavailable(err),
                                            retry: err != PhoneError.permission && err != PhoneError.textsOff)
                 return
@@ -447,8 +466,16 @@ private struct ThreadList: View {
         VStack(spacing: 0) {
             switch model.status {
             case .unavailable(let symbol, let problem, let retry):
-                StatusNote(symbol: symbol, title: problem.title, text: problem.detail ?? "",
-                           retry: retry ? { model.refresh() } : nil)
+                if model.askable {
+                    StatusNote(symbol: symbol,
+                               title: model.askedPhone ? "Check your phone" : problem.title,
+                               text: model.askedPhone ? "Turn on Texts there, then come back." : problem.detail ?? "",
+                               action: model.askedPhone ? ("I've turned it on", { model.checkAgain() }) : ("Ask my phone", { model.askPhone() }),
+                               prominent: !model.askedPhone)
+                } else {
+                    StatusNote(symbol: symbol, title: problem.title, text: problem.detail ?? "",
+                               action: retry ? ("Try again", { model.refresh() }) : nil)
+                }
             default:
                 List(selection: $model.selectedThread) {
                     ForEach(model.filteredThreads) { thread in
@@ -532,6 +559,11 @@ private struct ConversationView: View {
     @State private var shownCount = 0
 
     private var appending: Bool { shownCount > 0 && model.messages.count > shownCount }
+    /// The newest message is in view (or nearly): new ones scroll in. Reading further up, they
+    /// wait behind a "New message" pill instead of pulling the conversation away.
+    @State private var atBottom = true
+    @State private var unseen = 0
+    @State private var viewport: CGFloat = 0
 
     var body: some View {
         VStack(spacing: 0) {
@@ -539,6 +571,7 @@ private struct ConversationView: View {
             Divider()
             ScrollViewReader { proxy in
                 ScrollView {
+                    VStack(spacing: 0) {
                     LazyVStack(spacing: 4) {
                         ForEach(Array(model.messages.enumerated()), id: \.element.id) { index, message in
                             if showsDay(at: index) {
@@ -557,6 +590,34 @@ private struct ConversationView: View {
                     }
                     .padding(16)
                     .animation(appending ? WMotion.animation(WMotion.smooth) : nil, value: model.messages.count)
+                    // Where the end of the conversation is, compared with the bottom of the view.
+                    Color.clear.frame(height: 1).id("end")
+                        .background(GeometryReader { g in
+                            Color.clear.preference(key: ThreadEndKey.self, value: g.frame(in: .named("thread")).maxY)
+                        })
+                    }
+                }
+                .coordinateSpace(name: "thread")
+                .background(GeometryReader { g in
+                    Color.clear.onAppear { viewport = g.size.height }
+                        .onChange(of: g.size.height) { _, height in viewport = height }
+                })
+                .onPreferenceChange(ThreadEndKey.self) { end in
+                    atBottom = end <= viewport + 80
+                    if atBottom { unseen = 0 }
+                }
+                .overlay(alignment: .bottom) {
+                    if unseen > 0 {
+                        Button {
+                            withMotion(WMotion.smooth) { proxy.scrollTo("end", anchor: .bottom) }
+                            unseen = 0
+                        } label: {
+                            Label(unseen == 1 ? "New message" : "\(unseen) new messages", systemImage: "arrow.down")
+                        }
+                        .buttonStyle(WPill(compact: true))
+                        .padding(.bottom, 10)
+                        .transition(WMotion.transition(.move(edge: .bottom).combined(with: .opacity)))
+                    }
                 }
                 .overlay {
                     if model.loadingThread && model.messages.isEmpty {
@@ -581,7 +642,10 @@ private struct ConversationView: View {
                     // A message arriving in the open conversation scrolls into view; another
                     // conversation (or this one loading) just opens at its latest message.
                     if let last = model.messages.last {
-                        if appending {
+                        if appending && !atBottom && !last.outgoing {
+                            // Reading older messages: stay put, and say there's something new.
+                            unseen += count - shownCount
+                        } else if appending {
                             withMotion(WMotion.smooth) { proxy.scrollTo(last.id, anchor: .bottom) }
                         } else {
                             proxy.scrollTo(last.id, anchor: .bottom)
@@ -592,6 +656,11 @@ private struct ConversationView: View {
                 .onAppear {
                     if let last = model.messages.last { proxy.scrollTo(last.id, anchor: .bottom) }
                     shownCount = model.messages.count
+                }
+                // Choosing a conversation puts the cursor in the reply field, as in Messages.
+                .onChange(of: model.selectedThread) { _, thread in
+                    unseen = 0
+                    if thread != nil { DispatchQueue.main.async { composerFocused = true } }
                 }
             }
             if !connected {
@@ -873,7 +942,7 @@ struct ContactResults: View {
                 }
                 .frame(maxHeight: min(CGFloat(model.contactResults.count) * 34 + 12, 220))
                 .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(theme.theme.card))
-                .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Color.white.opacity(0.1), lineWidth: 1))
+                .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(WTheme.edge, lineWidth: 1))
                 .padding(.horizontal, 12).padding(.bottom, 10)
                 .onChange(of: highlighted) { _, index in if let index { proxy.scrollTo(index) } }
                 .accessibilityElement(children: .contain)
@@ -905,7 +974,8 @@ private struct StatusNote: View {
     let symbol: String
     let title: String
     let text: String
-    var retry: (() -> Void)?
+    var action: (String, () -> Void)?
+    var prominent = false
 
     var body: some View {
         VStack(spacing: 8) {
@@ -913,8 +983,8 @@ private struct StatusNote: View {
             NudgeImage(symbol).font(.wh(24, .medium)).foregroundStyle(.secondary)
             Text(title).font(.wh(13, .semibold)).multilineTextAlignment(.center)
             Text(text).font(.wh(12, .medium)).foregroundStyle(.secondary).multilineTextAlignment(.center)
-            if let retry {
-                Button("Try again", action: retry).buttonStyle(WPill(prominent: false, compact: true)).padding(.top, 4)
+            if let action {
+                Button(action.0, action: action.1).buttonStyle(WPill(prominent: prominent, compact: true)).padding(.top, 4)
             }
             Spacer()
         }
@@ -944,4 +1014,10 @@ private struct ThemedBackground: View {
                        startPoint: .top, endPoint: .bottom)
             .ignoresSafeArea()
     }
+}
+
+/// The bottom edge of the open conversation's content, in its scroll view.
+private struct ThreadEndKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
 }

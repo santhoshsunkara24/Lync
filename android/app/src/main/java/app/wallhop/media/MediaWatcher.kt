@@ -24,15 +24,19 @@ class MediaWatcher(private val context: Context, private val send: (Message) -> 
     private val sessions = context.getSystemService(MediaSessionManager::class.java)
     private val listenerComponent = ComponentName(context, OtpNotificationListener::class.java)
     private var controller: MediaController? = null
+    /** Every session that's around, each listened to, so whichever starts playing takes over at once. */
+    private var watched: List<MediaController> = emptyList()
     private var lastArtKey: String? = null
     private var pending: Runnable? = null
     private var started = false
 
     private val sessionsChanged = MediaSessionManager.OnActiveSessionsChangedListener { list -> choose(list.orEmpty()) }
 
+    // Any session changing (not only the one shown) can change what should be shown: another app
+    // starting to play, the shown one pausing while another plays, a new track.
     private val callback = object : MediaController.Callback() {
-        override fun onMetadataChanged(metadata: MediaMetadata?) = schedule()
-        override fun onPlaybackStateChanged(state: PlaybackState?) = schedule()
+        override fun onMetadataChanged(metadata: MediaMetadata?) = choose(watched)
+        override fun onPlaybackStateChanged(state: PlaybackState?) = choose(watched)
         override fun onSessionDestroyed() = refresh()
     }
 
@@ -47,7 +51,8 @@ class MediaWatcher(private val context: Context, private val send: (Message) -> 
 
     fun stop() {
         runCatching { sessions.removeOnActiveSessionsChangedListener(sessionsChanged) }
-        controller?.unregisterCallback(callback)
+        watched.forEach { runCatching { it.unregisterCallback(callback) } }
+        watched = emptyList()
         controller = null
         started = false
     }
@@ -64,27 +69,49 @@ class MediaWatcher(private val context: Context, private val send: (Message) -> 
     }
 
     private fun choose(list: List<MediaController>) {
+        watch(list)
         // Ignore idle sessions (call audio, disconnected Bluetooth, system players with nothing loaded).
         val usable = list.filter { controller ->
             controller.metadata != null && controller.playbackState?.state !in setOf(
                 null, PlaybackState.STATE_NONE, PlaybackState.STATE_ERROR, PlaybackState.STATE_STOPPED,
             )
         }
-        val best = usable.firstOrNull { it.playbackState?.state == PlaybackState.STATE_PLAYING }
+        fun playing(c: MediaController) = c.playbackState?.state.let {
+            it == PlaybackState.STATE_PLAYING || it == PlaybackState.STATE_BUFFERING
+        }
+        // What's playing wins; the one already shown keeps its place while it plays, so two apps
+        // playing at once don't flip back and forth.
+        val shown = usable.firstOrNull { it.sessionToken == controller?.sessionToken }
+        val best = shown?.takeIf(::playing)
+            ?: usable.firstOrNull(::playing)
+            ?: shown
             ?: usable.firstOrNull()
             ?: list.firstOrNull { it.metadata != null }
         if (best?.sessionToken != controller?.sessionToken) {
-            controller?.unregisterCallback(callback)
             controller = best
-            best?.registerCallback(callback, handler)
             lastArtKey = null
+            // A different app: shown at once, not after the usual short wait.
+            pending?.let(handler::removeCallbacks)
+            report()
+            return
         }
         schedule()
     }
 
+    /** Listens to exactly the sessions in [list]: new ones added, gone ones dropped. */
+    private fun watch(list: List<MediaController>) {
+        val tokens = list.map { it.sessionToken }.toSet()
+        watched.filter { it.sessionToken !in tokens }.forEach { runCatching { it.unregisterCallback(callback) } }
+        val known = watched.map { it.sessionToken }.toSet()
+        list.filter { it.sessionToken !in known }.forEach { runCatching { it.registerCallback(callback, handler) } }
+        watched = list
+    }
+
+    // Changes come in bursts (title, then artwork, then the playing state): one report for the
+    // burst, quickly enough to feel immediate.
     private fun schedule() {
         pending?.let(handler::removeCallbacks)
-        pending = Runnable { report() }.also { handler.postDelayed(it, 250) }
+        pending = Runnable { report() }.also { handler.postDelayed(it, 120) }
     }
 
     private fun report() {
@@ -99,8 +126,9 @@ class MediaWatcher(private val context: Context, private val send: (Message) -> 
             ?: metadata.getString(MediaMetadata.METADATA_KEY_ALBUM_ARTIST).orEmpty()
         val state = current.playbackState
         val artKey = "${current.packageName}|$title|$artist"
-        val art = if (artKey != lastArtKey) artwork(metadata) else null
-        if (art != null || artKey != lastArtKey) lastArtKey = artKey
+        val newTrack = artKey != lastArtKey
+        val art = if (newTrack) artwork(metadata) else null
+        if (art != null || newTrack) lastArtKey = artKey
 
         send(Message.of(
             "media",
@@ -112,6 +140,9 @@ class MediaWatcher(private val context: Context, private val send: (Message) -> 
             "duration" to metadata.getLong(MediaMetadata.METADATA_KEY_DURATION),
             "position" to (state?.position ?: 0L),
             "art" to (art != null),
+            // A different track or app: whatever artwork the Mac had no longer belongs (sent even
+            // when the new one has none, so the old cover doesn't stay under the new title).
+            "new_track" to newTrack,
             body = art ?: ByteArray(0),
         ))
     }

@@ -90,8 +90,6 @@ import app.wallhop.ui.screens.LicencesScreen
 import app.wallhop.ui.screens.MacDetails
 import app.wallhop.ui.screens.showEntryActions
 import app.wallhop.ui.screens.tapEntry
-import app.wallhop.ui.screens.GuidedSetup
-import app.wallhop.ui.screens.SetupSteps
 import app.wallhop.ui.components.GlassStage
 import app.wallhop.ui.components.MenuItem
 import app.wallhop.ui.components.IncomingBanner
@@ -110,6 +108,13 @@ import app.wallhop.ui.design.Springs
 import app.wallhop.ui.design.Wallhop
 import app.wallhop.ui.design.rememberHaptics
 import app.wallhop.ui.screens.ActivityTab
+import app.wallhop.ui.screens.AskSheet
+import app.wallhop.ui.components.rememberSwipeDismiss
+import androidx.compose.foundation.gestures.draggable
+import androidx.compose.foundation.layout.offset
+import androidx.compose.ui.layout.onSizeChanged
+import kotlin.math.roundToInt
+import app.wallhop.ui.screens.BlockedSheet
 import app.wallhop.ui.screens.AppsScreen
 import app.wallhop.ui.screens.ConnectScreen
 import app.wallhop.ui.screens.MacActions
@@ -167,7 +172,8 @@ fun WallhopRoot(link: LinkManager, demo: Boolean = false) {
     // The scanner's "Enter address": the connect screen opens its address sheet.
     var askAddress by remember { mutableStateOf(false) }
     val introPrefs = remember { context.getSharedPreferences("setup", Context.MODE_PRIVATE) }
-    var introDone by remember { mutableStateOf(demo || introPrefs.getBoolean("intro_done", false)) }
+    // A phone that has paired before never sees the tour again (forgetting the Mac, reinstalling over it).
+    var introDone by remember { mutableStateOf(demo || introPrefs.getBoolean("intro_done", false) || link.pairedMac != null) }
     // The last pairing attempt, for "Try again" when it fails.
     var retryPair by remember { mutableStateOf<(() -> Unit)?>(null) }
     // Pairing just succeeded (the Mac said yes): the pairing screen stays a moment to show it.
@@ -236,6 +242,11 @@ fun WallhopRoot(link: LinkManager, demo: Boolean = false) {
         visibilityThreshold = 0.001f,
         label = "sendOpen",
     )
+    // Pull the sending screen down to hide it: it follows the finger, and Home rises back with it.
+    val sendDrag = rememberSwipeDismiss(lastSending?.id) { lastSending?.let { hiddenSend = it.id } }
+    LaunchedEffect(sendingShown != null) { if (sendingShown != null) sendDrag.reset() }
+    // One counter per tab, bumped when its button is tapped again (LocalScrollToTop).
+    val scrollToTop = remember { mutableStateListOf(0, 0, 0) }
     // Home under the sending screen is out of sight: it stops updating until it's uncovered.
     val homeCovered by remember { androidx.compose.runtime.derivedStateOf { sendOpenState.value > 0.999f } }
     // Files arriving from the Mac: a small banner at the top, not a takeover.
@@ -254,7 +265,7 @@ fun WallhopRoot(link: LinkManager, demo: Boolean = false) {
                     // Home sinks back a little while the sending screen is over it.
                     .graphicsLayer {
                         if (reduceMotionApp) return@graphicsLayer
-                        val p = sendOpenState.value
+                        val p = sendOpenState.value * (1f - sendDrag.progress)
                         scaleX = 1f - 0.06f * p; scaleY = 1f - 0.06f * p
                         translationY = 10.dp.toPx() * p
                     }
@@ -264,7 +275,10 @@ fun WallhopRoot(link: LinkManager, demo: Boolean = false) {
             ) { screen ->
                 when (screen) {
                     0 -> if (!introDone) {
-                        // First launch: the short tour, which can be skipped straight to pairing.
+                        // First launch only: the short tour, which can be skipped straight to pairing.
+                        // Counted as seen the moment it shows, so leaving it any other way (Back,
+                        // closing the app) doesn't bring it back on the next open.
+                        LaunchedEffect(Unit) { introPrefs.edit { putBoolean("intro_done", true) } }
                         app.wallhop.ui.screens.IntroTour(onDone = {
                             introDone = true
                             introPrefs.edit { putBoolean("intro_done", true) }
@@ -302,6 +316,7 @@ fun WallhopRoot(link: LinkManager, demo: Boolean = false) {
                         held[0]?.let { PairingScreen(it, onCancel = { pairingCancelled = true; link.cancelPairing() }, success = state !is LinkState.Pairing) }
                     }
                     else -> CompositionLocalProvider(app.wallhop.ui.components.LocalScreenActive provides !homeCovered) { Tabs(
+                        scrollToTop = scrollToTop,
                         link, state, setup, overlays, demo,
                         tab = tab, showApps = showApps, showLicences = showLicences,
                         onTab = { tab = it; showApps = false; showLicences = false; overlays.dismissToast() },
@@ -323,10 +338,15 @@ fun WallhopRoot(link: LinkManager, demo: Boolean = false) {
                     tabs = listOf(
                         TabItem("Home", WIcons.Laptop),
                         TabItem("Activity", WIcons.Activity),
-                        TabItem("Settings", WIcons.Settings, badge = !setup.essentialsDone),
+                        TabItem("Settings", WIcons.Settings),
                     ),
                     selected = tab,
                     onSelect = { if (tab != it) overlays.dismissToast(); tab = it; showApps = false; showLicences = false },
+                    // Tapped again: out of the page opened over it, or back to the top.
+                    onReselect = { index ->
+                        if (showApps || showLicences) { showApps = false; showLicences = false }
+                        else scrollToTop[index]++
+                    },
                     modifier = Modifier
                         .navigationBarsPadding()
                         .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal))
@@ -336,13 +356,26 @@ fun WallhopRoot(link: LinkManager, demo: Boolean = false) {
             }
             // Dims Home as the screen comes up. Drawn only, so it costs no layout while it fades.
             Box(Modifier.fillMaxSize().drawBehind {
-                val p = sendOpenState.value
+                val p = sendOpenState.value * (1f - sendDrag.progress)
                 if (p > 0.001f) drawRect(androidx.compose.ui.graphics.Color.Black.copy(alpha = 0.55f * p))
             })
             androidx.compose.animation.AnimatedVisibility(
                 visible = sendingShown != null,
                 enter = if (reduceMotionApp) fadeIn(tween(Durations.Quick)) else slideInVertically(Springs.sheetIn()) { it },
-                exit = if (reduceMotionApp) fadeOut(tween(Durations.Quick)) else slideOutVertically(Springs.sheetOut()) { it },
+                // Pulled away, it has already left at the finger's speed.
+                exit = if (sendDrag.gone) androidx.compose.animation.ExitTransition.None
+                    else if (reduceMotionApp) fadeOut(tween(Durations.Quick)) else slideOutVertically(Springs.sheetOut()) { it },
+                modifier = Modifier
+                    .offset { androidx.compose.ui.unit.IntOffset(0, sendDrag.offset.value.roundToInt()) }
+                    .onSizeChanged { sendDrag.extent = it.height.toFloat() }
+                    .draggable(
+                        androidx.compose.foundation.gestures.rememberDraggableState { delta -> sendDrag.drag(delta) },
+                        androidx.compose.foundation.gestures.Orientation.Vertical,
+                        enabled = !reduceMotionApp,
+                        onDragStarted = { sendDrag.grab() },
+                        // Hidden past a third of the screen, or with a flick; it keeps sending either way.
+                        onDragStopped = { velocity -> sendDrag.release(velocity, { lastSending?.let { hiddenSend = it.id } }, commitAt = 0.35f) },
+                    ),
             ) {
                 lastSending?.let { t ->
                     app.wallhop.ui.screens.SendingScreen(
@@ -375,6 +408,7 @@ fun WallhopRoot(link: LinkManager, demo: Boolean = false) {
 
 @Composable
 private fun Tabs(
+    scrollToTop: List<Int>,
     link: LinkManager,
     state: LinkState,
     setup: Setup,
@@ -551,12 +585,16 @@ private fun Tabs(
     }
 
     /** "Try again" on a connection problem: tries now, then says connected or exactly why not. */
+    // One try at a time: tapping Try again again while it's trying does nothing more.
+    var retrying by remember { mutableStateOf(false) }
     fun retryConnect() {
+        if (retrying) return
+        retrying = true
         overlays.toast("Trying to reach ${currentMacName}…")
         scope.launch {
-            val outcome = link.retryNow()
+            val outcome = try { link.retryNow() } finally { retrying = false }
             if (outcome is LinkState.Connected) {
-                haptics.perform(Haptic.Success)
+                // No buzz here: the link's own click plays as it catches.
                 overlays.toast("Connected to ${outcome.macName}", WIcons.CheckCircle, currentColors.green)
             } else {
                 val problem = link.reachProblem() ?: app.wallhop.core.Problems.away(app.wallhop.core.Away.MacNotAnswering)
@@ -588,16 +626,28 @@ private fun Tabs(
     }
 
     /** Hides entries at once, with Undo; they're removed for good when the toast has gone. */
+    // Deletes in quick succession share one message ("3 deleted") and one Undo that brings them
+    // all back, instead of a new toast replacing the last each time.
+    val undoBatch = remember { arrayOfNulls<Pair<ToastAction, List<String>>>(1) }
+    val commitJob = remember { arrayOfNulls<kotlinx.coroutines.Job>(1) }
     fun deleteEntries(ids: List<String>, message: String) {
         if (ids.isEmpty()) return
+        val joining = undoBatch[0]?.takeIf { overlays.toast?.action === it.first }
+        val all = (joining?.second ?: emptyList()) + ids
         deleting += ids
-        overlays.toast(message, action = ToastAction("Undo") { deleting -= ids.toSet() })
-        scope.launch {
+        val undo = ToastAction("Undo") { deleting -= all.toSet(); undoBatch[0] = null }
+        undoBatch[0] = undo to all
+        overlays.toast(if (joining != null) "${all.size} deleted" else message, action = undo)
+        commitJob[0]?.cancel()
+        commitJob[0] = scope.launch {
             // A little longer than the toast (which lasts as long as accessibility settings ask), so Undo is always in time.
             delay(app.wallhop.ui.components.toastDuration(context, hasAction = true) + 500)
-            val gone = ids.filter { it in deleting }
+            // Still up because a finger is holding it: Undo stays possible until it goes.
+            while (overlays.toast?.action === undo) delay(250)
+            val gone = all.filter { it in deleting }
             link.removeActivity(gone)
             deleting -= gone.toSet()
+            if (undoBatch[0]?.first === undo) undoBatch[0] = null
         }
     }
     fun deleteEntry(id: String) = deleteEntries(listOf(id), "Deleted")
@@ -618,7 +668,8 @@ private fun Tabs(
         ))
     }
 
-    fun entryActions(entry: app.wallhop.link.ActivityEntry) = showEntryActions(overlays, context, entry, haptics, { deleteEntry(it) }) { sent ->
+    fun entryActions(entry: app.wallhop.link.ActivityEntry, anchor: androidx.compose.ui.geometry.Rect? = null) =
+        showEntryActions(overlays, context, entry, haptics, { deleteEntry(it) }, anchor) { sent ->
         LinkService.sendFiles(context, sent.uris.map(android.net.Uri::parse))
     }
     fun entryTap(entry: app.wallhop.link.ActivityEntry) = tapEntry(overlays, context, entry, haptics) { entryActions(it) }
@@ -665,30 +716,24 @@ private fun Tabs(
     // Rotated with the sheet open: open it again, draft and all.
     LaunchedEffect(Unit) { if (textSheetOpen.value) showTextSheet() }
 
-    // Before Android's own prompt: what Lync does with this, in a sentence (Play's prominent disclosure).
-    fun disclose(
-        key: Features.Key,
-        title: String,
-        message: String,
-        extra: (@Composable () -> Unit)? = null,
-        onContinue: () -> Unit,
-    ) {
+    // Before Android's own prompt: what it looks like, what Lync sees and never sees (Play's prominent disclosure).
+    fun disclose(key: Features.Key, extra: (@Composable () -> Unit)? = null, onContinue: () -> Unit) {
+        val ask = app.wallhop.ui.screens.askFor(key) ?: return onContinue()
         overlays.showSheet(
-            title = title,
             onDismiss = {
                 Features.set(context, key, false)
                 currentOnPermissionChange()
             },
         ) {
-            Text(message, style = Type.body, color = Wallhop.colors.labelSecondary)
-            extra?.invoke()
-            Spacer(Modifier.height(20.dp))
-            WButton("Continue", {
-                overlays.dismissSheet(cancelled = false)
-                onContinue()
-            }, style = ButtonStyle.Filled, modifier = Modifier.fillMaxWidth())
-            Spacer(Modifier.height(8.dp))
-            WButton("Not now", { overlays.dismissSheet() }, style = ButtonStyle.Glass, modifier = Modifier.fillMaxWidth())
+            AskSheet(
+                ask,
+                onContinue = {
+                    overlays.dismissSheet(cancelled = false)
+                    onContinue()
+                },
+                onLater = { overlays.dismissSheet() },
+                extra = extra,
+            )
         }
     }
 
@@ -696,7 +741,7 @@ private fun Tabs(
      * A feature that needs permissions: Android won't ask again → straight to "Allow X in
      * Settings" (no disclosure first, it would lead nowhere); otherwise the disclosure, then Android.
      */
-    fun ask(key: Features.Key, title: String, message: String, required: Array<String>, optional: Array<String> = emptyArray()) {
+    fun ask(key: Features.Key, required: Array<String>, optional: Array<String> = emptyArray()) {
         val stuck = blocked(required.toList())
         if (stuck != null) {
             Features.set(context, key, false)
@@ -704,7 +749,7 @@ private fun Tabs(
             showBlockedAlert(overlays, context, key, stuck)
             return
         }
-        disclose(key, title, message) { request(key, required, optional) }
+        disclose(key) { request(key, required, optional) }
     }
 
     // Notification access is a trip to Android's settings. When the user comes back without it on a
@@ -731,29 +776,24 @@ private fun Tabs(
         onPauseOrDispose { }
     }
 
-    fun requestNotificationAccess() = disclose(
-        Features.Key.AppNotifications,
-        "Phone notifications on Mac",
-        "Lync reads notifications from the apps you choose and shows them only on your paired Mac. They never go anywhere else, and you can turn this off at any time.",
-        extra = { NotificationAccessSteps(context) },
-    ) { openAccessList() }
+    fun requestNotificationAccess() =
+        disclose(Features.Key.AppNotifications, extra = { NotificationAccessSteps(context) }) { openAccessList() }
 
-    // The guided setup: after pairing (once) and from "Finish setup".
-    val showSetup = rememberSaveable { mutableStateOf(false) }
-    val setupIndex = rememberSaveable { mutableIntStateOf(0) }
+    // The features that need Android's OK, each behind its ask sheet.
+    fun allowCodes() = ask(Features.Key.Codes, arrayOf(Manifest.permission.RECEIVE_SMS))
+    fun allowCalls() = ask(Features.Key.Calls, CallControl.required, CallControl.optional)
+    fun allowTexts() = ask(Features.Key.Texts, SmsStore.required, SmsStore.optional)
+
+    // Home's one suggestion: the first feature not yet allowed that hasn't been suggested before,
+    // and never a new one the same day as the last.
+    val suggestPrefs = remember { context.getSharedPreferences("suggest", Context.MODE_PRIVATE) }
+    var suggestTick by remember { mutableIntStateOf(0) }
+    fun suggested(key: Features.Key) {
+        suggestPrefs.edit { putBoolean(key.pref, true); putLong("last", System.currentTimeMillis()) }
+        suggestTick++
+    }
+
     val setupPrefs = remember { context.getSharedPreferences("setup", Context.MODE_PRIVATE) }
-    fun openSetup() {
-        setupIndex.intValue = 0
-        showSetup.value = true
-    }
-    fun closeSetup() {
-        showSetup.value = false
-        setupPrefs.edit { putBoolean("guided_done", true) }
-        currentOnTab(0)
-    }
-    fun nextStep() {
-        if (setupIndex.intValue + 1 >= SetupSteps.size) closeSetup() else setupIndex.intValue++
-    }
     // After pairing, once: just the codes permission (the others are asked when each is first used).
     val showAllow = rememberSaveable { mutableStateOf(false) }
     LaunchedEffect(Unit) {
@@ -763,6 +803,8 @@ private fun Tabs(
     fun closeAllow() {
         showAllow.value = false
         setupPrefs.edit { putBoolean("guided_done", true) }
+        // Codes were just asked about: Home doesn't suggest them, or anything else today.
+        suggested(Features.Key.Codes)
         currentOnTab(0)
     }
 
@@ -800,7 +842,8 @@ private fun Tabs(
             },
             openActivity = { currentOnTab(1) },
             macDetails = { showMacDetails() },
-            entryActions = { entry -> entryActions(entry) },
+            entryActions = { entry, anchor -> entryActions(entry, anchor) },
+            deleteEntry = { entry -> deleteEntry(entry.id) },
             entryTap = { entry -> entryTap(entry) },
             more = { anchor ->
                 overlays.showMenu(anchor, listOf(
@@ -808,7 +851,17 @@ private fun Tabs(
                     MenuItem("Forget this Mac", WIcons.LinkBreak, destructive = true) { confirmForget() },
                 ))
             },
-            finishSetup = { openSetup() },
+            setUpSuggestion = { key ->
+                suggested(key)
+                when (key) {
+                    Features.Key.Codes -> allowCodes()
+                    Features.Key.Calls -> allowCalls()
+                    Features.Key.Texts -> allowTexts()
+                    Features.Key.AppNotifications -> requestNotificationAccess()
+                    else -> Unit
+                }
+            },
+            dismissSuggestion = { key -> suggested(key) },
             stopRinging = { app.wallhop.extras.PhoneFinder.stop(context) },
             pairAgain = { link.pairAgain() },
             retryConnect = { retryConnect() },
@@ -817,23 +870,30 @@ private fun Tabs(
         )
     }
 
+    // The Mac asked for a feature that's off: Home, then that feature's ask sheet.
+    val askRequested by AppNav.ask.collectAsStateWithLifecycle()
+    LaunchedEffect(askRequested) {
+        val key = Features.Key.entries.firstOrNull { it.pref == askRequested } ?: return@LaunchedEffect
+        AppNav.ask.value = null
+        currentOnTab(0)
+        if (key in currentSetup.granted) {
+            Features.set(context, key, true)
+            currentOnPermissionChange()
+            overlays.toast("${app.wallhop.ui.screens.askFor(key)?.title ?: "That"} is on.", WIcons.CheckCircle, colors.green)
+        } else when (key) {
+            Features.Key.Codes -> allowCodes()
+            Features.Key.Calls -> allowCalls()
+            Features.Key.Texts -> allowTexts()
+            Features.Key.AppNotifications -> requestNotificationAccess()
+            else -> Unit
+        }
+    }
+
     val settingsActions = remember {
         SettingsActions(
-            allowSms = {
-                ask(Features.Key.Codes, "Codes",
-                    "Lync reads incoming texts only to find one-time codes, and sends just the code to your paired Mac.",
-                    arrayOf(Manifest.permission.RECEIVE_SMS))
-            },
-            allowCalls = {
-                ask(Features.Key.Calls, "Calls",
-                    "Lync shows who's calling on your paired Mac, so you can answer there; call details only go to your Mac. Contacts is optional: without it you'll see numbers.",
-                    CallControl.required, CallControl.optional)
-            },
-            allowTexts = {
-                ask(Features.Key.Texts, "Texts",
-                    "Lync reads and sends your text messages so you can use them on your paired Mac; they only go to your Mac. Contacts is optional.",
-                    SmsStore.required, SmsStore.optional)
-            },
+            allowSms = { allowCodes() },
+            allowCalls = { allowCalls() },
+            allowTexts = { allowTexts() },
             allowNotifications = {
                 val permitted = Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU || granted(Manifest.permission.POST_NOTIFICATIONS)
                 if (permitted && app.wallhop.link.Notifications.blocked(context, app.wallhop.link.Notifications.CHANNEL_FROM_MAC)) {
@@ -855,7 +915,7 @@ private fun Tabs(
             allowBackground = { askBackground() },
             runFix = { fix -> runFix(fix) },
             allowBluetooth = {
-                ask(Features.Key.Bluetooth, "Bluetooth backup", app.wallhop.ui.screens.BLUETOOTH_DISCLOSURE, app.wallhop.link.BleLink.required)
+                ask(Features.Key.Bluetooth, app.wallhop.link.BleLink.required)
             },
             setFeature = { key, on ->
                 Features.set(context, key, on)
@@ -867,12 +927,19 @@ private fun Tabs(
             macDetails = { showMacDetails() },
             openLicences = { currentOnShowLicences(true) },
             openPrivacy = { app.wallhop.core.Open.link(context, PRIVACY_URL) },
-            finishSetup = { openSetup() },
             addTile = { addClipboardTile(context, overlays) },
         )
     }
 
     TransferEffects(link)
+
+    val suggestion = remember(setup.granted, suggestTick, demo) {
+        val today = System.currentTimeMillis() - suggestPrefs.getLong("last", 0L) < 20 * 60 * 60 * 1000L
+        if (demo || today) null
+        else app.wallhop.ui.screens.SuggestionOrder
+            .firstOrNull { it !in setup.granted && !suggestPrefs.getBoolean(it.pref, false) }
+            ?.let { app.wallhop.ui.screens.suggestionFor(it) }
+    }
 
     // Back on Activity or Settings goes to Home first, then leaves the app.
     BackHandler(enabled = tab != 0 && !showApps && !showLicences) { onTab(0) }
@@ -890,12 +957,14 @@ private fun Tabs(
             if (index !in visited) continue
             key(index) {
                 TabSlot(index, tab, visible = index == tab, covered = showApps || showLicences) {
+                    CompositionLocalProvider(app.wallhop.ui.design.LocalScrollToTop provides scrollToTop[index]) {
                     when (index) {
-                        0 -> HomeSlot(link, state, macName, !setup.essentialsDone, macActions, activity, demo)
+                        0 -> HomeSlot(link, state, macName, suggestion, macActions, activity, demo)
                         1 -> ActivityTab(
                             activity, overlays,
                             onTap = { entryTap(it) },
-                            onActions = { entryActions(it) },
+                            onActions = { entry, anchor -> entryActions(entry, anchor) },
+                            onDelete = { deleteEntry(it.id) },
                             onClearOld = { clearOlderThanAWeek() },
                         )
                         else -> SettingsTab(
@@ -914,6 +983,7 @@ private fun Tabs(
                             actions = settingsActions,
                             openApps = { currentOnShowApps(true) },
                         )
+                    }
                     }
                 }
             }
@@ -961,53 +1031,6 @@ private fun Tabs(
                     currentOnPermissionChange()
                     closeAllow()
                 },
-            )
-        }
-        androidx.compose.animation.AnimatedVisibility(
-            visible = showSetup.value,
-            modifier = Modifier.zIndex(3f),
-            enter = fadeIn(tween(Durations.Fade)),
-            exit = fadeOut(tween(Durations.Quick)),
-        ) {
-            // Steps already done are passed over.
-            LaunchedEffect(setupIndex.intValue, setup) {
-                while (setupIndex.intValue < SetupSteps.size && SetupSteps[setupIndex.intValue].key.let { it in setup.granted && Features.on(context, it) }) {
-                    setupIndex.intValue++
-                }
-                if (setupIndex.intValue >= SetupSteps.size) closeSetup()
-            }
-            GuidedSetup(
-                index = setupIndex.intValue,
-                onTurnOn = { step ->
-                    afterAnswer.value = { nextStep() }
-                    when (step.key) {
-                        Features.Key.Codes -> request(step.key, arrayOf(Manifest.permission.RECEIVE_SMS))
-                        Features.Key.Calls -> request(step.key, CallControl.required, CallControl.optional)
-                        Features.Key.Texts -> request(step.key, SmsStore.required, SmsStore.optional)
-                        Features.Key.Notifications -> if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                            request(step.key, arrayOf(Manifest.permission.POST_NOTIFICATIONS))
-                        } else {
-                            Features.set(context, step.key, true)
-                            afterAnswer.value = null
-                            nextStep()
-                        }
-                        Features.Key.Background -> askBackground()
-                        Features.Key.Bluetooth -> request(step.key, app.wallhop.link.BleLink.required)
-                        Features.Key.AppNotifications -> {
-                            // Comes back here; the step moves on once access is on (see the effect above).
-                            afterAnswer.value = null
-                            openAccessList()
-                        }
-                        else -> nextStep()
-                    }
-                },
-                onSkip = { step ->
-                    Features.set(context, step.key, false)
-                    currentOnPermissionChange()
-                    nextStep()
-                },
-                onClose = { closeSetup() },
-                extra = { step -> if (step.key == Features.Key.AppNotifications) NotificationAccessSteps(context) },
             )
         }
     }
@@ -1067,7 +1090,7 @@ private fun HomeSlot(
     link: LinkManager,
     state: LinkState,
     macName: String,
-    needsSetup: Boolean,
+    suggestion: app.wallhop.ui.screens.Suggestion?,
     actions: MacActions,
     activity: List<app.wallhop.link.ActivityEntry>,
     demo: Boolean,
@@ -1094,7 +1117,7 @@ private fun HomeSlot(
     }
     val ringing by app.wallhop.extras.PhoneFinder.ringing.collectAsStateWithLifecycle()
     val bluetooth by link.bluetooth.collectAsStateWithLifecycle()
-    MacTab(state, macName, transfer, needsSetup, actions = actions, card = card, ringing = ringing, bluetooth = bluetooth && !demo)
+    MacTab(state, macName, transfer, suggestion, actions = actions, card = card, ringing = ringing, bluetooth = bluetooth && !demo)
 }
 
 /** Haptics when a transfer ends; a finished one clears itself after a moment. */
@@ -1119,25 +1142,27 @@ private fun TransferEffects(link: LinkManager) {
 
 private const val PRIVACY_URL = "https://github.com/santhoshsunkara24/Lync/blob/main/docs/PRIVACY.md"
 
-/** Android said no and won't ask again: explain, naming the permission that's blocked, and offer Lync's page in Settings. */
+/** Android said no and won't ask again: the steps to its switch in Settings, naming the permission that's blocked. */
 private fun showBlockedAlert(overlays: Overlays, context: Context, key: Features.Key, blockedPermission: String) {
     val permission = app.wallhop.core.Wording.permissionName(blockedPermission)
     val feature = when (key) {
         Features.Key.Codes -> "Codes"
         Features.Key.Calls -> "Calls"
         Features.Key.Texts -> "Texts"
-        Features.Key.Notifications -> "alerts on this phone"
+        Features.Key.Notifications -> "Alerts on this phone"
         Features.Key.Bluetooth -> "Bluetooth backup"
         else -> return
     }
-    overlays.showAlert(AlertSpec(
-        title = "Allow $permission in Settings",
-        message = "Android won't ask again. To use $feature, open Lync's settings, tap Permissions and allow $permission.",
-        actions = listOf(
-            AlertAction("Open Settings", default = true) { app.wallhop.core.Open.appSettings(context) },
-            AlertAction("Not now"),
-        ),
-    ))
+    overlays.showSheet {
+        BlockedSheet(
+            feature, permission,
+            onOpen = {
+                overlays.dismissSheet(cancelled = false)
+                app.wallhop.core.Open.appSettings(context)
+            },
+            onKeepOff = { overlays.dismissSheet() },
+        )
+    }
 }
 
 /** Android's notification access page; Lync's app page if a phone doesn't have it. */
@@ -1246,7 +1271,6 @@ fun readSetup(context: Context): Setup {
         // Done when nothing the user wants (switch on) is still waiting for Android. Skipping a
         // step in the guided setup turns its switch off, so it stops asking. A phone without
         // Bluetooth LE can't have the backup at all, so it doesn't count.
-        essentialsDone = permitted.all { (key, ok) -> ok || !Features.on(context, key) || (key == Features.Key.Bluetooth && !hasLe) },
         bluetoothProblem = bluetoothProblem,
         notificationsBlocked = on(Features.Key.Notifications) &&
             app.wallhop.link.Notifications.blocked(context, app.wallhop.link.Notifications.CHANNEL_FROM_MAC),
@@ -1269,9 +1293,12 @@ private fun openAppBatterySettings(context: Context) {
 /** A page opened from a tab arrives like a tab: fades in while drifting 24 dp from the right. */
 private fun subPageEnter(reduceMotion: Boolean, drift: Int): androidx.compose.animation.EnterTransition =
     if (reduceMotion) fadeIn(tween(Durations.Quick))
-    else fadeIn(tween(Durations.SubPageIn, easing = Easings.Out)) + slideInHorizontally(tween(Durations.SubPageIn, easing = Easings.Out)) { drift }
+    // A spring, so a quick back while it's still arriving turns round from where it is.
+    else fadeIn(tween(Durations.SubPageIn, easing = Easings.Out)) +
+        slideInHorizontally(androidx.compose.animation.core.spring<androidx.compose.ui.unit.IntOffset>(1f, 300f)) { drift }
 
 /** And leaves the same way, back towards the right, quicker than it came. */
 private fun subPageExit(reduceMotion: Boolean, drift: Int): androidx.compose.animation.ExitTransition =
     if (reduceMotion) fadeOut(tween(Durations.Quick))
-    else fadeOut(tween(Durations.SubPageOut, easing = Easings.Out)) + slideOutHorizontally(tween(Durations.SubPageOut, easing = Easings.Out)) { drift }
+    else fadeOut(tween(Durations.SubPageOut, easing = Easings.Out)) +
+        slideOutHorizontally(androidx.compose.animation.core.spring<androidx.compose.ui.unit.IntOffset>(1f, 450f)) { drift }

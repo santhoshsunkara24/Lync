@@ -14,13 +14,22 @@ struct WTheme: Equatable {
     var peek: Color
     var peekPale: Color
     var onPeekPale: Color
+    /// The phone's colour, bright, for glows (the drag-to-send glow).
+    var glow: Color
+    /// The phone's second (accent) colour, as bright: mixed into the same glow.
+    var glowAccent: Color
 
     static let ink = Color(red: 0.043, green: 0.043, blue: 0.047)
-    static let surface = Color.white.opacity(0.07)
-    static let chip = Color.white.opacity(0.13)
-    static let secondary = Color.white.opacity(0.68)
+    // With Increase Contrast on (System Settings › Accessibility › Display), quiet text gets
+    // brighter and edges become clear lines; surfaces become more solid with Reduce Transparency.
+    private static var more: Bool { ReduceMotionObserver.shared.increaseContrast }
+    static var surface: Color { Color.white.opacity(ReduceMotionObserver.shared.reduceTransparency || more ? 0.12 : 0.07) }
+    static var chip: Color { Color.white.opacity(more ? 0.2 : 0.13) }
+    static var secondary: Color { Color.white.opacity(more ? 0.86 : 0.68) }
     /// Times and other quiet labels: still ≥ 4.5:1 on the panel's darker surfaces.
-    static let tertiary = Color.white.opacity(0.6)
+    static var tertiary: Color { Color.white.opacity(more ? 0.8 : 0.6) }
+    /// The thin line around cards and pills: barely there, or clear with Increase Contrast.
+    static var edge: Color { Color.white.opacity(more ? 0.4 : 0.1) }
     /// Destructive actions, failures and declining a call.
     static let danger = Color(red: 1, green: 0.42, blue: 0.38)
     /// Answering a call, codes.
@@ -45,6 +54,7 @@ struct WTheme: Equatable {
             top = Self.color(0, 0, 0.3); mid = Self.color(0, 0, 0.14); card = Self.color(0, 0, 0.12)
             pale = Self.color(0, 0, 0.92); onPale = Self.color(0, 0, 0.12)
             peek = Self.color(0, 0, 0.26); peekPale = Self.color(0, 0, 0.92); onPeekPale = Self.color(0, 0, 0.12)
+            glow = Self.color(0, 0, 0.9); glowAccent = Self.color(0, 0, 0.75)
             return
         }
         let sat = min(max(saturation, 0.45), 0.8)
@@ -53,6 +63,14 @@ struct WTheme: Equatable {
         top = Self.color(p.top); mid = Self.color(p.mid); card = Self.color(p.card)
         pale = Self.color(p.pale); onPale = Self.color(p.onPale)
         peek = Self.color(p.peek); peekPale = Self.color(p.peekPale); onPeekPale = Self.color(p.onPeekPale)
+        // Vivid, not pastel. Light only blends cleanly between neighbouring hues (purple into blue);
+        // opposite ones (rose and green) average to brown. So a far-off accent is swapped for a
+        // neighbour of the main colour, 35° round in the accent's direction.
+        glow = Self.color(Self.rgb(hue, 1, 0.6))
+        var turn = (other - hue).truncatingRemainder(dividingBy: 360)
+        if turn > 180 { turn -= 360 } else if turn < -180 { turn += 360 }
+        let neighbour = abs(turn) <= 60 ? other : hue + (turn >= 0 ? 35 : -35)
+        glowAccent = Self.color(Self.rgb((neighbour + 360).truncatingRemainder(dividingBy: 360), 1, 0.58))
     }
 
     typealias RGB = (r: Double, g: Double, b: Double)
@@ -233,16 +251,27 @@ func withMotion<Result>(_ animation: Animation, _ body: () throws -> Result) ret
 final class ReduceMotionObserver: ObservableObject {
     static let shared = ReduceMotionObserver()
     @Published private(set) var isOn: Bool
+    /// Increase Contrast and Reduce Transparency, from the same Display settings.
+    @Published private(set) var increaseContrast: Bool
+    @Published private(set) var reduceTransparency: Bool
     private var observer: NSObjectProtocol?
 
     private init() {
-        isOn = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
-        observer = NSWorkspace.shared.notificationCenter.addObserver(
+        let workspace = NSWorkspace.shared
+        isOn = workspace.accessibilityDisplayShouldReduceMotion
+        increaseContrast = workspace.accessibilityDisplayShouldIncreaseContrast
+        reduceTransparency = workspace.accessibilityDisplayShouldReduceTransparency
+        observer = workspace.notificationCenter.addObserver(
             forName: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification, object: nil, queue: .main
         ) { [weak self] _ in
-            self?.isOn = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+            self?.isOn = workspace.accessibilityDisplayShouldReduceMotion
+            self?.increaseContrast = workspace.accessibilityDisplayShouldIncreaseContrast
+            self?.reduceTransparency = workspace.accessibilityDisplayShouldReduceTransparency
         }
     }
+
+    /// Changes whenever a display setting that changes colours does, so views can redraw.
+    var appearanceKey: Int { (increaseContrast ? 1 : 0) + (reduceTransparency ? 2 : 0) }
 }
 
 /// Figtree, the phone app's font, and Galindo, the wordmark's, for big titles (both SIL OFL,

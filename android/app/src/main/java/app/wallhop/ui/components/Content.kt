@@ -88,6 +88,9 @@ fun WTextField(
     label: String? = null,
     error: String? = null,
     focusRequester: androidx.compose.ui.focus.FocusRequester? = null,
+    /** The keyboard's action key (Go, Send…) and what it does. */
+    imeAction: androidx.compose.ui.text.input.ImeAction = androidx.compose.ui.text.input.ImeAction.Default,
+    onImeAction: (() -> Unit)? = null,
 ) {
     val colors = Wallhop.colors
     var focused by remember { mutableStateOf(false) }
@@ -103,7 +106,8 @@ fun WTextField(
             maxLines = if (singleLine) 1 else 6,
             textStyle = Type.body.copy(color = colors.label),
             cursorBrush = SolidColor(colors.tint),
-            keyboardOptions = KeyboardOptions(keyboardType = keyboardType),
+            keyboardOptions = KeyboardOptions(keyboardType = keyboardType, imeAction = imeAction),
+            keyboardActions = androidx.compose.foundation.text.KeyboardActions(onAny = { onImeAction?.invoke() }),
             modifier = Modifier
                 .fillMaxWidth()
                 .onFocusChanged { focused = it.isFocused }

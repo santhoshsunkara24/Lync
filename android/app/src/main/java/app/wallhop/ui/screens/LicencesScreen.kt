@@ -1,7 +1,7 @@
 package app.wallhop.ui.screens
 
 import android.content.Context
-import androidx.activity.compose.BackHandler
+import app.wallhop.ui.design.predictiveBack
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -48,10 +48,10 @@ private fun credits(): List<Credit> = buildList {
 /** About › Open-source licences: what Lync is built with. Tap one to read its licence. */
 @Composable
 fun LicencesScreen(overlays: Overlays, onBack: () -> Unit) {
-    BackHandler(onBack = onBack)
     val context = LocalContext.current
     val credits = remember { credits() }
     Page(
+        modifier = Modifier.predictiveBack(onBack = onBack),
         title = "Open-source licences",
         subtitle = "Lync is built with these fonts, icons and libraries.",
         leading = { CircleButton(WIcons.ChevronLeft, "Back", onClick = { onBack() }) },

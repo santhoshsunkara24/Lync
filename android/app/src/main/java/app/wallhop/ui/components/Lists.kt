@@ -1,5 +1,9 @@
 package app.wallhop.ui.components
 
+import androidx.compose.ui.graphics.graphicsLayer
+
+import app.wallhop.ui.design.pressedVisibly
+
 import app.wallhop.ui.design.WIcons
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.tween
@@ -192,7 +196,7 @@ fun ListRow(
 ) {
     val colors = Wallhop.colors
     val source = remember { MutableInteractionSource() }
-    val pressed by source.collectIsPressedAsState()
+    val pressed = source.pressedVisibly()
     val haptics = rememberHaptics()
     val isSwitch = checked != null && onCheckedChange != null
     val highlight by animateColorAsState(
@@ -201,9 +205,19 @@ fun ListRow(
         label = "rowHighlight",
     )
     val currentLongClick by rememberUpdatedState(onLongClick)
+    // Held down on a row with a long press: it sinks slowly over the hold, so the menu opening at
+    // the end feels like the result of pressing, not a surprise. Springs back when let go.
+    val reduceMotion = Wallhop.a11y.reduceMotion
+    val sink by androidx.compose.animation.core.animateFloatAsState(
+        if (pressed && onLongClick != null && !isSwitch && !reduceMotion) 0.97f else 1f,
+        if (pressed) tween(android.view.ViewConfiguration.getLongPressTimeout(), easing = androidx.compose.animation.core.LinearOutSlowInEasing)
+        else Springs.release(),
+        label = "rowSink",
+    )
     Row(
         modifier = modifier
             .fillMaxWidth()
+            .graphicsLayer { scaleX = sink; scaleY = sink }
             .background(highlight)
             .then(
                 when {

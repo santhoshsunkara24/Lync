@@ -5,6 +5,10 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.clickable
+import kotlinx.coroutines.launch
+import app.wallhop.core.Features
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -129,12 +133,16 @@ class MacActions(
     /** The Mac details sheet (DESIGN.md §6.4). */
     val macDetails: () -> Unit,
     /** Copy code / Delete for a Recent entry (long press). */
-    val entryActions: (ActivityEntry) -> Unit,
+    val entryActions: (ActivityEntry, androidx.compose.ui.geometry.Rect?) -> Unit,
+    /** A Recent row swiped away: deleted, with Undo. */
+    val deleteEntry: (ActivityEntry) -> Unit,
     /** A tap on a Recent entry: copy the code, open the file or link, or the actions. */
     val entryTap: (ActivityEntry) -> Unit,
     val more: (Rect) -> Unit,
-    /** The guided setup, from the "Finish setup" card. */
-    val finishSetup: () -> Unit,
+    /** The Home suggestion's Set up: the ask sheet for that feature. */
+    val setUpSuggestion: (Features.Key) -> Unit,
+    /** The Home suggestion's ×: gone for good. */
+    val dismissSuggestion: (Features.Key) -> Unit,
     /** Stops "Ring phone". */
     val stopRinging: () -> Unit,
     /** The Mac forgot this phone: drop the old pairing and pair again. */
@@ -179,7 +187,8 @@ fun MacTab(
     state: LinkState,
     macName: String,
     transfer: TransferState?,
-    needsSetup: Boolean,
+    /** At most one feature to suggest, or null. */
+    suggestion: Suggestion?,
     actions: MacActions,
     card: MacCardData,
     ringing: Boolean = false,
@@ -244,9 +253,12 @@ fun MacTab(
             .background(Brush.verticalGradient(0f to home.top, 0.46f to home.mid, 0.72f to Ink, 1f to Ink)),
         contentAlignment = Alignment.TopCenter,
     ) {
+        val list = androidx.compose.foundation.lazy.rememberLazyListState()
+        app.wallhop.ui.design.ScrollToTopOnReselect(list)
         CompositionLocalProvider(LocalStagger provides rememberStaggerClock()) {
         LazyColumn(
-            Modifier.fillMaxHeight().width(screen + with(density) { sidesPx.toDp() }).windowInsetsPadding(sides),
+            state = list,
+            modifier = Modifier.fillMaxHeight().width(screen + with(density) { sidesPx.toDp() }).windowInsetsPadding(sides),
             contentPadding = PaddingValues(top = statusBar + 18.dp, bottom = navBar + 112.dp),
         ) {
             item(key = "header") {
@@ -281,15 +293,16 @@ fun MacTab(
                     )
                 }
             }
-            // Setup that's still to do sits at the top, not below the fold.
-            if (needsSetup && !forgotten) {
-                item(key = "setup") {
+            // One quiet suggestion at a time, only while linked; × hides it for good.
+            if (suggestion != null && connected) {
+                item(key = "suggest-${suggestion.key}") {
                     Banner(
-                        icon = WIcons.Settings,
-                        title = "Finish setup",
-                        message = "Codes, calls and texts reach your Mac once they're allowed.",
-                        action = "Continue",
-                        onAction = actions.finishSetup,
+                        icon = suggestion.icon,
+                        title = suggestion.title,
+                        message = suggestion.message,
+                        action = "Set up",
+                        onAction = { actions.setUpSuggestion(suggestion.key) },
+                        onDismiss = { actions.dismissSuggestion(suggestion.key) },
                         modifier = Modifier.itemMotion(this, 1).padding(start = 20.dp, end = 20.dp, top = 16.dp),
                     )
                 }
@@ -404,8 +417,13 @@ fun MacTab(
                     ) {
                         rows.forEach { entry ->
                             row {
-                                AnimatedVisibility(entry.visible, enter = rowEnter(reduceMotion), exit = rowExit(reduceMotion)) {
-                                    ActivityRow(entry.item, onLongClick = { actions.entryActions(entry.item) }, onClick = { actions.entryTap(entry.item) }, showDay = true)
+                                // Tied to the entry, not the slot (see Activity).
+                                androidx.compose.runtime.key(entry.key) {
+                                    AnimatedVisibility(entry.visible, enter = rowEnter(reduceMotion), exit = rowExit(reduceMotion)) {
+                                        app.wallhop.ui.components.SwipeToDelete(onDelete = { actions.deleteEntry(entry.item) }) {
+                                            ActivityRow(entry.item, onLongClick = { actions.entryActions(entry.item, it) }, onClick = { actions.entryTap(entry.item) }, showDay = true)
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -413,6 +431,34 @@ fun MacTab(
                 }
             }
         }
+        }
+        // Scrolled past "Home": a small title (tap it to go back up) and the ⋯ button stay at the
+        // top, so the menu never scrolls out of reach.
+        val collapseAt = with(density) { 56.dp.toPx() }
+        val collapsed by remember { androidx.compose.runtime.derivedStateOf { list.firstVisibleItemIndex > 0 || list.firstVisibleItemScrollOffset > collapseAt } }
+        val bar by androidx.compose.animation.core.animateFloatAsState(if (collapsed) 1f else 0f, Springs.smooth(), label = "homeBar")
+        if (bar > 0.01f) {
+            val scope = androidx.compose.runtime.rememberCoroutineScope()
+            val solid = statusBar + 60.dp
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .height(solid + 24.dp)
+                    .graphicsLayer { alpha = bar }
+                    .background(Brush.verticalGradient(0f to home.top, solid / (solid + 24.dp) to home.top, 1f to home.top.copy(alpha = 0f))),
+            ) {
+                Text(
+                    "Home", style = app.wallhop.ui.design.Type.headline, color = Color.White,
+                    modifier = Modifier.align(Alignment.TopCenter).padding(top = statusBar + 6.dp)
+                        .clickable(interactionSource = null, indication = null, onClickLabel = "Scroll to top") {
+                            scope.launch { list.animateScrollToItem(0) }
+                        }
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                )
+                Box(Modifier.align(Alignment.TopEnd).padding(top = statusBar + 4.dp, end = 20.dp)) {
+                    RoundButton(WIcons.More, "More", Color.White.copy(alpha = 0.16f), onClick = actions.more)
+                }
+            }
         }
     }
 }
@@ -427,6 +473,7 @@ private fun Banner(
     onAction: () -> Unit,
     modifier: Modifier = Modifier,
     live: Boolean = false,
+    onDismiss: (() -> Unit)? = null,
 ) {
     val home = Wallhop.home
     Row(
@@ -445,6 +492,14 @@ private fun Banner(
             if (message != null) Text(message, style = Body, color = Color.White.copy(alpha = 0.78f), modifier = Modifier.padding(top = 2.dp))
         }
         PillButton(null, action, home.pale, home.onPale, onAction)
+        if (onDismiss != null) {
+            val source = remember { MutableInteractionSource() }
+            Box(
+                Modifier.size(40.dp).clip(CircleShape).pressDim(source, 0.6f).tappable(source, onClick = onDismiss)
+                    .semantics { contentDescription = "Not now" },
+                contentAlignment = Alignment.Center,
+            ) { Icon(WIcons.Close, null, tint = Color.White.copy(alpha = 0.6f), modifier = Modifier.size(16.dp)) }
+        }
     }
 }
 

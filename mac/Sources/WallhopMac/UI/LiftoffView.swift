@@ -4,9 +4,10 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 /// Liftoff: Lync's link taking off while files go across, the same as on the phone.
-/// Waiting it hovers. When a send starts it crouches, then hovers on its thrust while speed lines
-/// stream back past it. When the send lands it blasts off along its own axis and drops back in,
-/// with a glint running along the tube. Geometry is the app icon's, in a 256 box, turned 45°,
+/// Waiting it rests. When a send starts it crouches and lifts off with speed lines streaming back
+/// past it; after a moment they thin out and it holds still, so a long transfer draws nothing at
+/// all. When the send lands it blasts off along its own axis and drops back in, with a glint
+/// running along the tube. Geometry is the app icon's, in a 256 box, turned 45°,
 /// so "forward" is up and to the right.
 struct LiftoffView: View {
     /// A send is under way.
@@ -15,14 +16,19 @@ struct LiftoffView: View {
     var done: Bool
 
     @State private var engine = LiftoffEngine()
+    /// Nothing is moving: the timeline stops until the send's state changes.
+    @State private var still = false
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1 / 60, paused: WMotion.reduceMotion)) { context in
+        TimelineView(.animation(minimumInterval: 1 / 60, paused: WMotion.reduceMotion || still)) { context in
             Canvas { ctx, size in
                 engine.step(now: context.date, sending: sending, done: done)
                 engine.draw(ctx, size: size)
+                if engine.isStill && !still { DispatchQueue.main.async { still = true } }
             }
         }
+        .onChange(of: sending) { _, _ in still = false }
+        .onChange(of: done) { _, _ in still = false }
         .accessibilityHidden(true)
     }
 }
@@ -33,6 +39,16 @@ final class LiftoffEngine {
     private struct Streak { var off: CGFloat; var d: CGFloat; let len: CGFloat; let w: CGFloat; let v: CGFloat; var life: CGFloat }
 
     private static let launchMs: Double = 260, doneMs: Double = 1150
+    /// How long the speed lines stream once a send is under way, then how long they take to thin out.
+    private static let streamMs: Double = 2400, settleMs: Double = 600
+
+    /// How much of the send's motion is left: 1 while it streams, easing to 0 as it settles.
+    private func thrust() -> Double { 1 - Self.clamp((tp - Self.streamMs) / Self.settleMs) }
+
+    /// The link is at rest with no speed lines left: there's nothing to draw until something changes.
+    var isStill: Bool {
+        lines.isEmpty && (stage == .idle || (stage == .send && tp >= Self.streamMs + Self.settleMs))
+    }
     private static let pathA: Path = {
         var p = Path(); p.move(to: CGPoint(x: 120.22, y: 91.94)); p.addLine(to: CGPoint(x: 62.24, y: 149.92))
         p.addRelativeArc(center: CGPoint(x: 84.16, y: 171.84), radius: 31, startAngle: .degrees(-135), delta: .degrees(-180))
@@ -109,14 +125,15 @@ final class LiftoffEngine {
         var back: CGFloat = 0, stretch: CGFloat = 1, alpha: CGFloat = 1, glint: Double = -1, hover: CGFloat = 0
         var rate: CGFloat = 0, speed = unit * 2.4
         switch stage {
-        case .idle: hover = CGFloat(sin(vt / 900)) * 2
+        case .idle: break
         case .launch:
             let t = tp / Self.launchMs
             back = -10 * CGFloat(Self.easeOut(t)); stretch = 1 - 0.07 * CGFloat(Self.easeOut(t))
         case .send:
-            back = -10 + 16 * CGFloat(Self.easeOut(tp / 220)); stretch = 1.03
-            hover = CGFloat(sin(vt / 70)) * 0.9
-            rate = 26; speed = unit * (2.2 + 1.2 * CGFloat(0.5 + 0.5 * sin(vt / 900)))
+            let k = CGFloat(thrust())
+            back = (-10 + 16 * CGFloat(Self.easeOut(tp / 220))) * CGFloat(Self.easeOut(Double(k))); stretch = 1 + 0.03 * k
+            hover = CGFloat(sin(vt / 70)) * 0.9 * k
+            rate = 26 * k; speed = unit * (2.2 + 1.2 * CGFloat(0.5 + 0.5 * sin(vt / 900)))
         case .done:
             if tp < 420 {
                 let k = CGFloat(Self.easeIn(tp / 420)); back = 6 + k * unit * 1.2; stretch = 1 + 0.4 * k; rate = 40; speed = unit * 4
@@ -151,7 +168,7 @@ final class LiftoffEngine {
             c.opacity = 0.85 * min(1, l.life * 1.6)
             c.stroke(line, with: .color(Self.streakColor), style: StrokeStyle(lineWidth: l.w, lineCap: .round))
         }
-        drawLink(ctx, x: bx, y: by, s: linkSize, stretch: stretch, alpha: alpha, glint: glint, sending: stage == .send)
+        drawLink(ctx, x: bx, y: by, s: linkSize, stretch: stretch, alpha: alpha, glint: glint, sending: stage == .send && thrust() > 0.5)
     }
 
     /// The link as a lit mint tube, like the app icon, centred at (x, y) and `s` points tall.

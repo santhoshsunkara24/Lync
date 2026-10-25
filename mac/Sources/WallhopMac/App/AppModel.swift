@@ -214,6 +214,9 @@ final class AppModel: ObservableObject {
     @Published private(set) var panelDropProblem: Problem?
     /// Files being dragged anywhere on the Mac (only while a phone is connected).
     @Published private(set) var fileDrag: FileDragInfo?
+    /// 0…1: how close a file drag's pointer is to the notch (or the menu bar icon). 0 while it's
+    /// elsewhere, so ordinary drags within the Mac show nothing; the glow grows as it comes closer.
+    @Published private(set) var dragApproach: Double = 0
     /// Feedback shown inside the panel while it's open (the overlay is hidden then).
     @Published private(set) var toast: Toast?
     /// The paired phone (id) whose Forget button is waiting for confirmation in Settings.
@@ -639,9 +642,9 @@ final class AppModel: ObservableObject {
                                                   expiresAt: Date().addingTimeInterval(Self.otpLifetime)))
             insert(item)
             copyOTP(code)
-            // It's already on the clipboard, so the card is just a glance: one second, then gone.
-            // (VoiceOver users still get longer; see show(_:for:).)
-            show(.otp(code: code, sender: sender), for: 1)
+            // It's already on the clipboard, so the card is a glance, but long enough to read once
+            // the digits have rolled in; the pointer on it keeps it. (VoiceOver users get longer.)
+            show(.otp(code: code, sender: sender), for: 2.5)
 
         case .status(let level, let isCharging):
             battery = level >= 0 ? level : nil
@@ -661,15 +664,21 @@ final class AppModel: ObservableObject {
             insert(ActivityItem(id: id, date: Date(), payload: .files(FileBatch(expected: count, totalBytes: bytes))))
             show(.receiving(batchId: id), for: nil)
 
-        case .media(let playing, let art):
+        case .media(let playing, let art, let newTrack):
             nowPlaying = playing
             if playing == nil {
                 artwork = nil
             } else if let art {
                 artwork = NSImage(data: art)
+            } else if newTrack {
+                // Something else is playing now and it has no artwork: not the last track's cover.
+                artwork = nil
             }
 
         case .batchProgress(let id, let bytes):
+            // Only when the percentage on screen changes (or once a second): every 256 KB chunk
+            // would redraw the notch card for nothing.
+            guard progressChanged(id, bytes: bytes) else { break }
             updateBatch(id) { $0.receivedBytes = bytes }
 
         case .fileSaved(let id, let url):
@@ -736,7 +745,11 @@ final class AppModel: ObservableObject {
             if live == .notification(key: key), replyingTo != key { hideLive() }
 
         case .outgoingProgress(let id, let sent, let total):
-            outgoing = (id, total > 0 ? Double(sent) / Double(total) : 0)
+            let fraction = total > 0 ? Double(sent) / Double(total) : 0
+            guard outgoing?.id != id || Int(fraction * 100) != Int((outgoing?.progress ?? 0) * 100)
+                    || Date().timeIntervalSince(progressShownAt) >= 1 else { break }
+            progressShownAt = Date()
+            outgoing = (id, fraction)
 
         case .outgoingFinished(let id, let result):
             if result.ok && live == .sending(id: id) {
@@ -785,6 +798,17 @@ final class AppModel: ObservableObject {
             if case .files(let batch) = item.payload { return batch }
         }
         return nil
+    }
+
+    /// When progress last reached the screen, so a slow transfer still moves once a second.
+    private var progressShownAt = Date.distantPast
+
+    private func progressChanged(_ id: String, bytes: Int64) -> Bool {
+        guard let item = activity.first(where: { $0.id == id }), case .files(let batch) = item.payload, batch.totalBytes > 0 else { return true }
+        let changed = bytes * 100 / batch.totalBytes != batch.receivedBytes * 100 / batch.totalBytes
+        guard changed || Date().timeIntervalSince(progressShownAt) >= 1 else { return false }
+        progressShownAt = Date()
+        return true
     }
 
     private func updateBatch(_ id: String, _ change: (inout FileBatch) -> Void) {
@@ -1053,8 +1077,17 @@ final class AppModel: ObservableObject {
         let spoken = [toast.message, toast.detail].compactMap { $0 }.joined(separator: ". ")
         NSAccessibility.post(element: NSApp as Any, notification: .announcementRequested,
                              userInfo: [.announcement: spoken, .priority: NSAccessibilityPriorityLevel.high.rawValue])
-        DispatchQueue.main.asyncAfter(deadline: .now() + (toast.action == nil && toast.detail == nil ? 2 : 6)) { [weak self] in
-            guard let self, self.toastToken == token else { return }
+        expireToast(token, after: toast.action == nil && toast.detail == nil ? 2 : 6)
+    }
+
+    /// The pointer is on the toast: it waits, then stays a moment after the pointer leaves.
+    var toastHovered = false {
+        didSet { if !toastHovered, toast != nil { expireToast(toastToken, after: 1.5) } }
+    }
+
+    private func expireToast(_ token: Int, after delay: TimeInterval) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+            guard let self, self.toastToken == token, !self.toastHovered else { return }
             self.toast = nil
         }
     }
@@ -1440,9 +1473,12 @@ final class AppModel: ObservableObject {
         fileDrag = FileDragInfo(count: files.count, images: Array(images.prefix(3)), allImages: images.count == files.count)
     }
 
-    /// The pointer came close to the notch or the menu bar icon, or moved away again.
-    func fileDragNear(_ near: Bool) {
-        guard var drag = fileDrag, drag.near != near else { return }
+    /// Where a file drag's pointer is: `approach` 0…1 towards the notch or the menu bar icon,
+    /// `near` when it's at it (the drop zone opens).
+    func fileDragMoved(approach: Double, near: Bool) {
+        guard var drag = fileDrag else { return }
+        if dragApproach != approach { dragApproach = approach }
+        guard drag.near != near else { return }
         drag.near = near
         fileDrag = drag
         dropHover(near, source: "near")
@@ -1454,6 +1490,7 @@ final class AppModel: ObservableObject {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
             guard let self else { return }
             self.fileDrag = nil
+            self.dragApproach = 0
             self.dropHover(false, source: "near")
         }
     }
@@ -1578,6 +1615,10 @@ final class AppModel: ObservableObject {
 
     func media(_ action: String) {
         server.sendMediaCommand(action)
+        // Play/pause answers on the click; the phone's report a moment later confirms (or corrects) it.
+        if action == "toggle", let now = nowPlaying {
+            nowPlaying = NowPlaying(app: now.app, title: now.title, artist: now.artist, playing: !now.playing)
+        }
     }
 
     func answerCall() { callCommand("answer") }
@@ -1624,11 +1665,21 @@ final class AppModel: ObservableObject {
     }
 
     /// Clears every notification here at once and on the phone after 5 s, unless Undo is pressed.
-    func dismissAllNotifications() {
+    func dismissAllNotifications() { clearWithUndo(notifications) }
+
+    /// One notification's Clear in the panel: gone here at once, cleared on the phone after 5 s,
+    /// with Undo meanwhile, like Clear all.
+    func clearNotification(_ key: String) {
+        clearWithUndo(notifications.filter { $0.key == key })
+        if live == .notification(key: key) { hideLive() }
+    }
+
+    private func clearWithUndo(_ items: [PhoneNotification]) {
         flushPendingClear()
-        let cleared = notifications
+        let cleared = items
         guard !cleared.isEmpty else { return }
-        notifications.removeAll()
+        let gone = Set(cleared.map(\.key))
+        notifications.removeAll { gone.contains($0.key) }
         let work = DispatchWorkItem { [weak self] in self?.flushPendingClear() }
         pendingClear = (cleared, work)
         DispatchQueue.main.asyncAfter(deadline: .now() + 5, execute: work)

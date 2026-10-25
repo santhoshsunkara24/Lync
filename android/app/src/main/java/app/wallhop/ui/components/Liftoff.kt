@@ -32,9 +32,10 @@ import kotlin.random.Random
 
 /*
  * Liftoff: Lync's link taking off while files go across, shared with the Mac.
- * Waiting it hovers. When the send starts it crouches, then hovers on its thrust while speed lines
- * stream back past it. When the send lands it blasts off along its own axis and drops back in,
- * with a glint running along the tube. The link is the app icon's: two hooks turned 45°, in a
+ * Waiting it rests. When the send starts it crouches and lifts off with speed lines streaming back
+ * past it; after a moment they thin out and it holds still while the number counts, so a long
+ * send draws nothing at all. When the send lands it blasts off along its own axis and drops back
+ * in, with a glint running along the tube. The link is the app icon's: two hooks turned 45°, in a
  * 256 box, so "forward" is up and to the right.
  */
 private val LinkA = PathParser().parsePathString("M 120.22 91.94 L 62.24 149.92 A 31 31 0 0 0 106.08 193.76 L 116.69 183.15").toPath()
@@ -49,6 +50,12 @@ private val Py = R2
 
 private const val LaunchMs = 260f
 private const val DoneMs = 1150f
+/** How long the speed lines stream once a send is under way, then how long they take to thin out. */
+private const val StreamMs = 2400f
+private const val SettleMs = 600f
+
+/** How much of the send's motion is left: 1 while it streams, easing to 0 as it settles. */
+private fun thrust(tp: Float) = 1f - clamp((tp - StreamMs) / SettleMs)
 
 private enum class Stage { Idle, Launch, Send, Done }
 
@@ -116,7 +123,9 @@ fun Liftoff(sending: Boolean, done: Boolean, modifier: Modifier = Modifier) {
     val currentDone by rememberUpdatedState(done)
     val frame = remember { mutableLongStateOf(0L) }
 
-    LaunchedEffect(reduceMotion) {
+    // Runs only while something moves: the lift-off, the first seconds of a send, the landing. It
+    // stops once the link is still, and starts again when the send's state changes.
+    LaunchedEffect(reduceMotion, sending, done) {
         if (reduceMotion) return@LaunchedEffect
         var last = withFrameNanos { it }
         while (true) {
@@ -134,6 +143,12 @@ fun Liftoff(sending: Boolean, done: Boolean, modifier: Modifier = Modifier) {
                 engine.stage == Stage.Done && engine.tp >= DoneMs -> { engine.stage = Stage.Idle; engine.tp = 0f }
             }
             frame.longValue = now
+            val still = engine.lines.isEmpty() && when (engine.stage) {
+                Stage.Idle -> !currentSending || currentDone
+                Stage.Send -> engine.tp >= StreamMs + SettleMs
+                else -> false
+            }
+            if (still) break
         }
     }
 
@@ -163,12 +178,13 @@ private fun DrawScope.drawLiftoff(e: Engine) {
     var speed = unit * 2.4f
     val dt = e.dt
     when (e.stage) {
-        Stage.Idle -> hover = sin(e.vt / 900f) * 2f
+        Stage.Idle -> Unit
         Stage.Launch -> { val t = e.tp / LaunchMs; back = -10f * easeOut(t); stretch = 1f - 0.07f * easeOut(t) }
         Stage.Send -> {
-            back = -10f + 16f * easeOut(e.tp / 220f); stretch = 1.03f
-            hover = sin(e.vt / 70f) * 0.9f
-            rate = 26f; speed = unit * (2.2f + 1.2f * (0.5f + 0.5f * sin(e.vt / 900f)))
+            val k = thrust(e.tp)
+            back = (-10f + 16f * easeOut(e.tp / 220f)) * easeOut(k); stretch = 1f + 0.03f * k
+            hover = sin(e.vt / 70f) * 0.9f * k
+            rate = 26f * k; speed = unit * (2.2f + 1.2f * (0.5f + 0.5f * sin(e.vt / 900f)))
         }
         Stage.Done -> {
             val t = e.tp
@@ -209,7 +225,8 @@ private fun DrawScope.drawLiftoff(e: Engine) {
             alpha = 0.85f * minOf(1f, l.life * 1.6f),
         )
     }
-    drawLinkTube(bx, by, linkSize, stretch, alpha, glint, glow = if (e.stage == Stage.Send) 0.9f else 0.6f, glowBrush = e.glowBrush(linkSize * 0.75f))
+    val glow = if (e.stage == Stage.Send) 0.6f + 0.3f * thrust(e.tp) else 0.6f
+    drawLinkTube(bx, by, linkSize, stretch, alpha, glint, glow = glow, glowBrush = e.glowBrush(linkSize * 0.75f))
 }
 
 /** The link as a lit mint tube, like the app icon, centred at ([x], [y]) and [s] px tall. */

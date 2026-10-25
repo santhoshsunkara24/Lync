@@ -33,46 +33,62 @@ object Glyphs {
     }
 
     /**
-     * The Lync droid for the Glyph Matrix, drawn pixel by pixel from the logo (brand/kit): the bar,
-     * the head hanging from it, two eyes and the antennae leaning out. `#` is lit.
+     * Lync's link for the Glyph Matrix, drawn pixel by pixel from the app icon: two hooks turned 45°,
+     * interlocked, with a pixel of air between them so they still read as two at this size. `A` is the lower-left hook, `B` the upper-right one (the same hook turned half a
+     * turn), so the two can move apart and clasp. Anything else is dark.
      */
-    internal val droid13 = listOf(
-        "###########",
-        ".#########.",
-        ".##.###.##.",
-        "..#######..",
-        "...#####...",
-        "...#...#...",
-        "..#.....#..",
+    internal val link13 = listOf(
+        "........BB...",
+        ".......BBBB..",
+        "..........BB.",
+        ".....AA...BB.",
+        "....AA...BB..",
+        "...AA...BB...",
+        "..AA...BB....",
+        ".AA...BB.....",
+        ".AA..........",
+        "..AAAA.......",
+        "...AA........",
     )
-    internal val droid25 = listOf(
-        ".#####################.",
-        "#######################",
-        "...#################...",
-        "...#################...",
-        "...####..#####..####...",
-        "....###..#####..###....",
-        ".....#############.....",
-        "......###########......",
-        ".......#########.......",
-        ".......#.......#.......",
-        "......#.........#......",
-        "......#.........#......",
+    internal val link25 = listOf(
+        ".................BB......",
+        "...............BBBBBB....",
+        "..............BBBBBBBB...",
+        ".............BBBB.BBBB...",
+        ".............BBB...BBB...",
+        "...................BBB...",
+        "..........A........BBB...",
+        ".........AAA......BBBB...",
+        "........AAAA.....BBBB....",
+        ".......AAAA.....BBBB.....",
+        "......AAAA.....BBBB......",
+        ".....AAAA.....BBBB.......",
+        "....AAAA.....BBBB........",
+        "...AAAA......BBB.........",
+        "...AAA........B..........",
+        "...AAA...................",
+        "...AAA...AAA.............",
+        "...AAAA.AAAA.............",
+        "...AAAAAAAA..............",
+        "....AAAAAA...............",
+        "......AA.................",
     )
 
-    /** [art] centred in an [n] x [n] grid, moved down by [dy] rows; [blink] fills the eyes. */
-    internal fun matrix(n: Int, dy: Int = 0, blink: Boolean = false): BooleanArray {
-        val art = if (n >= 25) droid25 else droid13
+    /**
+     * The link centred in an [n] x [n] grid. [apart] moves the hooks along the diagonal, a pixel per
+     * step: 0 is the logo, more pulls them away from each other, -1 squeezes them together.
+     */
+    internal fun matrix(n: Int, apart: Int = 0): BooleanArray {
+        val art = if (n >= 25) link25 else link13
         val grid = BooleanArray(n * n)
-        val top = (n - art.size) / 2 + dy
+        val top = (n - art.size) / 2
         val left = (n - art[0].length) / 2
-        val eyeRows = if (n >= 25) 4..5 else 2..2
         art.forEachIndexed { r, line ->
             line.forEachIndexed { c, ch ->
-                val lit = ch == '#' || (blink && r in eyeRows && ch == '.' &&
-                    line.substring(0, c).contains('#') && line.substring(c).contains('#'))
-                val y = top + r; val x = left + c
-                if (lit && y in 0 until n && x in 0 until n) grid[y * n + x] = true
+                // The lower hook moves down and left, the upper one up and right.
+                val shift = when (ch) { 'A' -> apart; 'B' -> -apart; else -> return@forEachIndexed }
+                val y = top + r + shift; val x = left + c - shift
+                if (y in 0 until n && x in 0 until n) grid[y * n + x] = true
             }
         }
         return grid

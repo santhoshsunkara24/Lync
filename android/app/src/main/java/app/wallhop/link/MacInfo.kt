@@ -33,14 +33,13 @@ internal class MacInfoStore(private val context: Context) {
         wallpaper = runCatching { BitmapFactory.decodeFile(file.path) }.getOrNull(),
     )
 
-    fun save(info: MacInfo, wallpaperJpeg: ByteArray?, hash: String?) {
+    fun save(info: MacInfo, wallpaperJpeg: ByteArray?) {
         if (wallpaperJpeg != null) file.writeBytes(wallpaperJpeg)
         prefs.edit()
             .putInt("battery", info.battery ?: -1)
             .putBoolean("charging", info.charging)
             .putBoolean("laptop", info.laptop)
             .putBoolean("notch", info.notch)
-            .apply { if (hash != null) putString("wp", hash) }
             .apply()
     }
 

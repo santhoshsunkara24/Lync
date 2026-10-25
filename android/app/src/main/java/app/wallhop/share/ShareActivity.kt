@@ -1,5 +1,15 @@
 package app.wallhop.share
 
+import androidx.compose.ui.layout.onSizeChanged
+
+import androidx.compose.foundation.layout.offset
+
+import androidx.compose.foundation.gestures.Orientation
+
+import androidx.compose.foundation.gestures.rememberDraggableState
+
+import androidx.compose.foundation.gestures.draggable
+
 import app.wallhop.ui.design.WIcons
 import android.content.Intent
 import android.net.Uri
@@ -236,24 +246,39 @@ private fun ShareSheet(
         val outside = remember { MutableInteractionSource() }
         Box(Modifier.fillMaxSize().tappable(outside) { close() })
 
+        // Swipe it down like any sheet: it follows the finger and leaves at its speed (the send
+        // carries on, as with Hide).
+        val drag = app.wallhop.ui.components.rememberSwipeDismiss(Unit) { close() }
         AnimatedVisibility(
             visibleState = visible,
             modifier = Modifier.align(Alignment.BottomCenter),
-            enter = slideInVertically(Springs.smooth()) { it },
-            exit = slideOutVertically(Springs.smooth()) { it },
+            enter = slideInVertically(Springs.sheetIn()) { it },
+            exit = if (drag.gone) androidx.compose.animation.ExitTransition.None else slideOutVertically(Springs.sheetOut()) { it },
         ) {
             Column(
                 Modifier
                     .fillMaxWidth()
                     .navigationBarsPadding()
                     .padding(8.dp)
+                    .offset { androidx.compose.ui.unit.IntOffset(0, drag.offset.value.toInt()) }
+                    .onSizeChanged { drag.extent = it.height.toFloat() }
+                    .draggable(
+                        rememberDraggableState { delta -> drag.drag(delta) },
+                        Orientation.Vertical,
+                        onDragStarted = { drag.grab() },
+                        onDragStopped = { velocity -> drag.release(velocity, { close() }) },
+                    )
                     .clip(rounded(Radius.sheet))
                     .background(colors.backgroundElevated.copy(alpha = if (frosted) 0.84f else 1f))
                     .padding(horizontal = 20.dp)
                     .padding(bottom = 20.dp),
             ) {
-                // No grab handle: this sheet doesn't drag. Cancel, Hide, back or a tap outside close it.
-                Box(Modifier.fillMaxWidth().padding(top = 8.dp).height(48.dp)) {
+                // The grabber says it can be pulled down; Cancel, Hide, back and a tap outside close it too.
+                Box(
+                    Modifier.padding(top = 6.dp).align(Alignment.CenterHorizontally).size(36.dp, 5.dp)
+                        .clip(app.wallhop.ui.design.capsule()).background(colors.labelTertiary),
+                )
+                Box(Modifier.fillMaxWidth().height(48.dp)) {
                     val sendingText = shared is ShareActivity.Shared.Text && transfer?.phase == TransferPhase.Sending
                     Box(Modifier.align(Alignment.CenterStart)) {
                         // A text that's on its way can't be called back, so it just carries on;

@@ -265,16 +265,43 @@ class StaggerClock(val start: Long)
 val LocalStagger = compositionLocalOf<StaggerClock?> { null }
 
 /**
- * A new clock each time the screen comes on show. Not right after the app starts: the first
- * screen appears as it always has, so startup looks and measures the same.
+ * The screen's content eases in the first time it comes on show, and only then: coming back to a
+ * tab, closing a page over it or hiding the sending screen finds everything already there, as on
+ * iOS. Not right after the app starts either: the first screen appears as it always has.
  */
 @Composable
 fun rememberStaggerClock(): StaggerClock? {
     val active = LocalScreenActive.current
     val reduceMotion = Wallhop.a11y.reduceMotion
+    val first = remember { arrayOfNulls<StaggerClock>(1) }
     return remember(active, reduceMotion) {
         val now = SystemClock.uptimeMillis()
-        if (!active || reduceMotion || now - Process.getStartUptimeMillis() < 2_000) null else StaggerClock(now)
+        when {
+            reduceMotion -> null
+            first[0] != null -> first[0]
+            !active -> null
+            // A clock from long ago: everything is already shown.
+            now - Process.getStartUptimeMillis() < 2_000 -> StaggerClock(0L).also { first[0] = it }
+            else -> StaggerClock(now).also { first[0] = it }
+        }
+    }
+}
+
+/** Bumped when the active tab is tapped again: its screen scrolls back to the top. */
+val LocalScrollToTop = compositionLocalOf { 0 }
+
+/** Scrolls [state] to the top each time the screen's tab is tapped again. */
+@Composable
+fun ScrollToTopOnReselect(state: androidx.compose.foundation.lazy.LazyListState) {
+    val request = LocalScrollToTop.current
+    val reduceMotion = Wallhop.a11y.reduceMotion
+    val handled = remember { intArrayOf(request) }
+    LaunchedEffect(request) {
+        if (request == handled[0]) return@LaunchedEffect
+        handled[0] = request
+        // From far down, jump most of the way first, so it arrives quickly instead of scrolling forever.
+        if (!reduceMotion && state.firstVisibleItemIndex > 6) state.scrollToItem(6)
+        if (reduceMotion) state.scrollToItem(0) else state.animateScrollToItem(0)
     }
 }
 

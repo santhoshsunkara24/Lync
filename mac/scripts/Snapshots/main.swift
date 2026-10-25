@@ -211,22 +211,33 @@ CTFontManagerRegisterFontsForURL(URL(fileURLWithPath: "Resources/Galindo.ttf") a
     model.show(.quiet(symbol: LinkCatchView.symbol, text: "Linked with \(phone.name)"), for: nil)
     render("7f_live_linked", overlay(model))
     model.hideLive()
-    // Files dragged somewhere on the Mac: the glow, then the drop zone near the notch.
+    // Files dragged somewhere on the Mac: nothing until they head for the notch, then a faint
+    // glow, a stronger one with the label close up, then the drop zone at the notch.
     model.fileDragBegan(files: [photo, photo, photo])
+    model.fileDragMoved(approach: 0.3, near: false)
+    render("10e_overlay_drag_glow_far", overlay(model))
+    model.fileDragMoved(approach: 0.8, near: false)
     render("10e_overlay_drag_glow", overlay(model))
     render("10f_overlay_drag_glow_pill", overlay(model, notch: false))
-    model.fileDragNear(true)
+    // The glow takes the phone's colours: a purple and blue wallpaper.
+    model.themeStore.update(seed: 0xFF7B4FD6, accent: 0xFF3D7BE0)
+    render("10e_overlay_drag_glow_purple", overlay(model))
+    // Rose with a green accent (opposites): the glow keeps to rose and its neighbours.
+    model.themeStore.update(seed: 0xFFC2185B, accent: 0xFF43A047)
+    render("10e_overlay_drag_glow_rose", overlay(model))
+    model.themeStore.update(seed: WTheme.defaultSeed, accent: WTheme.defaultAccent)
+    model.fileDragMoved(approach: 1, near: true)
     render("10g_overlay_drop_zone", overlay(model))
-    model.fileDragNear(false)
+    model.fileDragMoved(approach: 0, near: false)
     model.fileDragEnded()
     // Menu bar mode: the same moments drop down from the menu bar icon.
     let menuBar = PlacementState()
     menuBar.placement = .menuBar
     model.fileDragBegan(files: [photo])
-    model.fileDragNear(true)
+    model.fileDragMoved(approach: 1, near: true)
     render("10i_menubar_drop_zone", OverlayRoot(model: model, placement: menuBar).frame(width: 448, height: 220)
         .background(Color(white: 0.55)).environmentObject(model.themeStore))
-    model.fileDragNear(false)
+    model.fileDragMoved(approach: 0, near: false)
     model.fileDragEnded()
     model.hideLive()
     // The phone went away: the panel says so.

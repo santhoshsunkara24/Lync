@@ -223,7 +223,7 @@ Mac static = 32 × `0x33`, Mac ephemeral = 32 × `0x44` (X25519, clamped as usua
 | `notif_dismiss` | Mac → phone | `key` | | |
 | `call` | phone → Mac | `id`, `state` (`ringing`, `active`, `ended`, `missed`), `number`, `name`, `sim` (label, only on dual-SIM phones) | | |
 | `call_cmd` | Mac → phone | `action` (`answer`, `decline`, `end`) | | |
-| `media` | phone → Mac | `active` (bool), `app`, `title`, `artist`, `playing` (bool), `duration` (ms), `position` (ms), `art` (bool: body holds new artwork) | album art PNG when `art` is true | |
+| `media` | phone → Mac | `active` (bool), `app`, `title`, `artist`, `playing` (bool), `duration` (ms), `position` (ms), `art` (bool: body holds new artwork), `new_track` (bool: a different track or app; without new artwork the old one no longer applies) | album art JPEG when `art` is true | |
 | `media_cmd` | Mac → phone | `action` (`play`, `pause`, `toggle`, `next`, `previous`, `volume_up`, `volume_down`) | | |
 | `open_url` | both | `url` | | |
 | `ring` | Mac → phone | `action` (`start`, `stop`) | | |

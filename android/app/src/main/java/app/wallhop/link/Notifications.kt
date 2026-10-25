@@ -33,6 +33,9 @@ object Notifications {
     private const val FILES_GROUP = "app.wallhop.FILES_FROM_MAC"
     private const val FILES_SUMMARY_ID = 6
     private const val PROBLEM_NOTIFICATION_ID = 12
+    private const val ASK_NOTIFICATION_ID = 13
+    /** The feature the Mac asked for ("texts"): opens its ask sheet. */
+    const val EXTRA_ASK = "ask"
     const val ACTION_CANCEL_TRANSFER = "app.wallhop.CANCEL_TRANSFER"
     const val ACTION_RETRY_TRANSFER = "app.wallhop.RETRY_TRANSFER"
     const val EXTRA_TRANSFER = "transfer"
@@ -347,6 +350,22 @@ object Notifications {
     private fun post(context: Context, id: Int, notification: Notification) {
         if (!canPost(context)) return
         runCatching { NotificationManagerCompat.from(context).notify(id, notification) }
+    }
+
+    /** The Mac wants a feature that's off (Texts, say) while no Lync screen is open: a tap opens its ask sheet. */
+    fun askFromMac(context: Context, feature: String, title: String) {
+        post(context, ASK_NOTIFICATION_ID, NotificationCompat.Builder(context, CHANNEL_FROM_MAC)
+            .setSmallIcon(R.drawable.ic_stat_wallhop)
+            .setContentTitle(title)
+            .setContentText("Tap to set it up on this phone")
+            .setContentIntent(PendingIntent.getActivity(
+                context, 30,
+                Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP).putExtra(EXTRA_ASK, feature),
+                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+            ))
+            .setAutoCancel(true)
+            .setTimeoutAfter(10 * 60_000)
+            .build())
     }
 
     fun openApp(context: Context, tab: Int? = null): PendingIntent = PendingIntent.getActivity(

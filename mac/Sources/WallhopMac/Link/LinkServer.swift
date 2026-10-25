@@ -27,7 +27,8 @@ enum LinkEvent {
     case otp(code: String, sender: String, app: String)
     case status(battery: Int, charging: Bool)
     case batchStarted(id: String, count: Int, bytes: Int64)
-    case media(NowPlaying?, art: Data?)
+    /// `newTrack`: a different track or app, so old artwork no longer applies.
+    case media(NowPlaying?, art: Data?, newTrack: Bool = false)
     case batchProgress(id: String, bytes: Int64)
     case fileSaved(batch: String, url: URL)
     /// `reason`: the file-ack code the Mac sent back (`storage_full`, `checksum`, …).
@@ -177,6 +178,8 @@ final class LinkServer {
     private var pendingAcks: [String: (connection: UUID, callback: (AckResult) -> Void)] = [:]
     private var pendingResults: [String: (connection: UUID, callback: (RequestResult) -> Void)] = [:]
     private var senders: [String: FileSender] = [:]
+    /// Holds off App Nap and idle sleep while files move.
+    private let busy = TransferActivity()
     /// The fallback when no phone reaches this Mac over Wi-Fi.
     private let bluetooth: BluetoothLink
     /// Stands for the Bluetooth link in `pendingAcks`, so its acks fail when it drops.
@@ -475,7 +478,10 @@ final class LinkServer {
 
     /// Fails everything still waiting on a connection that's going away.
     private func retire(_ connection: PhoneConnection) {
-        for batch in connection.files.cancelAll() { emit(.batchInterrupted(id: batch)) }
+        for batch in connection.files.cancelAll() {
+            busy.end("in:\(batch)")
+            emit(.batchInterrupted(id: batch))
+        }
         for (id, pending) in pendingAcks where pending.connection == connection.id {
             pendingAcks[id] = nil
             pending.callback(.disconnected)
@@ -551,6 +557,7 @@ final class LinkServer {
                     break
                 }
                 files.startBatch(batch)
+                busy.begin("in:\(batch)")
                 emit(.batchStarted(id: batch, count: message.int("count") ?? 1, bytes: bytes))
             }
 
@@ -577,6 +584,7 @@ final class LinkServer {
 
         case "batch_end":
             if let batch = message.string("batch") {
+                busy.end("in:\(batch)")
                 // A refused batch already said so when it started.
                 if files.endBatch(batch) { emit(.batchFinished(id: batch)) }
             }
@@ -590,9 +598,10 @@ final class LinkServer {
             if message.bool("active") == true {
                 let nowPlaying = NowPlaying(app: message.string("app") ?? "", title: message.string("title") ?? "",
                                             artist: message.string("artist") ?? "", playing: message.bool("playing") ?? false)
-                emit(.media(nowPlaying, art: message.bool("art") == true && !message.body.isEmpty ? message.body : nil))
+                emit(.media(nowPlaying, art: message.bool("art") == true && !message.body.isEmpty ? message.body : nil,
+                            newTrack: message.bool("new_track") ?? false))
             } else {
-                emit(.media(nil, art: nil))
+                emit(.media(nil, art: nil, newTrack: true))
             }
 
         case "call":
@@ -825,12 +834,14 @@ final class LinkServer {
                 case .progress(let sent, let total): self.emit(.outgoingProgress(id: batch, sent: sent, total: total))
                 case .finished(let result):
                     self.senders[batch] = nil
+                    self.busy.end("out:\(batch)")
                     self.emit(.outgoingFinished(id: batch, result: result))
                 }
             } registerAck: { id, callback in
                 self.pendingAcks[id] = (active.id, callback)
             }
             self.senders[batch] = sender
+            self.busy.begin("out:\(batch)")
             sender.start()
         }
         return batch

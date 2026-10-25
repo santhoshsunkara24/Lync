@@ -18,14 +18,14 @@ android/.kotlin/
 keystore.properties
 *-upload.properties
 
-# Scratch output and early logo explorations (the final brand is in brand/kit)
+# Scratch output. The app icon's source is brand/icon (final.py builds every platform asset).
 scratch-snap/
-brand/*
-!brand/kit/
-!brand/redesign/
-brand/redesign/*
-!brand/redesign/final/
-brand/kit/out/AppIcon.iconset/
+brand/icon/out/AppIcon.iconset/
+brand/icon/out/*check.png
+__pycache__/
+
+# Things tried and retired, kept aside until launch: delete the folder or move it out before release.
+_trash/
 
 # Nothing Glyph SDK: its licence forbids redistribution. See android/app/libs/README.md
 android/app/libs/*.aar

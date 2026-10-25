@@ -1,5 +1,7 @@
 package app.wallhop.ui
 
+import androidx.core.net.toUri
+
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
@@ -53,6 +55,16 @@ class MainActivity : ComponentActivity() {
             intent.removeExtra(app.wallhop.link.Notifications.EXTRA_PAIR_AGAIN) // Not again on rotation.
             LinkManager.get(this).pairAgain()
         }
+        // Test builds only: `--es stress_send "content://media/external/file/12,…"` sends those files as
+        // one batch, without the file pickers (for files Lync can read, e.g. media it owns).
+        if (app.wallhop.BuildConfig.STRESS_HOOKS) intent?.getStringExtra("stress_send")?.let { uris ->
+            intent.removeExtra("stress_send")
+            LinkService.sendFiles(this, uris.split(',').filter { it.isNotBlank() }.map { it.trim().toUri() })
+        }
+        intent?.getStringExtra(app.wallhop.link.Notifications.EXTRA_ASK)?.let { key ->
+            intent.removeExtra(app.wallhop.link.Notifications.EXTRA_ASK)
+            AppNav.ask.value = key
+        }
         if (intent?.getBooleanExtra(app.wallhop.link.Notifications.EXTRA_PICK, false) == true) {
             intent.removeExtra(app.wallhop.link.Notifications.EXTRA_PICK)
             LinkManager.get(this).clearFinishedTransfer()
@@ -95,6 +107,8 @@ internal object Pickers {
 internal object AppNav {
     val tab = kotlinx.coroutines.flow.MutableStateFlow<Int?>(null)
     val pick = kotlinx.coroutines.flow.MutableStateFlow(false)
+    /** A feature to open the ask sheet for (Features.Key.pref), from the Mac. */
+    val ask = kotlinx.coroutines.flow.MutableStateFlow<String?>(null)
 }
 
 /** One screen with sample data, for screenshots (test builds and the preview build only). */

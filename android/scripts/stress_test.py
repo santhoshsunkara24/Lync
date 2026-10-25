@@ -3,7 +3,7 @@
 Wallhop UI stress test. Hammers the app through adb and records frame times, crashes,
 ANRs, memory and delivery counts for each scenario.
 
-    python3 scripts/stress_test.py --device <serial> --out <folder>
+    python3 scripts/stress_test.py --device <serial> --out <folder> [--minutes 15]
 
 Needs a debug build installed, the phone unlocked with Wallhop paired and connected.
 Never taps anything destructive: no "Forget this Mac", no permission switches, no file
@@ -16,8 +16,11 @@ import subprocess
 import time
 from pathlib import Path
 
+# Test codes per round: each one shows on the Mac.
+OTP_BURST = 5
 ADB = str(Path.home() / "Library/Android/sdk/platform-tools/adb")
-PKG = "app.wallhop"
+PKG = "com.santhoshsunkara.lync"
+ACTIVITY = f"{PKG}/app.wallhop.ui.MainActivity"
 
 
 class Phone:
@@ -28,8 +31,11 @@ class Phone:
         return subprocess.run([ADB, "-s", self.serial, "shell", *args], capture_output=True, text=True, check=check).stdout
 
     def in_front(self):
-        focus = next((l for l in self.sh("dumpsys", "window").splitlines() if "mCurrentFocus" in l), "")
-        return f"{PKG}/" in focus
+        # The focused app, not the focused window: Lync's own menus are popup windows of their own.
+        out = self.sh("dumpsys", "window").splitlines()
+        app = next((l for l in out if "mFocusedApp" in l), "")
+        window = next((l for l in out if "mCurrentFocus" in l), "")
+        return f"{PKG}/" in app and (f"{PKG}/" in window or "PopupWindow" in window or "=null" in window)
 
     def guard(self):
         """Stops everything if another app came to the front, so no input lands outside Wallhop."""
@@ -130,14 +136,14 @@ class Phone:
         return self.sh("logcat", "-d", "-s", "WallhopLink").count("otp delivered=true")
 
 
-def run(phone, out, only=None):
+def run(phone, out, only=None, minutes=0):
     w, h = phone.size()
     results = {"device": phone.sh("getprop", "ro.product.model").strip(),
                "android": phone.sh("getprop", "ro.build.version.release").strip(), "scenarios": []}
     phone.sh("logcat", "-c")
     if not phone.in_front():
         raise SystemExit("Open Wallhop on the unlocked phone first; the test never opens it over another app.")
-    phone.sh("am", "start", "-n", f"{PKG}/.ui.MainActivity")
+    phone.sh("am", "start", "-n", ACTIVITY)
     time.sleep(6)
     results["memory_start_kb"] = phone.memory_kb()
 
@@ -154,24 +160,25 @@ def run(phone, out, only=None):
                   "memory_kb": phone.memory_kb(), "error": error}
         results["scenarios"].append(record)
         print(json.dumps(record))
-        (out / f"{name}.png").write_bytes(subprocess.run([ADB, "-s", phone.serial, "exec-out", "screencap", "-p"],
-                                                         capture_output=True).stdout)
+        if not minutes or name.startswith("r1_"):  # Screenshots from the first round only.
+            (out / f"{name}.png").write_bytes(subprocess.run([ADB, "-s", phone.serial, "exec-out", "screencap", "-p"],
+                                                             capture_output=True).stdout)
 
     nodes = phone.nodes()
     everything = nodes["__all__"]
-    tabs = {name: max(everything[name], key=lambda p: p[1]) for name in ("Mac", "Activity", "Settings") if name in everything}
+    tabs = {name: max(everything[name], key=lambda p: p[1]) for name in ("Home", "Activity", "Settings") if name in everything}
     if len(tabs) < 3:
         raise SystemExit(f"Tab bar not found. Is the phone unlocked with Wallhop open? Saw: {sorted(nodes)[:30]}")
-    bar_y = tabs["Mac"][1]
+    bar_y = tabs["Home"][1]
 
     def tab_spam():
-        order = ["Mac", "Activity", "Settings", "Activity", "Mac", "Settings"] * 8
+        order = ["Home", "Activity", "Settings", "Activity", "Home", "Settings"] * 8
         for name in order:
             phone.tap(*tabs[name])
             time.sleep(0.06)
 
     def droplet_drags():
-        left, right = tabs["Mac"][0], tabs["Settings"][0]
+        left, right = tabs["Home"][0], tabs["Settings"][0]
         for i in range(20):
             a, b = (left, right) if i % 2 == 0 else (right, left)
             phone.swipe(a, bar_y, b, bar_y, 280)
@@ -190,18 +197,19 @@ def run(phone, out, only=None):
         time.sleep(0.6)
         seg = phone.nodes()
         for _ in range(6):
-            for label in ("Codes", "Files & text", "Calls", "All"):
+            for label in ("Codes", "Files", "Calls", "All"):
                 if label in seg:
                     phone.tap(*seg[label])
                     time.sleep(0.05)
 
     def menu_spam():
-        phone.tap(*tabs["Mac"])
+        phone.tap(*tabs["Home"])
         time.sleep(0.8)
         more = phone.nodes().get("More")
         if not more:
             raise RuntimeError("'More' button not found")
-        empty = (w * 0.6, more[1] + 160)  # Beside the "Mac" large title: nothing to hit there.
+        # Left of the menu, in the gap between the Mac card and "Send to Mac": the tap only closes the menu.
+        empty = (w * 0.16, h * 0.46)
         for _ in range(15):
             phone.tap(*more)
             time.sleep(0.18)
@@ -209,7 +217,7 @@ def run(phone, out, only=None):
             time.sleep(0.12)
 
     def sheet_spam():
-        phone.tap(*tabs["Mac"])
+        phone.tap(*tabs["Home"])
         time.sleep(0.8)
         text_tile = phone.nodes().get("Text")
         if not text_tile:
@@ -224,11 +232,16 @@ def run(phone, out, only=None):
         for _ in range(5):
             phone.tap(*tabs["Settings"])
             time.sleep(0.7)
-            phone.tap_label("App notifications")
+            for _ in range(8):  # Settings keeps its scroll position: back to the top first.
+                phone.swipe(w / 2, h * 0.3, w / 2, h * 0.9, 80)
+            time.sleep(0.6)
+            phone.tap_label("Phone notifications on Mac")
             time.sleep(1.2)
             for _ in range(6):
                 phone.swipe(w / 2, h * 0.8, w / 2, h * 0.2, 80)
-            time.sleep(0.5)
+            for _ in range(6):  # Back to the top, where the Back button is.
+                phone.swipe(w / 2, h * 0.3, w / 2, h * 0.9, 80)
+            time.sleep(0.8)
             phone.tap_label("Back")
             time.sleep(0.6)
 
@@ -242,14 +255,36 @@ def run(phone, out, only=None):
         button = phone.nodes().get("Send a test code")
         if not button:
             raise RuntimeError("'Send a test code' row not found (debug build?)")
-        for _ in range(20):
+        # Load rises each round: 5, 10, 20 codes, then again.
+        burst = OTP_BURST * (2 ** ((results["rounds"] - 1) % 3))
+        for _ in range(burst):
             phone.tap(*button)
             time.sleep(0.08)
-        time.sleep(4)
-        results["otp_sent"] = 20
-        results["otp_delivered"] = phone.otp_delivered() - before
+        time.sleep(4 + burst * 0.2)
+        results["otp_sent"] = results.get("otp_sent", 0) + burst
+        results["otp_delivered"] = results.get("otp_delivered", 0) + phone.otp_delivered() - before
 
-    for name, body in [
+    def restart_reconnect():
+        """Force-stops Lync and opens it again; times how long until the Mac shows as linked."""
+        phone.guard()
+        phone.sh("am", "force-stop", PKG)
+        started = time.time()
+        phone.sh("am", "start", "-n", ACTIVITY)
+        while time.time() - started < 30:
+            time.sleep(0.5)
+            if not phone.in_front():
+                continue
+            if "Your Mac" in phone.nodes():
+                break
+        seconds = round(time.time() - started, 1)
+        results.setdefault("reconnect_seconds", []).append(seconds)
+        if seconds >= 30:
+            raise RuntimeError("Not linked again within 30 s")
+        # The tab bar moves with a fresh launch: find it again.
+        found = phone.nodes()["__all__"]
+        tabs.update({name: max(found[name], key=lambda p: p[1]) for name in ("Home", "Activity", "Settings") if name in found})
+
+    scenarios = [
         ("1_tab_spam", tab_spam),
         ("2_droplet_drags", droplet_drags),
         ("3_scroll_flings", scroll_flings),
@@ -258,11 +293,27 @@ def run(phone, out, only=None):
         ("6_sheet_spam", sheet_spam),
         ("7_push_pop_app_list", push_pop),
         ("8_otp_spam", otp_spam),
-    ]:
-        if only and not any(name.startswith(o) for o in only):
-            continue
-        scenario(name, body)
+        ("9_restart_reconnect", restart_reconnect),
+    ]
+    # One pass, or rounds until the time is up (memory and crashes checked every round).
+    deadline = time.time() + minutes * 60
+    results["rounds"] = 0
+    while True:
+        results["rounds"] += 1
+        for name, body in scenarios:
+            if only and not any(name.startswith(o) for o in only):
+                continue
+            scenario(f"r{results['rounds']}_{name}" if minutes else name, body)
+        if not minutes or time.time() >= deadline:
+            break
+        if phone.crashes()["crashes"]:
+            print("Crash seen; stopping early.")
+            break
 
+    # Recovery: a minute with nothing happening, then is it still linked?
+    if minutes:
+        time.sleep(60)
+        results["linked_after_idle"] = "Your Mac" in phone.nodes()
     results["memory_end_kb"] = phone.memory_kb()
     results.update(phone.crashes())
     (out / "results.json").write_text(json.dumps(results, indent=2))
@@ -274,6 +325,7 @@ if __name__ == "__main__":
     parser.add_argument("--device", required=True)
     parser.add_argument("--out", required=True)
     parser.add_argument("--only", nargs="*", help="scenario numbers to run, e.g. 1 2 3")
+    parser.add_argument("--minutes", type=float, default=0, help="repeat the scenarios for this long")
     args = parser.parse_args()
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
@@ -281,6 +333,6 @@ if __name__ == "__main__":
     # Start from a fresh launch. Only when Wallhop is already in front.
     phone.guard()
     phone.sh("am", "force-stop", PKG)
-    phone.sh("am", "start", "-n", f"{PKG}/.ui.MainActivity")
+    phone.sh("am", "start", "-n", ACTIVITY)
     time.sleep(4)
-    run(phone, out, args.only)
+    run(phone, out, args.only, args.minutes)

@@ -5,7 +5,7 @@ import app.wallhop.ui.design.WIcons
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
-import androidx.activity.compose.BackHandler
+import app.wallhop.ui.design.predictiveBack
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Spacer
@@ -56,8 +56,6 @@ data class Setup(
     val bluetooth: Boolean = false,
     /** Features whose Android permission is granted, whether or not they're switched on. */
     val granted: Set<Features.Key>,
-    /** Nothing the user switched on is waiting for a permission. */
-    val essentialsDone: Boolean,
     /** Bluetooth backup can't work: Bluetooth is off, or the phone can't do it. */
     val bluetoothProblem: app.wallhop.core.Problem? = null,
     /** Alerts are on in Lync, but Android blocks Lync's notifications. */
@@ -80,8 +78,6 @@ class SettingsActions(
     val macDetails: () -> Unit,
     val openLicences: () -> Unit,
     val openPrivacy: () -> Unit,
-    /** The guided setup. */
-    val finishSetup: () -> Unit,
     /** Adds the "Clipboard to Mac" Quick Settings tile (or explains how). */
     val addTile: () -> Unit,
     /** Opens the settings page a problem's button points to (Bluetooth, notifications, battery). */
@@ -108,25 +104,6 @@ fun SettingsTab(
     val context = LocalContext.current
     LaunchedEffect(Unit) { if (AppListCache.apps == null) AppListCache.load(context) }
     Page(title = "Settings") {
-        // Something the user wanted is still waiting for Android: first thing on the page.
-        if (!setup.essentialsDone) {
-            item(key = "setup") {
-                Column(Modifier.staggerIn(0)) {
-                    InsetSection(dividerInset = 57.dp) {
-                        row {
-                            ListRow(
-                                title = "Finish setup",
-                                subtitle = "A few things you turned on still need Android's OK",
-                                leading = { IconTile(WIcons.Settings, colors.orange) },
-                                chevron = true,
-                                onClick = actions.finishSetup,
-                            )
-                        }
-                    }
-                    Spacer(Modifier.height(32.dp))
-                }
-            }
-        }
         item(key = "mac") {
             Column(Modifier.staggerIn(1)) {
                 SectionHeader("On your Mac")
@@ -134,7 +111,7 @@ fun SettingsTab(
                     row {
                         ListRow(
                             title = "Codes",
-                            subtitle = "One-time codes from your texts",
+                            subtitle = "Only the code, never the message",
                             leading = { IconTile(WIcons.Code, colors.green) },
                             checked = setup.sms,
                             onCheckedChange = toggle(Features.Key.Codes, actions.allowSms),
@@ -143,6 +120,7 @@ fun SettingsTab(
                     row {
                         ListRow(
                             title = "Calls",
+                            subtitle = "See who's calling",
                             leading = { IconTile(WIcons.Call, colors.green) },
                             checked = setup.calls,
                             onCheckedChange = toggle(Features.Key.Calls, actions.allowCalls),
@@ -151,6 +129,7 @@ fun SettingsTab(
                     row {
                         ListRow(
                             title = "Texts",
+                            subtitle = "Read and reply from your Mac",
                             leading = { IconTile(WIcons.Chats, colors.green) },
                             checked = setup.texts,
                             onCheckedChange = toggle(Features.Key.Texts, actions.allowTexts),
@@ -158,7 +137,7 @@ fun SettingsTab(
                     }
                 }
                 Text(
-                    "Everything goes only to your paired Mac. Call audio stays on the phone.",
+                    "Turn on only what you want. Everything goes only to your paired Mac, encrypted.",
                     style = app.wallhop.ui.design.Type.footnote,
                     color = colors.labelSecondary,
                     modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 7.dp),
@@ -373,7 +352,6 @@ fun AppsScreen(
     onSwitchOn: () -> Unit,
     onBack: () -> Unit,
 ) {
-    BackHandler(onBack = onBack)
     val context = LocalContext.current
     val colors = Wallhop.colors
     val mirrored = remember { MirroredApps.get(context) }
@@ -382,8 +360,13 @@ fun AppsScreen(
     // Shown from the cache at once; refreshed underneath in case apps were installed or removed.
     val apps by produceState(AppListCache.apps) { value = AppListCache.load(context) }
     val recent = remember { mirrored.recent() }
+    // Which section an app sits in is decided when the list opens (and on each search), not on
+    // every switch: turning one on leaves its row under the finger instead of moving it away.
+    // Next time, it's in "On".
+    val grouped = remember(query, apps != null) { enabled }
 
     Page(
+        modifier = Modifier.predictiveBack(onBack = onBack),
         title = "Phone notifications on Mac",
         subtitle = "Pick the apps that show on your Mac. Where an app supports quick reply, you can answer from the Mac.",
         leading = { CircleButton(WIcons.ChevronLeft, "Back", onClick = { onBack() }) },
@@ -429,10 +412,10 @@ fun AppsScreen(
             return@Page
         }
         val filtered = all.filter { query.isBlank() || it.label.contains(query.trim(), ignoreCase = true) }
-        val on = filtered.filter { it.packageName in enabled }
+        val on = filtered.filter { it.packageName in grouped }
         val recentApps = recent.mapNotNull { pkg -> filtered.firstOrNull { it.packageName == pkg } }
-            .filter { it.packageName !in enabled }.take(8)
-        val rest = filtered.filter { it.packageName !in enabled && it !in recentApps }
+            .filter { it.packageName !in grouped }.take(8)
+        val rest = filtered.filter { it.packageName !in grouped && it !in recentApps }
 
         if (filtered.isEmpty()) {
             item(key = "none") { EmptyState(WIcons.BellRinging, "No matches", "No apps match “$query”.") }
@@ -441,7 +424,7 @@ fun AppsScreen(
             if (list.isNotEmpty()) {
                 item(key = "section-$header") { SectionHeader(header) }
                 // One lazy item per app: only the rows on screen are built and decode icons.
-                // Keyed by app alone, so switching one on slides it up into "On" rather than blinking.
+                // Keyed by app alone, so a new search moves rows rather than blinking them.
                 insetSectionItems(list, key = { it.packageName }, dividerInset = 57.dp) { app ->
                     ListRow(
                         title = app.label,
@@ -510,7 +493,7 @@ private fun GlyphSection(hardware: app.wallhop.glyph.Glyphs.Hardware) {
     SectionHeader(if (matrix) "Glyph Matrix" else "Glyph lights")
     InsetSection(
         dividerInset = 57.dp,
-        footer = if (matrix) "The Lync droid appears on the Glyph Matrix." else "Your Glyph lights pulse.",
+        footer = if (matrix) "Lync's link lights up on the Glyph Matrix." else "Your Glyph lights pulse.",
     ) {
         row {
             ListRow(
