@@ -51,12 +51,14 @@ class LinkService : Service() {
         } catch (e: IllegalStateException) {
             // ForegroundServiceStartNotAllowedException (an IllegalStateException) when the system
             // restarts the service from the background on Android 12+. Not fatal: the app starts
-            // it again next time it's opened.
+            // it again next time it's opened. Remembered, so Settings can say why Lync stopped.
             if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) throw e
             refused = true
+            setRefused(this, true)
             stopSelf()
             return
         }
+        setRefused(this, false)
         link.start()
         ContextCompat.registerReceiver(
             this, batteryReceiver, IntentFilter(Intent.ACTION_BATTERY_CHANGED), ContextCompat.RECEIVER_NOT_EXPORTED,
@@ -120,6 +122,14 @@ class LinkService : Service() {
         /** Lync screens (main app, share sheet) currently started; the service may stop only at 0. */
         @Volatile var screensOpen = 0
 
+        /** Android refused to keep Lync running in the background the last time it tried. */
+        fun wasRefused(context: Context): Boolean =
+            context.getSharedPreferences("service", Context.MODE_PRIVATE).getBoolean("refused", false)
+
+        private fun setRefused(context: Context, refused: Boolean) {
+            context.getSharedPreferences("service", Context.MODE_PRIVATE).edit().putBoolean("refused", refused).apply()
+        }
+
         /**
          * With "Run in background" off, stops the service when nothing needs it: no Lync screen
          * open and no transfer waiting or sending.
@@ -165,13 +175,14 @@ class LinkService : Service() {
             // Copy off the main thread; the sheet stays open meanwhile, which keeps read access alive.
             val app = context.applicationContext
             Thread {
-                val copies = SharedFileCache.copy(context, uris)
+                val copied = SharedFileCache.copy(context, uris)
                 val link = LinkManager.get(app)
                 // Files that couldn't be copied are counted, so the result says "2 of 5 sent".
-                val skipped = uris.size - copies.size
-                // A share sheet waits on its request id, so it hears about files that couldn't be read.
-                if (requestId != null) link.sendFiles(copies, requestId, skipped)
-                else if (copies.isNotEmpty()) link.sendFiles(copies, skipped = skipped)
+                val skipped = uris.size - copied.uris.size
+                // Even when none could be read it's queued, so the failure shows (card, sheet,
+                // notification) instead of nothing happening.
+                if (requestId != null) link.sendFiles(copied.uris, requestId, skipped, copied.storageFull)
+                else link.sendFiles(copied.uris, skipped = skipped, storageFull = copied.storageFull)
             }.start()
             start(context)
             return true
@@ -202,7 +213,17 @@ class TransferActionReceiver : BroadcastReceiver() {
             Notifications.ACTION_CANCEL_TRANSFER -> link.cancelTransfer(id)
             Notifications.ACTION_RETRY_TRANSFER -> {
                 LinkService.start(context)
-                link.retryTransfer(id)
+                // Nothing left to resend (the files went away): pick them again in Lync. (Android 12+
+                // blocks this from a notification's broadcast; failures that need it get a Choose
+                // again button that opens Lync directly.)
+                if (!link.retryTransfer(id)) {
+                    link.clearFinishedTransfer()
+                    runCatching {
+                        context.startActivity(Intent(context, app.wallhop.ui.MainActivity::class.java)
+                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                            .putExtra(Notifications.EXTRA_PICK, true))
+                    }
+                }
             }
         }
     }

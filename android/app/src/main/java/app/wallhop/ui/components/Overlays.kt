@@ -9,6 +9,8 @@ import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.animation.togetherWith
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
@@ -31,6 +33,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
@@ -72,9 +75,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.lerp
 import app.wallhop.ui.design.GlassVariant
 import app.wallhop.ui.design.Durations
+import app.wallhop.ui.design.Easings
 import app.wallhop.ui.design.Haptic
 import app.wallhop.ui.design.Radius
 import app.wallhop.ui.design.Springs
@@ -126,6 +129,10 @@ data class ToastSpec(
     val icon: ImageVector?,
     val tint: Color? = null,
     val action: ToastAction? = null,
+    /** A second, quieter line: what to do about it. */
+    val detail: String? = null,
+    /** An error: the failure haptic, and a red icon. */
+    val failure: Boolean = false,
     val id: Long = System.nanoTime(),
 )
 
@@ -167,7 +174,22 @@ class Overlays {
     fun toast(text: String, icon: ImageVector? = null, tint: Color? = null, action: ToastAction? = null) {
         toast = ToastSpec(text, icon, tint, action)
     }
+
+    /**
+     * An error: why on the first line, what to do on the second, and its main button when
+     * [onFix] can do it (the caller decides what Try again or Pair again mean there).
+     */
+    fun problem(problem: app.wallhop.core.Problem, onFix: ((app.wallhop.core.Fix) -> Unit)? = null) {
+        val fix = problem.fix
+        toast = ToastSpec(
+            problem.title, app.wallhop.ui.design.WIcons.Warning,
+            action = if (fix != null && onFix != null) ToastAction(fix.label) { onFix(fix) } else null,
+            detail = problem.action, failure = true,
+        )
+    }
     internal fun clearToast(id: Long) { if (toast?.id == id) toast = null }
+    /** A toast belongs to the screen it came from: switching tabs takes it away. */
+    fun dismissToast() { toast = null }
 }
 
 val LocalOverlays = staticCompositionLocalOf<Overlays?> { null }
@@ -201,16 +223,17 @@ private val dematerialize = Springs.dematerialize<Float>()
 
 /** Slides for things entering and leaving; plain fades with Reduce Motion (DESIGN.md §7.3). */
 private fun slideUpIn(reduceMotion: Boolean, from: (Int) -> Int) =
-    if (reduceMotion) fadeIn(tween(Durations.Quick)) else slideInVertically(Springs.smooth(), from)
+    if (reduceMotion) fadeIn(tween(Durations.Quick)) else slideInVertically(Springs.materialize(), from)
 
+/** Leaving is quicker than arriving: the user is done with it. */
 private fun slideDownOut(reduceMotion: Boolean) =
-    if (reduceMotion) fadeOut(tween(Durations.Quick)) else slideOutVertically(Springs.smooth()) { it }
+    if (reduceMotion) fadeOut(tween(Durations.Quick)) else slideOutVertically(Springs.dematerialize()) { it }
 
 @Composable
-fun BoxScope.OverlayHost(overlays: Overlays) {
+fun BoxScope.OverlayHost(overlays: Overlays, toastBottom: androidx.compose.ui.unit.Dp = 16.dp) {
     val dimmed = overlays.sheet != null || overlays.alert != null || overlays.actionSheet != null
 
-    AnimatedVisibility(dimmed, enter = fadeIn(tween(250)), exit = fadeOut(tween(200))) {
+    AnimatedVisibility(dimmed, enter = fadeIn(tween(Durations.Enter, easing = Easings.Out)), exit = fadeOut(tween(Durations.Exit, easing = Easings.Out))) {
         val source = remember { MutableInteractionSource() }
         Box(
             Modifier
@@ -230,7 +253,7 @@ fun BoxScope.OverlayHost(overlays: Overlays) {
     ActionSheetLayer(overlays)
     MenuLayer(overlays)
     AlertLayer(overlays)
-    ToastLayer(overlays)
+    ToastLayer(overlays, toastBottom)
 }
 
 // MARK: - Sheet
@@ -241,8 +264,15 @@ private fun BoxScope.SheetLayer(overlays: Overlays) {
     val reduceMotion = Wallhop.a11y.reduceMotion
     var shown by remember { mutableStateOf<SheetSpec?>(null) }
     val visible = remember { MutableTransitionState(false) }
+    val keyboard = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
+    val focusManager = androidx.compose.ui.platform.LocalFocusManager.current
     LaunchedEffect(overlays.sheet) {
         if (overlays.sheet != null) shown = overlays.sheet
+        else if (shown != null) {
+            // The keyboard goes with the sheet: its text field is leaving, so nothing is left to type into.
+            focusManager.clearFocus(force = true)
+            keyboard?.hide()
+        }
         visible.targetState = overlays.sheet != null
     }
     if (visible.isIdle && !visible.currentState && overlays.sheet == null) shown = null
@@ -252,7 +282,8 @@ private fun BoxScope.SheetLayer(overlays: Overlays) {
     AnimatedVisibility(
         visibleState = visible,
         modifier = Modifier.align(Alignment.BottomCenter),
-        enter = slideUpIn(reduceMotion) { it / 2 },
+        // From fully below the screen, so it never shows up half-cut at the bottom edge.
+        enter = slideUpIn(reduceMotion) { it },
         exit = slideDownOut(reduceMotion),
     ) {
         // Fully drawn as soon as it's on screen; the enter/exit transition does the motion.
@@ -288,10 +319,11 @@ private fun BoxScope.SheetLayer(overlays: Overlays) {
                     Orientation.Vertical,
                     onDragStopped = { velocity ->
                         if (drag.value > height * 0.25f || velocity > 1800f) {
+                            // Leaves from where the finger let go: no reset here, or the sheet would
+                            // jump back up for a frame before sliding away. A new sheet starts at 0.
                             overlays.dismissSheet()
-                            drag.snapTo(0f)
                         } else {
-                            drag.animateTo(0f, Springs.bouncy())
+                            drag.animateTo(0f, Springs.snappy())
                         }
                     },
                 )
@@ -351,7 +383,6 @@ private fun BoxScope.MenuLayer(overlays: Overlays) {
     Box(Modifier.fillMaxSize().tappable(outside) { overlays.dismissMenu() })
 
     BoxWithConstraints(Modifier.fillMaxSize()) {
-        val p = progress.value
         val anchor = with(density) {
             androidx.compose.ui.geometry.Rect(spec.anchor.left.toDp().value, spec.anchor.top.toDp().value, spec.anchor.right.toDp().value, spec.anchor.bottom.toDp().value)
         }
@@ -362,21 +393,28 @@ private fun BoxScope.MenuLayer(overlays: Overlays) {
         val separatorAt = spec.items.indexOfFirst { it.destructive }.takeIf { it > 0 }
         val separator = if (separatorAt != null) 9.dp else 0.dp
         val menuHeight = rowHeight * spec.items.size + 12.dp + separator
-        val width = lerp(anchor.width.dp, menuWidth, p)
-        val height = lerp(anchor.height.dp, menuHeight, p)
-        val radius = lerp((anchor.height / 2).dp, Radius.l, p.coerceIn(0f, 1f))
         // Grow away from the nearest screen edge, keeping the button's corner fixed.
         val growsLeft = anchor.center.x > maxWidth.value / 2
-        val x = if (growsLeft) anchor.right.dp - width else anchor.left.dp
+        val x = if (growsLeft) anchor.right.dp - menuWidth else anchor.left.dp
         val y = anchor.top.dp
+        val from = with(density) { androidx.compose.ui.geometry.Size(anchor.width.dp.toPx(), anchor.height.dp.toPx()) }
+        val radiusTo = with(density) { Radius.l.toPx() }
+        // Laid out once at full size; the morph is a clip growing out of the button's corner, so
+        // opening it moves pixels only, with no measuring on any frame.
         Column(
             Modifier
                 .offset(x = x, y = y)
-                .requiredSize(width, height)
-                .glass(RoundedRectangle(radius), GlassVariant.Regular, appear = { 0.6f + 0.4f * progress.value })
+                .requiredSize(menuWidth, menuHeight)
+                .graphicsLayer {
+                    val p = progress.value
+                    clip = true
+                    shape = MenuReveal(from, p, growsLeft, from.height / 2, radiusTo)
+                    alpha = (0.6f + 0.4f * p).coerceIn(0f, 1f)
+                }
+                .glass(RoundedRectangle(Radius.l), GlassVariant.Regular, appear = { 1f })
                 .semantics { paneTitle = "Menu" }
                 .padding(vertical = 6.dp)
-                .alpha(((p - 0.4f) / 0.6f).coerceIn(0f, 1f)),
+                .graphicsLayer { alpha = ((progress.value - 0.4f) / 0.6f).coerceIn(0f, 1f) },
         ) {
             spec.items.forEachIndexed { index, item ->
                 if (index == separatorAt) {
@@ -396,7 +434,7 @@ private fun BoxScope.MenuLayer(overlays: Overlays) {
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(item.label, style = Type.body, color = if (item.destructive) colors.red else colors.label,
-                        modifier = Modifier.weight(1f))
+                        maxLines = 1, softWrap = false, modifier = Modifier.weight(1f))
                     if (item.icon != null) {
                         Icon(item.icon, null, tint = if (item.destructive) colors.red else colors.label, modifier = Modifier.size(20.dp))
                     }
@@ -422,8 +460,8 @@ private fun BoxScope.AlertLayer(overlays: Overlays) {
     AnimatedVisibility(
         overlays.alert != null,
         modifier = Modifier.align(Alignment.Center),
-        enter = if (reduceMotion) fadeIn(tween(Durations.Quick)) else fadeIn(tween(200)) + scaleIn(Springs.materialize(), initialScale = 1.08f),
-        exit = fadeOut(tween(200)),
+        enter = if (reduceMotion) fadeIn(tween(Durations.Quick)) else fadeIn(tween(Durations.Fade, easing = Easings.Out)) + scaleIn(Springs.materialize(), initialScale = 1.06f),
+        exit = if (reduceMotion) fadeOut(tween(Durations.Quick)) else fadeOut(tween(Durations.Exit, easing = Easings.Out)) + scaleOut(tween(Durations.Exit, easing = Easings.Out), targetScale = 0.96f),
     ) {
         // Fully drawn as soon as it's on screen; the enter/exit transition does the motion.
         // (An animated "appear" here could stop short on some phones and leave the alert
@@ -548,7 +586,7 @@ private fun BoxScope.ActionSheetLayer(overlays: Overlays) {
 // MARK: - Toast
 
 @Composable
-private fun BoxScope.ToastLayer(overlays: Overlays) {
+private fun BoxScope.ToastLayer(overlays: Overlays, bottom: androidx.compose.ui.unit.Dp) {
     val colors = Wallhop.colors
     val reduceMotion = Wallhop.a11y.reduceMotion
     val haptics = rememberHaptics()
@@ -558,30 +596,46 @@ private fun BoxScope.ToastLayer(overlays: Overlays) {
     if (current != null) shown = current
     LaunchedEffect(current?.id) {
         if (current != null) {
-            if (current.tint == colors.red) haptics.perform(Haptic.Failure)
-            // Longer when there's a button to reach (Undo), and as long as the user's
-            // accessibility settings ask for (TalkBack, "Time to take action").
-            delay(toastDuration(context, current.action != null))
+            if (current.tint == colors.red || current.failure) haptics.perform(Haptic.Failure)
+            // Longer when there's a button to reach (Undo) or a second line to read, and as long
+            // as the user's accessibility settings ask for (TalkBack, "Time to take action").
+            delay(toastDuration(context, current.action != null || current.detail != null))
             overlays.clearToast(current.id)
         }
     }
     AnimatedVisibility(
         current != null,
-        modifier = Modifier.align(Alignment.TopCenter),
-        // Drops from the top with a little bounce; leaves back up (DESIGN.md §5.14).
-        enter = if (reduceMotion) fadeIn(tween(Durations.Quick)) else slideInVertically(Springs.bouncy()) { -it },
+        modifier = Modifier.align(Alignment.BottomCenter),
+        // Rises just above the tab bar (and the keyboard), clear of the screen's title; leaves back
+        // down. Never from scale 0: a short rise with a fade.
+        enter = if (reduceMotion) fadeIn(tween(Durations.Quick))
+            else slideInVertically(Springs.materialize()) { it / 2 } + fadeIn(tween(Durations.Quick, easing = Easings.Out)),
         exit = if (reduceMotion) fadeOut(tween(Durations.Quick))
-            else slideOutVertically(Springs.smooth()) { -it } + fadeOut(tween(Durations.Fade)),
+            else slideOutVertically(Springs.dematerialize()) { it / 2 } + fadeOut(tween(Durations.Quick, easing = Easings.Out)),
     ) {
         // Fully drawn as soon as it's on screen; the enter/exit transition does the motion.
         // (An animated "appear" here could stop short on some phones and leave the toast
         // half see-through, blended with the screen behind it.)
         val appear = 1f
-        val spec = shown ?: return@AnimatedVisibility
+        val showing = shown ?: return@AnimatedVisibility
+        // A new toast while one is up: the old one fades as the new one settles in its place,
+        // rather than its words changing in one frame.
+        androidx.compose.animation.AnimatedContent(
+            targetState = showing,
+            contentKey = { it.id },
+            contentAlignment = Alignment.BottomCenter,
+            transitionSpec = {
+                if (reduceMotion) fadeIn(tween(Durations.Quick)) togetherWith fadeOut(tween(Durations.Quick))
+                else (fadeIn(tween(Durations.Enter, easing = Easings.Out)) + scaleIn(Springs.pop(), initialScale = 0.96f)) togetherWith
+                    fadeOut(tween(Durations.Quick, easing = Easings.Out)) using androidx.compose.animation.SizeTransform(clip = false)
+            },
+            label = "toast",
+        ) { spec ->
         Row(
             Modifier
-                .statusBarsPadding()
-                .padding(top = 8.dp)
+                .navigationBarsPadding()
+                .imePadding()
+                .padding(bottom = bottom + 8.dp)
                 .padding(horizontal = 16.dp)
                 .widthIn(max = 360.dp)
                 .alpha(appear.coerceIn(0f, 1f))
@@ -596,11 +650,16 @@ private fun BoxScope.ToastLayer(overlays: Overlays) {
             // Pale pill, dark text (like the reference's buttons). Icons keep their colour
             // (red for errors, green for success), darkened enough to read on the pale pill.
             if (spec.icon != null) {
-                val tint = spec.tint?.let { androidx.compose.ui.graphics.lerp(it, Wallhop.home.onPale, 0.3f) } ?: Wallhop.home.onPale
+                val tint = (spec.tint ?: colors.red.takeIf { spec.failure })
+                    ?.let { androidx.compose.ui.graphics.lerp(it, Wallhop.home.onPale, 0.3f) } ?: Wallhop.home.onPale
                 Icon(spec.icon, null, tint = tint, modifier = Modifier.size(20.dp))
             }
-            Text(spec.text, style = Type.subheadline.copy(fontWeight = FontWeight.SemiBold), color = Wallhop.home.onPale,
-                modifier = Modifier.weight(1f, fill = false))
+            Column(Modifier.weight(1f, fill = false)) {
+                Text(spec.text, style = Type.subheadline.copy(fontWeight = FontWeight.SemiBold), color = Wallhop.home.onPale)
+                if (spec.detail != null) {
+                    Text(spec.detail, style = Type.footnote, color = Wallhop.home.onPale.copy(alpha = 0.78f))
+                }
+            }
             spec.action?.let { action ->
                 val source = remember { MutableInteractionSource() }
                 Box(
@@ -621,9 +680,36 @@ private fun BoxScope.ToastLayer(overlays: Overlays) {
                 }
             }
         }
+        }
     }
 }
 
 /** How long a toast stays; one with a button (Undo) gets the time the user's settings recommend. */
 fun toastDuration(context: android.content.Context, hasAction: Boolean): Long =
     if (hasAction) recommendedTimeout(context, 5_000, controls = true) else recommendedTimeout(context, 2_500)
+
+/**
+ * The menu's outline while it opens: a rounded rectangle growing from the button's size ([from])
+ * to the whole menu, pinned to the button's top corner on the side it grows away from.
+ */
+private class MenuReveal(
+    private val from: androidx.compose.ui.geometry.Size,
+    private val progress: Float,
+    private val fromRight: Boolean,
+    private val radiusFrom: Float,
+    private val radiusTo: Float,
+) : androidx.compose.ui.graphics.Shape {
+    override fun createOutline(
+        size: androidx.compose.ui.geometry.Size,
+        layoutDirection: androidx.compose.ui.unit.LayoutDirection,
+        density: androidx.compose.ui.unit.Density,
+    ): androidx.compose.ui.graphics.Outline {
+        val w = androidx.compose.ui.util.lerp(from.width, size.width, progress)
+        val h = androidx.compose.ui.util.lerp(from.height, size.height, progress)
+        val left = if (fromRight) size.width - w else 0f
+        val r = androidx.compose.ui.util.lerp(radiusFrom, radiusTo, progress.coerceIn(0f, 1f))
+        return androidx.compose.ui.graphics.Outline.Rounded(
+            androidx.compose.ui.geometry.RoundRect(left, 0f, left + w, h, androidx.compose.ui.geometry.CornerRadius(r)),
+        )
+    }
+}

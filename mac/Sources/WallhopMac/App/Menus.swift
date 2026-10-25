@@ -67,6 +67,15 @@ final class Menus: NSObject {
     func contextMenu() -> NSMenu {
         let menu = NSMenu()
         let connected = model.connectedPhone != nil
+        // Items that need the phone are off: the first line says why.
+        if !connected, let phone = model.bluetoothPhone ?? model.pairedPhones.first {
+            let state = NSMenuItem(title: model.bluetoothPhone != nil ? "\(phone.name) · over Bluetooth" : "\(phone.name) not connected",
+                                   action: nil, keyEquivalent: "")
+            state.isEnabled = false
+            state.toolTip = Problem.disabledHelp(bluetooth: model.bluetoothPhone != nil)
+            menu.addItem(state)
+            menu.addItem(.separator())
+        }
         // Shows the global shortcut; it works from anywhere, not just this menu.
         let open = item("Open Lync", #selector(openLync), key: "l")
         open.keyEquivalentModifierMask = [.option, .command]
@@ -75,10 +84,16 @@ final class Menus: NSObject {
             menu.addItem(item("Copy latest code (\(spaced(code.code)))", #selector(copyLatestCode)))
         }
         menu.addItem(.separator())
-        menu.addItem(item("Send clipboard", #selector(sendClipboard), enabled: connected))
-        menu.addItem(item("Send files…", #selector(sendFiles), enabled: connected))
+        let help = connected ? nil : Problem.disabledHelp(bluetooth: model.bluetoothPhone != nil)
+        for entry in [item("Send clipboard", #selector(sendClipboard), enabled: connected),
+                      item("Send files…", #selector(sendFiles), enabled: connected)] {
+            entry.toolTip = help
+            menu.addItem(entry)
+        }
         menu.addItem(item("Texts", #selector(openMessages)))
-        menu.addItem(item(model.ringing ? "Stop ringing" : "Ring phone", #selector(ringPhone), enabled: connected))
+        let ring = item(model.ringing ? "Stop ringing" : "Ring phone", #selector(ringPhone), enabled: connected)
+        ring.toolTip = help
+        menu.addItem(ring)
         menu.addItem(.separator())
         menu.addItem(item("Add a phone…", #selector(addPhone)))
         menu.addItem(item("Settings…", #selector(showSettings), key: ","))

@@ -5,9 +5,7 @@ import android.os.SystemClock
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.SizeTransform
 import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.FiniteAnimationSpec
-import androidx.compose.animation.core.LinearOutSlowInEasing
 import androidx.compose.animation.core.MutableTransitionState
 import androidx.compose.animation.core.TweenSpec
 import androidx.compose.animation.core.keyframes
@@ -62,12 +60,32 @@ object Durations {
     const val Highlight = 250
     /** Glass glow ramping up under a finger. */
     const val Glow = 90
+    /** Something small arriving: a banner, a badge swapping in. */
+    const val Enter = 260
+    /** The same leaving: quicker than it came. */
+    const val Exit = 200
+    /** A page opened from a tab arriving and leaving (slower and softer, by request). */
+    const val SubPageIn = 380
+    const val SubPageOut = 300
+}
+
+/**
+ * The few curves the app uses, instead of hand-typed ones. Never an ease-in for things on screen:
+ * it starts slowly, just when the eye is on it.
+ */
+object Easings {
+    /** Strong ease-out: arrivals, departures, anything answering a tap. */
+    val Out = androidx.compose.animation.core.CubicBezierEasing(0.23f, 1f, 0.32f, 1f)
+    /** Drawer curve: full-screen sheets sliding over the app. */
+    val Drawer = androidx.compose.animation.core.CubicBezierEasing(0.32f, 0.72f, 0f, 1f)
+    /** Ease-in-out: something moving from one place on screen to another. */
+    val InOut = androidx.compose.animation.core.CubicBezierEasing(0.77f, 0f, 0.175f, 1f)
 }
 
 /** Fade specs; ease-out so things arrive calmly. */
 object Fades {
-    fun <T> fadeIn(): TweenSpec<T> = tween(Durations.Fade, easing = LinearOutSlowInEasing)
-    fun <T> fadeOut(): TweenSpec<T> = tween(Durations.Quick, easing = LinearOutSlowInEasing)
+    fun <T> fadeIn(): TweenSpec<T> = tween(Durations.Fade, easing = Easings.Out)
+    fun <T> fadeOut(): TweenSpec<T> = tween(Durations.Quick, easing = Easings.Out)
 }
 
 // MARK: - Haptic shorthands
@@ -236,8 +254,8 @@ fun Modifier.flashPulse(trigger: Int, glow: Color = Color.White): Modifier {
         if (trigger == 0) return@LaunchedEffect
         flash.snapTo(0f)
         if (reduceMotion) return@LaunchedEffect
-        flash.animateTo(1f, tween(110, easing = FastOutSlowInEasing))
-        flash.animateTo(0f, Springs.bouncy())
+        flash.animateTo(1f, tween(110, easing = Easings.Out))
+        flash.animateTo(0f, Springs.snappy())
     }
     return graphicsLayer {
         val s = 1f + 0.18f * flash.value
@@ -374,8 +392,8 @@ fun DrawnCheck(color: Color, modifier: Modifier = Modifier, strokeWidth: Dp = 3.
     val scale = remember { Animatable(if (reduceMotion) 1f else 0.8f) }
     LaunchedEffect(Unit) {
         if (reduceMotion) return@LaunchedEffect
-        launch { draw.animateTo(1f, tween(300, easing = FastOutSlowInEasing)) }
-        scale.animateTo(1f, Springs.bouncy())
+        launch { draw.animateTo(1f, tween(300, easing = Easings.Out)) }
+        scale.animateTo(1f, Springs.pop())
     }
     Canvas(modifier.graphicsLayer { scaleX = scale.value; scaleY = scale.value }) {
         val w = size.width

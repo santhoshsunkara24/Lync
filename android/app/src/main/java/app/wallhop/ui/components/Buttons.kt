@@ -133,7 +133,7 @@ fun CircleButton(
         modifier = modifier
             .size(48.dp)
             .onGloballyPositioned { bounds[0] = it.boundsInRoot() }
-            .pressScale(source, 0.92f)
+            .pressScale(source, 0.95f)
             .clip(capsule())
             .background(Color.White.copy(alpha = 0.14f))
             .tappable(source) { onClick(bounds[0]) }

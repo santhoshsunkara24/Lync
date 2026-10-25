@@ -124,11 +124,13 @@ class SmsStore(private val context: Context) {
     /**
      * Sends a text and waits for the radio's answer for every part (up to 30 s), so the Mac hears
      * "sent" only once it really went. Android saves it to the phone's Sent messages automatically.
+     * Fails with an [SmsError] whose code the Mac can word (PROTOCOL.md, sms_send ack).
      */
     @SuppressLint("MissingPermission")
     suspend fun send(address: String, text: String, subscriptionId: Int?): Result<Unit> = runCatching {
-        require(canSend) { "permission" }
-        require(address.isNotBlank() && text.isNotBlank()) { "empty" }
+        if (!canSend) throw SmsError("permission")
+        if (address.isBlank()) throw SmsError("bad_number")
+        if (text.isBlank()) throw SmsError("failed")
         val manager: SmsManager = if (subscriptionId != null && subscriptionId >= 0) {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 context.getSystemService(SmsManager::class.java).createForSubscriptionId(subscriptionId)
@@ -157,21 +159,18 @@ class SmsStore(private val context: Context) {
                     PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_ONE_SHOT,
                 )
             })
-            if (parts.size > 1) manager.sendMultipartTextMessage(address, null, parts, sent, null)
-            else manager.sendTextMessage(address, null, text, sent.first(), null)
+            try {
+                if (parts.size > 1) manager.sendMultipartTextMessage(address, null, parts, sent, null)
+                else manager.sendTextMessage(address, null, text, sent.first(), null)
+            } catch (_: IllegalArgumentException) {
+                throw SmsError("bad_number") // Android rejects an address it can't use.
+            }
             val codes = withTimeoutOrNull(SEND_TIMEOUT_MS) { List(parts.size) { results.receive() } }
-                ?: error("No answer from the network")
-            codes.firstOrNull { it != Activity.RESULT_OK }?.let { error(sendError(it)) }
+                ?: throw SmsError("failed")
+            codes.firstOrNull { it != Activity.RESULT_OK }?.let { throw SmsError(app.wallhop.core.Problems.smsErr(it)) }
         } finally {
             runCatching { context.unregisterReceiver(receiver) }
         }
-    }
-
-    private fun sendError(code: Int): String = when (code) {
-        SmsManager.RESULT_ERROR_RADIO_OFF -> "Airplane mode is on"
-        SmsManager.RESULT_ERROR_NO_SERVICE -> "No mobile service"
-        SmsManager.RESULT_ERROR_NULL_PDU, SmsManager.RESULT_ERROR_GENERIC_FAILURE -> "The text couldn't be sent"
-        else -> "The text couldn't be sent ($code)"
     }
 
     private fun simsJson(): JSONArray {
@@ -224,6 +223,9 @@ class SmsStore(private val context: Context) {
         )
     }
 }
+
+/** Why a text didn't send, as a PROTOCOL.md code: permission, bad_number, airplane, no_service, limit or failed. */
+class SmsError(val code: String) : Exception(code)
 
 /** Tells the Mac when texts arrive or are sent, so an open Messages window stays current. */
 class SmsChangeWatcher(private val context: Context, private val onChange: () -> Unit) {

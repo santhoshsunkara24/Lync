@@ -32,11 +32,16 @@ object Notifications {
     private const val TRANSFER_NOTIFICATION_ID = 5
     private const val FILES_GROUP = "app.wallhop.FILES_FROM_MAC"
     private const val FILES_SUMMARY_ID = 6
+    private const val PROBLEM_NOTIFICATION_ID = 12
     const val ACTION_CANCEL_TRANSFER = "app.wallhop.CANCEL_TRANSFER"
     const val ACTION_RETRY_TRANSFER = "app.wallhop.RETRY_TRANSFER"
     const val EXTRA_TRANSFER = "transfer"
     /** MainActivity extra: open this tab (1 = Activity). */
     const val EXTRA_TAB = "tab"
+    /** MainActivity extra: drop the old pairing and show the connect screen. */
+    const val EXTRA_PAIR_AGAIN = "pair_again"
+    /** MainActivity extra: open the last photo or file picker (a Retry with nothing left to resend). */
+    const val EXTRA_PICK = "pick"
 
     fun createChannels(context: Context) {
         val manager = context.getSystemService(NotificationManager::class.java)
@@ -74,9 +79,11 @@ object Notifications {
     }
 
     fun linkNotification(context: Context, state: LinkState): Notification {
+        // Why it isn't connected, once a round of attempts has failed.
+        val problem = (state as? LinkState.Searching)?.reason?.let { app.wallhop.core.Problems.away(it) }
         val text = when (state) {
             is LinkState.Connected -> "Connected to ${state.macName}"
-            is LinkState.Searching -> "Looking for ${state.macName}"
+            is LinkState.Searching -> problem?.title ?: "Looking for ${state.macName}"
             is LinkState.Pairing -> "Pairing with ${state.macName}"
             // Keys are kept and the phone keeps trying, so this isn't "not paired".
             is LinkState.Forgotten -> "${state.macName} doesn't recognise this phone"
@@ -85,12 +92,28 @@ object Notifications {
         val builder = NotificationCompat.Builder(context, CHANNEL_LINK)
             .setSmallIcon(R.drawable.ic_stat_wallhop)
             .setContentTitle(text)
+            .setContentText(problem?.action)
             .setContentIntent(openApp(context))
             .setOngoing(true)
             .setSilent(true)
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
             .setPriority(NotificationCompat.PRIORITY_MIN)
             .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
+        // The button that helps: Pair again, or Wi‑Fi settings.
+        val fix = if (state is LinkState.Forgotten) app.wallhop.core.Fix.PairAgain else problem?.fix
+        when (fix) {
+            app.wallhop.core.Fix.PairAgain -> builder.addAction(0, fix.label, PendingIntent.getActivity(
+                context, 13,
+                Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP).putExtra(EXTRA_PAIR_AGAIN, true),
+                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+            ))
+            app.wallhop.core.Fix.WifiSettings -> app.wallhop.core.Open.intent(context, fix)?.let { wifi ->
+                builder.addAction(0, fix.label, PendingIntent.getActivity(
+                    context, 14, wifi.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK), PendingIntent.FLAG_IMMUTABLE,
+                ))
+            }
+            else -> Unit
+        }
         if (state is LinkState.Connected || state is LinkState.Searching) {
             // Android only lets the app in front read the clipboard, so this opens a see-through screen for a moment.
             val send = PendingIntent.getActivity(
@@ -257,13 +280,61 @@ object Notifications {
                 .setContentText(shown.message ?: what)
                 .setAutoCancel(true)
                 .setTimeoutAfter(5_000)
-            TransferPhase.Failed -> builder
-                .setContentTitle("Couldn't send — Retry")
-                .setContentText(shown.message ?: what)
-                .setAutoCancel(true)
-                .addAction(0, "Retry", action(ACTION_RETRY_TRANSFER, 9))
+            // "Didn't send to MacBook Air", and why: "Mac is out of space. Free up space on your Mac…"
+            TransferPhase.Failed -> {
+                val why = shown.problem?.sentence ?: shown.message ?: what
+                builder
+                    .setContentTitle("Didn't send to $mac")
+                    .setContentText(why)
+                    .setStyle(NotificationCompat.BigTextStyle().bigText(why))
+                    .setAutoCancel(true)
+                // Files that can't be opened again: the button opens Lync's picker instead of retrying.
+                if (shown.problem?.fix == app.wallhop.core.Fix.ChooseAgain) {
+                    builder.addAction(0, app.wallhop.core.Fix.ChooseAgain.label, PendingIntent.getActivity(
+                        context, 16,
+                        Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP).putExtra(EXTRA_PICK, true),
+                        PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+                    ))
+                } else {
+                    builder.addAction(0, "Retry", action(ACTION_RETRY_TRANSFER, 9))
+                }
+            }
         }
         post(context, TRANSFER_NOTIFICATION_ID, builder.build())
+    }
+
+    /**
+     * Something went wrong with no screen open (files from the Mac that didn't save): a quiet
+     * notification with the reason and its button, if it's one Android settings can do.
+     */
+    fun problem(context: Context, problem: app.wallhop.core.Problem) {
+        val builder = NotificationCompat.Builder(context, CHANNEL_FILES)
+            .setSmallIcon(R.drawable.ic_stat_wallhop)
+            .setContentTitle(problem.title)
+            .setContentText(problem.action)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(problem.action))
+            .setContentIntent(openApp(context, tab = 1))
+            .setAutoCancel(true)
+            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+        val fix = problem.fix
+        val open = fix?.takeIf { it == app.wallhop.core.Fix.StorageSettings }?.let { app.wallhop.core.Open.intent(context, it) }
+        if (fix != null && open != null) {
+            builder.addAction(0, fix.label, PendingIntent.getActivity(
+                context, 15, open.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK), PendingIntent.FLAG_IMMUTABLE,
+            ))
+        }
+        post(context, PROBLEM_NOTIFICATION_ID, builder.build())
+    }
+
+    /**
+     * Android won't show Lync's notifications (all of them, or this [channel]): turned off for the
+     * app, the channel set to off, or notification permission denied.
+     */
+    fun blocked(context: Context, channel: String? = null): Boolean {
+        val manager = NotificationManagerCompat.from(context)
+        if (!manager.areNotificationsEnabled()) return true
+        if (channel == null) return false
+        return manager.getNotificationChannel(channel)?.importance == NotificationManager.IMPORTANCE_NONE
     }
 
     /** "Alerts on this phone" is on and Android allows notifications. */

@@ -28,8 +28,14 @@ import java.util.concurrent.ConcurrentHashMap
  */
 class UnpairedException(val macPub: ByteArray?) : IOException("This Mac no longer recognises the phone")
 
-/** The Mac declined pairing. */
-class PairingDeclinedException : IOException("Pairing was declined on the Mac")
+/** The Mac turned pairing down; [err] is its `pair_no` code (PROTOCOL.md), null from older Macs. */
+class PairingDeclinedException(val err: String? = null) : IOException("Pairing was declined on the Mac")
+
+/** The Mac at this address has a different key from the paired one. */
+class WrongMacException : IOException("This isn't the Mac you paired with")
+
+/** The other side doesn't speak this handshake: a different protocol version, or not Lync. */
+class HandshakeException(message: String) : IOException(message)
 
 /** An open, encrypted connection to the paired Mac. */
 class Session(
@@ -40,14 +46,18 @@ class Session(
     val macName: String,
     val host: String,
     val port: Int,
-) {
+    /** The Mac's app version from its hello (`app`); null from Macs before it was added. */
+    val macApp: String? = null,
+    /** The Mac's protocol version (`v`). */
+    val macProtocol: Int = 1,
+) : MacPath {
     private val writeLock = Mutex()
     private val pending = ConcurrentHashMap<String, CompletableDeferred<Message>>()
 
-    @Volatile var closed = false
+    @Volatile override var closed = false
         private set
 
-    suspend fun send(message: Message) = withContext(Dispatchers.IO) {
+    override suspend fun send(message: Message): Unit = withContext(Dispatchers.IO) {
         writeLock.withLock {
             Framing.write(output, channel.seal(message.encode()))
             output.flush()
@@ -59,7 +69,9 @@ class Session(
         CompletableDeferred<Message>().also { pending[id] = it }
 
     /** Sends a message with an `id` and waits for its `ack`. Returns null on timeout. */
-    suspend fun request(message: Message, timeoutMs: Long = 10_000): Message? {
+    suspend fun request(message: Message): Message? = request(message, 10_000)
+
+    override suspend fun request(message: Message, timeoutMs: Long): Message? {
         val id = requireNotNull(message.string("id"))
         val ack = expectAck(id)
         return try {
@@ -115,6 +127,7 @@ class Session(
                 .put("t", "hello")
                 .put("v", 1)
                 .put("name", phoneName)
+                .put("app", app.wallhop.BuildConfig.VERSION_NAME)
                 .put("pub", identity.publicKey.b64())
                 .put("eph", ephemeralPub.b64()))
 
@@ -122,12 +135,12 @@ class Session(
             when (reply.optString("t")) {
                 "unpaired" -> throw UnpairedException(reply.optString("pub").takeIf { it.isNotEmpty() }?.unb64())
                 "hello_ok" -> Unit
-                else -> throw IOException("Unexpected reply: ${reply.optString("t")}")
+                else -> throw HandshakeException("Unexpected reply: ${reply.optString("t")}")
             }
             val macPub = reply.getString("pub").unb64()
             val macEph = reply.getString("eph").unb64()
             if (expectedMacKey != null && !macPub.contentEquals(expectedMacKey)) {
-                throw IOException("This isn't the Mac you paired with")
+                throw WrongMacException()
             }
 
             val ikm = Crypto.dh(ephemeral, macEph) +
@@ -137,11 +150,12 @@ class Session(
             val channel = SecureChannel(sendKey, receiveKey)
 
             val host = socket.inetAddress.hostAddress ?: ""
-            val session = Session(socket, input, output, channel, reply.optString("name", "Mac"), host, socket.port)
+            val session = Session(socket, input, output, channel, reply.optString("name", "Mac"), host, socket.port,
+                macApp = reply.optString("app").takeIf { it.isNotEmpty() }, macProtocol = reply.optInt("v", 1))
             Framing.write(output, channel.seal(Message.of("ready").encode()))
             output.flush()
             val ready = session.read()
-            if (ready.type != "ready") throw IOException("Handshake failed")
+            if (ready.type != "ready") throw HandshakeException("Handshake failed")
             socket.soTimeout = READ_TIMEOUT_MS
             return session to macPub
         }

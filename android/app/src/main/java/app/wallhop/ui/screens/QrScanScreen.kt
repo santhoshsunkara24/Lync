@@ -1,6 +1,5 @@
 package app.wallhop.ui.screens
 
-import androidx.core.net.toUri
 import android.Manifest
 import android.content.pm.PackageManager
 import androidx.activity.compose.BackHandler
@@ -76,7 +75,7 @@ import java.util.concurrent.Executors
  * screen is open, and frames never leave the phone.
  */
 @Composable
-fun QrScanScreen(onScanned: (QrInvite) -> Unit, onClose: () -> Unit) {
+fun QrScanScreen(onScanned: (QrInvite) -> Unit, onClose: () -> Unit, onEnterAddress: () -> Unit = onClose) {
     val context = LocalContext.current
     val activity = LocalActivity.current
     val haptics = rememberHaptics()
@@ -99,6 +98,8 @@ fun QrScanScreen(onScanned: (QrInvite) -> Unit, onClose: () -> Unit) {
     }
     BackHandler(onBack = onClose)
     var notWallhop by remember { mutableStateOf(false) }
+    // A Lync code from a newer Mac app than this phone's.
+    var newer by remember { mutableStateOf(false) }
     var cameraFailed by remember { mutableStateOf(false) }
 
     Box(Modifier.fillMaxSize().background(Color.Black)) {
@@ -112,7 +113,8 @@ fun QrScanScreen(onScanned: (QrInvite) -> Unit, onClose: () -> Unit) {
                         onScanned(invite)
                         true
                     } else {
-                        notWallhop = true
+                        newer = QrInvite.isFromNewerLync(text)
+                        notWallhop = !newer
                         false
                     }
                 },
@@ -130,11 +132,18 @@ fun QrScanScreen(onScanned: (QrInvite) -> Unit, onClose: () -> Unit) {
         ) {
             when {
                 allowed && cameraFailed -> {
-                    Text("Couldn't start the camera", style = Type.title3, color = Color.White, textAlign = TextAlign.Center)
-                    Text("Another app may be using it. You can pick your Mac from the list instead.",
-                        style = Type.subheadline, color = Color.White.copy(alpha = 0.75f), textAlign = TextAlign.Center)
+                    val problem = app.wallhop.core.Problems.CAMERA_FAILED
+                    Text(problem.title, style = Type.title3, color = Color.White, textAlign = TextAlign.Center)
+                    Text(problem.action, style = Type.subheadline, color = Color.White.copy(alpha = 0.75f), textAlign = TextAlign.Center)
                     Spacer(Modifier.height(8.dp))
-                    WButton("Pick from list", onClose, style = ButtonStyle.Filled)
+                    WButton(app.wallhop.core.Fix.EnterAddress.label, onEnterAddress, style = ButtonStyle.Filled)
+                }
+                allowed && newer -> {
+                    val problem = app.wallhop.core.Problems.QR_NEWER
+                    Text(problem.title, style = Type.title3, color = Color.White, textAlign = TextAlign.Center)
+                    Text(problem.action, style = Type.subheadline, color = Color.White.copy(alpha = 0.75f), textAlign = TextAlign.Center)
+                    Spacer(Modifier.height(8.dp))
+                    WButton(app.wallhop.core.Fix.Update.label, { app.wallhop.core.Open.run(context, app.wallhop.core.Fix.Update) }, style = ButtonStyle.Filled)
                 }
                 allowed -> {
                     Text("Scan the code on your Mac", style = Type.title3, color = Color.White, textAlign = TextAlign.Center)
@@ -164,14 +173,7 @@ fun QrScanScreen(onScanned: (QrInvite) -> Unit, onClose: () -> Unit) {
 }
 
 /** Lync's page in Android's settings, where its permissions can be turned on. */
-internal fun openAppDetails(context: android.content.Context) {
-    runCatching {
-        context.startActivity(
-            android.content.Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS, "package:${context.packageName}".toUri())
-                .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK),
-        )
-    }
-}
+internal fun openAppDetails(context: android.content.Context) = app.wallhop.core.Open.appSettings(context)
 
 /**
  * CameraX preview plus a ZXing QR decoder on the frames. [onCode] returns true to stop.

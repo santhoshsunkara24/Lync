@@ -215,7 +215,7 @@ private fun ShareSheet(
         if (closing && visible.isIdle && !visible.currentState) onClose()
     }
     // Some files sent, some unreadable: Done, with a note worth reading before the sheet goes.
-    val partial = (shared as? ShareActivity.Shared.Files)?.let { transfer?.message }
+    val partial = (shared as? ShareActivity.Shared.Files)?.let { transfer?.problem?.sentence ?: transfer?.message }
     val context = androidx.compose.ui.platform.LocalContext.current
     // With TalkBack on, "Done" is read out, so the sheet stays long enough to hear it.
     val talkBack = remember {
@@ -356,19 +356,37 @@ private fun ShareSheet(
                             }
                         }
                         Outcome.Failed -> Column {
+                            // Why, then what to do; never a generic "couldn't reach".
+                            val problem = if (shared == ShareActivity.Shared.Nothing) null
+                                else transfer?.problem ?: link.reachProblem(files = true) ?: app.wallhop.core.Problems.MAC_STOPPED_ANSWERING
                             Text(
-                                when (shared) {
-                                    ShareActivity.Shared.Nothing -> "There's nothing here Lync can send."
-                                    is ShareActivity.Shared.Files -> transfer?.message
-                                        ?: "Couldn't reach your Mac. Check it's awake and on the same Wi-Fi."
-                                    is ShareActivity.Shared.Text -> "Couldn't reach your Mac. Check it's awake and on the same Wi-Fi."
-                                },
-                                style = Type.footnote,
+                                problem?.title ?: "Nothing to send",
+                                style = Type.headline,
                                 color = colors.red,
                             )
-                            if (shared != ShareActivity.Shared.Nothing) {
+                            Text(
+                                problem?.action ?: "There's nothing here Lync can send.",
+                                style = Type.footnote,
+                                color = colors.labelSecondary,
+                                modifier = Modifier.padding(top = 2.dp),
+                            )
+                            if (problem != null) {
                                 Spacer(Modifier.height(12.dp))
-                                WButton("Try again", onClick = onRetry, style = ButtonStyle.Filled, modifier = Modifier.fillMaxWidth())
+                                val context = androidx.compose.ui.platform.LocalContext.current
+                                when (val fix = problem.fix) {
+                                    // Files from another app can't be picked here: Try again resends what was shared.
+                                    null, app.wallhop.core.Fix.TryAgain, app.wallhop.core.Fix.ChooseAgain ->
+                                        WButton("Try again", onClick = onRetry, style = ButtonStyle.Filled, modifier = Modifier.fillMaxWidth())
+                                    app.wallhop.core.Fix.PairAgain, app.wallhop.core.Fix.OpenLync -> WButton(app.wallhop.core.Fix.OpenLync.label, onClick = {
+                                        context.startActivity(Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                                        close()
+                                    }, style = ButtonStyle.Filled, modifier = Modifier.fillMaxWidth())
+                                    else -> {
+                                        WButton(fix.label, onClick = { app.wallhop.core.Open.run(context, fix) }, style = ButtonStyle.Filled, modifier = Modifier.fillMaxWidth())
+                                        Spacer(Modifier.height(8.dp))
+                                        WButton("Try again", onClick = onRetry, style = ButtonStyle.Glass, modifier = Modifier.fillMaxWidth())
+                                    }
+                                }
                             }
                         }
                         Outcome.Working -> Column {
@@ -379,7 +397,10 @@ private fun ShareSheet(
                                     shared is ShareActivity.Shared.Text && (sending || state is LinkState.Connected) -> "Sending…"
                                     sending -> "Sending · ${formatBytes(transfer?.sentBytes ?: 0)} of ${formatBytes(transfer?.totalBytes ?: 0)}"
                                     state is LinkState.Connected -> "Starting…"
-                                    else -> "Waiting for your Mac. It sends as soon as both are on the same Wi-Fi."
+                                    // Why it's waiting, once known: "Waiting · Wi‑Fi is off. Turn on Wi‑Fi to reach your Mac."
+                                    else -> link.reachProblem(files = true)?.takeIf { (state as? LinkState.Searching)?.reason != null }
+                                        ?.let { "Waiting · ${it.sentence}" }
+                                        ?: "Waiting for your Mac. It sends as soon as both are on the same Wi‑Fi."
                                 },
                                 style = Type.footnote,
                                 color = colors.labelSecondary,

@@ -59,6 +59,7 @@ object Wording {
         "READ_CONTACTS" -> "Contacts"
         "POST_NOTIFICATIONS" -> "Notifications"
         "READ_PHONE_STATE", "ANSWER_PHONE_CALLS" -> "Phone"
+        "BLUETOOTH_ADVERTISE", "BLUETOOTH_CONNECT" -> "Nearby devices"
         else -> "the permission"
     }
 
@@ -70,12 +71,14 @@ object Wording {
         Features.Key.Notifications -> "Alerts on this phone"
         Features.Key.AppNotifications -> "Phone notifications on Mac"
         Features.Key.Background -> "Run in background"
+        Features.Key.Bluetooth -> "Bluetooth backup"
         else -> "This"
     }
 
     /** First "no": "Codes stay off until you allow SMS". */
     fun deniedToast(key: Features.Key, permission: String): String = when (key) {
         Features.Key.Notifications -> "Alerts stay off until you allow notifications"
+        Features.Key.Bluetooth -> "Bluetooth backup stays off until you allow Nearby devices"
         else -> "${feature(key)} stay off until you allow ${permissionName(permission)}"
     }
 

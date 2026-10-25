@@ -13,6 +13,8 @@ Mac in `mac/Sources/WallhopMac/Core`, Android in `android/app/src/main/java/app/
 
 ## Transport
 
+- TCP over the local network for everything; Bluetooth LE for codes, calls and notifications when
+  TCP can't reach the Mac (see [Bluetooth fallback](#bluetooth-fallback)).
 - TCP. The Mac listens on port **47474** (falls back to a random port if taken) and advertises
   Bonjour service **`_wallhop._tcp`**. The phone always opens the connection.
 - One long-lived connection per phone. Either side may close it; the phone reconnects.
@@ -132,6 +134,70 @@ direction of each connection and increasing by one per frame. Nonces are never s
 
 Plaintext: 2-byte big-endian header length, the header (UTF-8 JSON with `"t"`), then an
 optional binary body.
+
+## Bluetooth fallback
+
+When the phone can't reach its Mac over Wi-Fi (different networks, Wi-Fi off), codes, calls and
+notifications go over Bluetooth LE instead. Mac in `Core/BleWire.swift` and `Link/BluetoothLink.swift`,
+Android in `core/BleWire.kt` and `link/BleLink.kt`. No other relay of any kind is involved.
+
+**Path selection.** Wi-Fi always wins. The phone advertises only while it is paired, the Bluetooth
+switch is on, Android allows it, and the TCP session has been down for **5 s**. The Mac scans only
+while no phone is connected to it over TCP, also after **5 s**. A TCP session coming up on either side
+closes the Bluetooth link at once. Codes waiting for the Mac (kept up to five minutes) are sent as soon
+as the Bluetooth link is ready. Files, text, links, texts (SMS) and everything else stay Wi-Fi only.
+
+**Roles.** The phone is the GATT peripheral, the Mac the central.
+
+- Service `6c796e63-0001-4b1e-9c3a-5d2f7e8a1b40`, one characteristic
+  `6c796e63-0002-4b1e-9c3a-5d2f7e8a1b40` with write (Mac → phone, write with response) and notify
+  (phone → Mac). The Mac subscribes (CCCD) before it writes anything.
+- Advertising data: the service UUID only (no device name). Scan response: service data for the same
+  UUID holding an 8-byte **tag**. The Mac connects only to an advertisement whose tag matches one of its
+  paired phones; it never contacts anything else.
+
+**Tag.** `ss = DH(sPhone, sMac)` (the long-term pairing keys),
+`tagKey = HKDF-SHA256(ss, salt = SHA-256(phonePub ‖ macPub), info "lync ble v1 tag", 32)`,
+`tag = HMAC-SHA256(tagKey, "lync-ble-tag" ‖ window)` first 8 bytes, where `window` is
+`floor(unix seconds / 900)` as a 64-bit big-endian integer. The phone advertises the current window's
+tag (and switches within a minute of a new window); the Mac accepts the current window and either
+neighbour. Only the two paired devices can compute it, and it changes every 15 minutes, so it isn't a
+tracking identifier.
+
+**Fragments.** Every GATT write or notification is one header byte, `1` on the last piece of a frame
+and `0` when more follow, then up to MTU − 4 bytes of the frame. The receiver joins pieces until a
+`1`; a frame over **16 KiB**, an empty piece or any other header byte closes the link. Long (prepared)
+writes aren't used.
+
+**Handshake.** Within **10 s** of connecting (the phone) / 15 s of finding the phone (the Mac), or the
+link is closed:
+
+1. Mac → phone, plain JSON `{"t":"hello","v":1,"pub":"<mac static>","eph":"<mac ephemeral>"}`.
+   The phone closes the link unless `pub` is the Mac it paired with.
+2. Phone → Mac, plain JSON `{"t":"hello_ok","v":1,"pub":"<phone static>","eph":"<phone ephemeral>"}`.
+   The Mac closes the link unless `pub` is the phone whose tag it followed.
+3. Both compute, as for the Wi-Fi session but with their own labels:
+   - `ikm = DH(ePhone, eMac) ‖ DH(sPhone, eMac) ‖ DH(ePhone, sMac)`
+   - `salt = SHA-256(phonePub ‖ phoneEph ‖ macPub ‖ macEph)`
+   - `kPhoneToMac = HKDF-SHA256(ikm, salt, info "lync ble v1 phone->mac", 32)`
+   - `kMacToPhone = HKDF-SHA256(ikm, salt, info "lync ble v1 mac->phone", 32)`
+4. Mac → phone sealed `ready`; the phone answers with a sealed `ready`. Only then does either side use
+   the link. Sealing is exactly as in [Sealed frames](#sealed-frames): counter nonces from 0 per
+   direction, fresh keys per connection (so frames can't be replayed into another connection), and a
+   frame that fails to decrypt closes the link.
+
+**Messages over Bluetooth.** Phone → Mac: `otp` (answered with `ack`), `call`, `notif` (never with an
+icon body), `notif_removed`, `ping` (answered with `pong`). Mac → phone: `ack`, `pong`, `call_cmd`. Both
+sides ignore every other type on this path.
+
+**Test vector.** Private keys: phone static = 32 × `0x11`, phone ephemeral = 32 × `0x22`,
+Mac static = 32 × `0x33`, Mac ephemeral = 32 × `0x44` (X25519, clamped as usual).
+
+- tag for window 1 000 000 = `eb87fa08c61a1082`
+- kPhoneToMac = `a52d1d7a9201aad4a7c8b3887433e011c283050bc75b044c19069c5920a9234b`
+- kMacToPhone = `326c08e1c1627ef3a8625f9a6bf60acd700065a3e8dd27e0a1693befd092a70f`
+- first phone → Mac sealed frame for `{"t":"ready"}` (counter 0) =
+  `7c7294c7f537c91f8e6d155c5b0bff0bc0bc1c54f8e939f56753d46df64d0d`
 
 ## Messages
 

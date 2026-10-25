@@ -6,7 +6,6 @@ import android.view.View
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
@@ -14,6 +13,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalView
@@ -38,7 +38,7 @@ fun Modifier.pressScale(source: MutableInteractionSource, pressedScale: Float = 
     val pressed by source.collectIsPressedAsState()
     val scale by animateFloatAsState(
         targetValue = if (pressed && !reduceMotion) pressedScale else 1f,
-        animationSpec = if (pressed) Springs.press() else Springs.bouncy(),
+        animationSpec = if (pressed) Springs.press() else Springs.release(),
         label = "pressScale",
     )
     return graphicsLayer { scaleX = scale; scaleY = scale }
@@ -53,10 +53,11 @@ fun Modifier.pressHighlight(source: MutableInteractionSource, color: Color = Wal
     val pressed by source.collectIsPressedAsState()
     val highlight by animateColorAsState(
         if (pressed) color else color.copy(alpha = 0f),
-        animationSpec = tween(if (pressed) 0 else Durations.Highlight),
+        animationSpec = tween(if (pressed) 0 else Durations.Highlight, easing = Easings.Out),
         label = "pressHighlight",
     )
-    return background(highlight)
+    // Drawn, so the fade after release repaints without recomposing the row.
+    return drawBehind { drawRect(highlight) }
 }
 
 /** Text-like press: dims while held, for titles and small glyph buttons. */
@@ -65,7 +66,7 @@ fun Modifier.pressDim(source: MutableInteractionSource, pressedAlpha: Float = 0.
     val pressed by source.collectIsPressedAsState()
     val alpha by animateFloatAsState(
         if (pressed) pressedAlpha else 1f,
-        animationSpec = if (pressed) tween(0) else tween(Durations.Highlight),
+        animationSpec = if (pressed) tween(0) else tween(Durations.Highlight, easing = Easings.Out),
         label = "pressDim",
     )
     return graphicsLayer { this.alpha = alpha }

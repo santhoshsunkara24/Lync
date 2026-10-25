@@ -14,12 +14,14 @@ phone to it:
   rings the phone or connects.
 
 No accounts, no cloud, no tracking. The phone talks only to your own Mac, directly over your Wi-Fi,
-end-to-end encrypted. See the [privacy policy](docs/PRIVACY.md).
+end-to-end encrypted. When the two aren't on the same Wi-Fi, codes, calls and notifications still
+arrive over Bluetooth (files wait for Wi-Fi). See the [privacy policy](docs/PRIVACY.md).
 
 ## Requirements
 
 - Android 10 or later
-- macOS 14 or later, on the same Wi-Fi network
+- macOS 14 or later, on the same Wi-Fi network for everything, or within Bluetooth range for codes,
+  calls and notifications
 
 ## Build
 

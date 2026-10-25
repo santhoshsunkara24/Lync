@@ -32,6 +32,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.IntOffset
@@ -115,10 +116,13 @@ fun ActivityTab(
     Page(
         title = "Activity",
         state = list,
-        trailing = {
-            app.wallhop.ui.components.CircleButton(WIcons.More, "More", onClick = { anchor ->
-                overlays.showMenu(anchor, listOf(app.wallhop.ui.components.MenuItem("Clear older than a week", destructive = false) { onClearOld() }))
-            })
+        // Its only item is "Clear older than a week", so it's there only when that has something to clear.
+        trailing = if (app.wallhop.core.Wording.olderThan(activity, System.currentTimeMillis(), 7) { it.time }.isEmpty()) null else {
+            {
+                app.wallhop.ui.components.CircleButton(WIcons.More, "More", onClick = { anchor ->
+                    overlays.showMenu(anchor, listOf(app.wallhop.ui.components.MenuItem("Clear older than a week", destructive = false) { onClearOld() }))
+                })
+            }
         },
     ) {
         item(key = "filter") {
@@ -137,7 +141,18 @@ fun ActivityTab(
             // The history is capped at 30 entries, so each page is a plain column.
             HorizontalPager(
                 pager,
-                modifier = Modifier.staggerIn(2).heightIn(min = pagesMin),
+                modifier = Modifier
+                    .staggerIn(2)
+                    .heightIn(min = pagesMin)
+                    // Out past the list's 20 dp margins, so a page slides off the screen's edge
+                    // rather than being cut at the margin; the padding puts the content back in line.
+                    .layout { measurable, constraints ->
+                        val extra = 40.dp.roundToPx()
+                        val width = constraints.maxWidth + extra
+                        val placeable = measurable.measure(constraints.copy(minWidth = width, maxWidth = width))
+                        layout(constraints.maxWidth, placeable.height) { placeable.place(-extra / 2, 0) }
+                    },
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 20.dp),
                 verticalAlignment = Alignment.Top,
                 pageSpacing = 16.dp,
                 beyondViewportPageCount = 1,
@@ -231,9 +246,11 @@ internal fun showEntryActions(
     ))
 }
 
-/** The link a "Link opened on your Mac" entry is about, if any. */
-private fun linkOf(entry: ActivityEntry): String? =
-    entry.detail.trim().takeIf { entry.kind == ActivityEntry.Kind.TextSent && app.wallhop.extras.isSingleUrl(it) }
+/** The link a "Link opened on your Mac" or "Link from your Mac" entry is about, if any. */
+private fun linkOf(entry: ActivityEntry): String? = entry.detail.trim().takeIf {
+    (entry.kind == ActivityEntry.Kind.TextSent || (entry.kind == ActivityEntry.Kind.FromMac && entry.uris.isEmpty())) &&
+        app.wallhop.extras.isSingleUrl(it)
+}
 
 /** Copies a code, marked sensitive, with "Code copied". */
 private fun copyEntryCode(overlays: Overlays, context: android.content.Context, entry: ActivityEntry, haptics: Haptics?) {
@@ -245,6 +262,11 @@ private fun copyEntryCode(overlays: Overlays, context: android.content.Context, 
 /** Files from the Mac: one opens in its app; several open Downloads, where Lync's folder is. */
 private fun openReceived(overlays: Overlays, context: android.content.Context, entry: ActivityEntry) {
     val uris = entry.uris.map(android.net.Uri::parse)
+    // Moved or deleted since (Downloads tidied up): say so, rather than an app opening nothing.
+    if (uris.size == 1 && !exists(context, uris.first())) {
+        overlays.toast(app.wallhop.core.Problems.FILE_GONE, WIcons.Warning)
+        return
+    }
     val intent = if (uris.size == 1) {
         app.wallhop.link.Notifications.viewIntent(uris.first(), context.contentResolver.getType(uris.first()))
     } else {
@@ -252,6 +274,12 @@ private fun openReceived(overlays: Overlays, context: android.content.Context, e
     }
     runCatching { context.startActivity(intent) }.onFailure { overlays.toast("No app here can open this") }
 }
+
+/** The file is still there (its Downloads entry answers a query). */
+private fun exists(context: android.content.Context, uri: android.net.Uri): Boolean = runCatching {
+    context.contentResolver.query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)
+        ?.use { it.moveToFirst() } ?: false
+}.getOrDefault(false)
 
 /**
  * A tap on an entry, on Home and in Activity: a code is copied; files from the Mac open; a link

@@ -149,17 +149,25 @@ class OtpNotificationListener : NotificationListenerService() {
             return actions.firstOrNull { action -> action.remoteInputs?.any { it.allowFreeFormInput } == true }
         }
 
-        /** Sends [text] through the notification's own reply action. */
-        fun reply(context: Context, key: String, text: String): Boolean {
-            val listener = active ?: return false
-            val sbn = runCatching { listener.activeNotifications }.getOrNull()?.firstOrNull { it.key == key } ?: return false
-            val action = replyAction(sbn.notification) ?: return false
-            val inputs = action.remoteInputs ?: return false
+        /**
+         * Sends [text] through the notification's own reply action. Null when it went, else why not
+         * (PROTOCOL.md, notif_reply ack): access_off, gone, no_reply_action or failed.
+         */
+        fun replyErr(context: Context, key: String, text: String): String? {
+            val listener = active ?: return accessErr(context)
+            val sbn = runCatching { listener.activeNotifications }.getOrNull()?.firstOrNull { it.key == key } ?: return "gone"
+            val action = replyAction(sbn.notification) ?: return "no_reply_action"
+            val inputs = action.remoteInputs ?: return "no_reply_action"
             val results = Bundle().apply { inputs.forEach { putCharSequence(it.resultKey, text) } }
             val intent = Intent()
             RemoteInput.addResultsToIntent(inputs, intent, results)
-            return runCatching { action.actionIntent.send(context, 0, intent) }.isSuccess
+            return if (runCatching { action.actionIntent.send(context, 0, intent) }.isSuccess) null else "failed"
         }
+
+        /** Not connected to Android: access is off, or it's on and Android hasn't bound Lync yet. */
+        private fun accessErr(context: Context): String =
+            if (androidx.core.app.NotificationManagerCompat.getEnabledListenerPackages(context).contains(context.packageName)) "failed"
+            else "access_off"
 
         private val hangUpWords = listOf(
             "decline", "reject", "hang up", "hangup", "end", "dismiss", "cancel",
@@ -197,12 +205,12 @@ class OtpNotificationListener : NotificationListenerService() {
             return false
         }
 
-        /** Taps one of the notification's action buttons, like "Mark as read". */
-        fun performAction(context: Context, key: String, index: Int): Boolean {
-            val listener = active ?: return false
-            val sbn = runCatching { listener.activeNotifications }.getOrNull()?.firstOrNull { it.key == key } ?: return false
-            val action = sbn.notification.actions?.getOrNull(index) ?: return false
-            return runCatching { action.actionIntent.send(context, 0, Intent()) }.isSuccess
+        /** Taps one of the notification's action buttons, like "Mark as read". Null when it worked, else the ack code. */
+        fun performActionErr(context: Context, key: String, index: Int): String? {
+            val listener = active ?: return accessErr(context)
+            val sbn = runCatching { listener.activeNotifications }.getOrNull()?.firstOrNull { it.key == key } ?: return "gone"
+            val action = sbn.notification.actions?.getOrNull(index) ?: return "gone"
+            return if (runCatching { action.actionIntent.send(context, 0, Intent()) }.isSuccess) null else "failed"
         }
 
         fun dismiss(key: String) {

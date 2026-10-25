@@ -23,6 +23,16 @@ class MacDiscovery(context: Context) {
     /** Called whenever a Mac is found or re-announced on the network. */
     @Volatile var onFound: ((DiscoveredMac) -> Unit)? = null
 
+    /**
+     * False while Bonjour couldn't start (it's retried every few seconds). Then not seeing the
+     * Mac says nothing about whether it's on this Wi‑Fi.
+     */
+    @Volatile var working = true
+        private set
+    private val handler = android.os.Handler(android.os.Looper.getMainLooper())
+    private var retries = 0
+    private val retry = Runnable { start() }
+
     // Older Android versions resolve one service at a time, so resolves are queued.
     private val resolveQueue = ArrayDeque<NsdServiceInfo>()
     private var resolving = false
@@ -31,7 +41,10 @@ class MacDiscovery(context: Context) {
     fun start() {
         if (listener != null) return
         val discoveryListener = object : NsdManager.DiscoveryListener {
-            override fun onDiscoveryStarted(serviceType: String) = Unit
+            override fun onDiscoveryStarted(serviceType: String) {
+                working = true
+                retries = 0
+            }
 
             override fun onServiceFound(service: NsdServiceInfo) {
                 synchronized(resolveQueue) { resolveQueue.addLast(service) }
@@ -46,17 +59,28 @@ class MacDiscovery(context: Context) {
 
             override fun onStartDiscoveryFailed(serviceType: String, errorCode: Int) {
                 synchronized(this@MacDiscovery) { listener = null }
+                failed()
             }
 
             override fun onStopDiscoveryFailed(serviceType: String, errorCode: Int) = Unit
         }
         listener = discoveryListener
         runCatching { nsd.discoverServices(SERVICE_TYPE, NsdManager.PROTOCOL_DNS_SD, discoveryListener) }
-            .onFailure { listener = null }
+            .onFailure { listener = null; failed() }
+    }
+
+    /** Bonjour didn't start: try again in a few seconds (longer each time, up to a minute). */
+    private fun failed() {
+        working = false
+        handler.removeCallbacks(retry)
+        handler.postDelayed(retry, (5_000L shl retries.coerceAtMost(3)).coerceAtMost(60_000L))
+        retries++
     }
 
     @Synchronized
     fun stop() {
+        handler.removeCallbacks(retry)
+        retries = 0
         listener?.let { runCatching { nsd.stopServiceDiscovery(it) } }
         listener = null
         _macs.value = emptyList()

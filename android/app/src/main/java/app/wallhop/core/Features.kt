@@ -15,6 +15,8 @@ object Features {
         Notifications("notifications"),
         AppNotifications("app_notifications"),
         Background("background"),
+        /** Codes, calls and notifications over Bluetooth LE when the Mac isn't on the same Wi-Fi. */
+        Bluetooth("bluetooth"),
         /** Nothing phones: Glyphs light up when the Mac rings the phone. */
         GlyphRing("glyph_ring"),
         /** Nothing phones: a short Glyph pulse when the Mac connects. */

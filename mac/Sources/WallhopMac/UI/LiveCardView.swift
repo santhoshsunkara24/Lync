@@ -35,6 +35,10 @@ struct LiveCardView: View {
                 sending(id)
             case .info(let symbol, let title, let subtitle):
                 row(icon: symbol, title: title, subtitle: subtitle, trailing: EmptyView())
+            case .problem(let problem):
+                // Why, what to do, and the button that does it.
+                row(icon: problem.symbol, title: problem.title, subtitle: problem.detail, tint: WTheme.danger,
+                    trailing: problemButton(problem))
             case .call:
                 if let call = model.call { CallCard(model: model, call: call) }
             case .notification(let key):
@@ -61,11 +65,16 @@ struct LiveCardView: View {
                     .lineLimit(1)
             }
             Spacer(minLength: 8)
-            if model.codeOnClipboard == code {
-                copiedBadge
-            } else {
-                CopyButton(style: WPill(prominent: false, compact: true), label: "Copy code \(spaced(code))") { model.copyOTP(code) }
+            // Copy crossfades into "Copied" (and back once the code leaves the clipboard).
+            ZStack(alignment: .trailing) {
+                if model.codeOnClipboard == code {
+                    copiedBadge.transition(.swap)
+                } else {
+                    CopyButton(style: WPill(prominent: false, compact: true), label: "Copy code \(spaced(code))") { model.copyOTP(code) }
+                        .transition(.swap)
+                }
             }
+            .animation(WMotion.animation(WMotion.quick), value: model.codeOnClipboard == code)
         }
     }
 
@@ -90,46 +99,100 @@ struct LiveCardView: View {
         .accessibilityElement(children: .combine)
     }
 
+    /// Files on their way to the phone: Liftoff, what's going, and how far along.
     private func sending(_ id: String) -> some View {
         let progress = model.outgoing?.id == id ? model.outgoing?.progress ?? 0 : 1
-        return HStack(spacing: 14) {
-            iconTile("arrow.up", tint: WTheme.codeMint)
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Sending to \(model.connectedPhone?.name ?? "your phone")").font(.wh(14, .semibold)).lineLimit(1)
-                Text("\(Int(progress * 100))%").font(.wh(12, .medium).monospacedDigit()).foregroundStyle(.white.opacity(0.7))
-            }
-            Spacer(minLength: 8)
-            ProgressRing(progress: progress)
-        }
-        .accessibilityElement(children: .combine)
+        let files = model.outgoingFiles
+        return transferCard(
+            liftoffDone: model.outgoingLanded == id,
+            urls: files,
+            title: model.outgoingLanded == id ? "On your phone" : "Sending to \(model.connectedPhone?.name ?? "your phone")",
+            name: Self.describe(files),
+            progress: progress
+        )
     }
 
+    /// Files arriving from the phone: Liftoff, what's coming (thumbnails as each file lands), and how far along.
     private func receiving(_ id: String) -> some View {
         let batch = model.batch(id)
-        return HStack(spacing: 14) {
-            if let files = batch?.files, !files.isEmpty {
-                ThumbnailStack(urls: files)
-            } else {
-                iconTile("arrow.down", tint: theme.theme.pale)
+        let size = ByteCountFormatter.string(fromByteCount: batch?.totalBytes ?? 0, countStyle: .file)
+        return transferCard(
+            liftoffDone: batch?.finished == true,
+            urls: batch?.files ?? [],
+            title: batch?.finished == true ? "Copied · ⌘V to paste" : "From \(model.connectedPhone?.name ?? "your phone")",
+            name: (batch?.files.isEmpty ?? true) ? "\(batch?.summary ?? "Files") · \(size)" : "\(Self.describe(batch?.files ?? [])) · \(size)",
+            progress: batch?.progress ?? 0
+        )
+    }
+
+    private func transferCard(liftoffDone: Bool, urls: [URL], title: String, name: String, progress: Double) -> some View {
+        HStack(spacing: 12) {
+            LiftoffView(sending: true, done: liftoffDone)
+                .frame(width: 84, height: 60)
+                .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Color(red: 0.047, green: 0.067, blue: 0.059)))
+            TransferThumb(urls: urls, size: 34)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title).font(.wh(14, .semibold)).lineLimit(1)
+                Text(name).font(.wh(12, .medium).monospacedDigit()).foregroundStyle(.white.opacity(0.65)).lineLimit(1)
+                // A fine mint line instead of a ring: quieter beside the link.
+                GeometryReader { geo in
+                    ZStack(alignment: .leading) {
+                        Capsule().fill(Color.white.opacity(0.1))
+                        // Full width, scaled from the leading edge: progress moves a transform, not layout.
+                        Capsule().fill(LinearGradient(colors: [Color(red: 0.075, green: 0.529, blue: 0.353), WTheme.codeMint], startPoint: .leading, endPoint: .trailing))
+                            .scaleEffect(x: max(3 / max(geo.size.width, 3), min(progress, 1)), anchor: .leading)
+                            .animation(WMotion.animation(WMotion.quick), value: progress)
+                    }
+                }
+                .frame(height: 3)
             }
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Receiving \(batch?.summary ?? "files")")
-                    .font(.wh(14, .semibold))
-                Text(ByteCountFormatter.string(fromByteCount: batch?.receivedBytes ?? 0, countStyle: .file)
-                     + " of " + ByteCountFormatter.string(fromByteCount: batch?.totalBytes ?? 0, countStyle: .file))
-                    .font(.wh(12, .medium).monospacedDigit())
-                    .foregroundStyle(.white.opacity(0.6))
-            }
-            Spacer(minLength: 8)
-            ProgressRing(progress: batch?.progress ?? 0)
+            Spacer(minLength: 0)
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(title), \(name), \(Int(progress * 100)) percent")
+    }
+
+    /// "Goa trip.mp4", "3 photos", "Report.pdf and 1 more".
+    private static func describe(_ urls: [URL]) -> String {
+        guard let first = urls.first else { return "Files" }
+        if urls.count == 1 { return first.lastPathComponent }
+        if urls.allSatisfy({ $0.isImage }) { return "\(urls.count) photos" }
+        return "\(first.lastPathComponent) and \(urls.count - 1) more"
+    }
+
+    @ViewBuilder private func problemButton(_ problem: Problem) -> some View {
+        if let title = problem.actionTitle {
+            Button(title) { model.runProblemAction(problem) }
+                .buttonStyle(WPill(compact: true))
+                .fixedSize()
         }
     }
 
-    /// Files arrived: they're on the clipboard already. Save keeps them in Downloads.
+    /// What the files card says: what came (or why it didn't), then what to do.
+    private func addedText(_ batch: FileBatch?) -> (title: String, subtitle: String) {
+        guard let batch else { return ("Files", "") }
+        if batch.interrupted {
+            let text = Problem.interrupted(arrived: batch.files.count, expected: max(batch.expected, batch.files.count))
+            return (text.title, text.detail ?? "")
+        }
+        if batch.files.isEmpty {
+            let text = Problem.receiveFailed(batch.failure)
+            return (text.title, text.detail ?? "")
+        }
+        if batch.failed > 0 {
+            // Partly: what arrived is ready, and why the rest didn't.
+            let total = batch.files.count + batch.failed
+            return (Problem.partlyArrived(arrived: batch.files.count, expected: total), Problem.receiveFailed(batch.failure).title)
+        }
+        return (batch.summary, "Copied · ⌘V to paste")
+    }
+
+    /// Files arrived: they're on the clipboard already, ready for ⌘V. Save keeps them in Downloads.
     private func added(_ id: String) -> some View {
         let batch = model.batch(id)
         let files = batch?.files ?? []
-        let interrupted = batch?.interrupted == true
+        let interrupted = batch?.interrupted == true || (batch?.failed ?? 0) > 0
+        let text = addedText(batch)
         return HStack(spacing: 14) {
             if files.isEmpty {
                 iconTile("exclamationmark.triangle.fill", tint: WTheme.danger)
@@ -139,7 +202,7 @@ struct LiveCardView: View {
                 ThumbnailStack(urls: files)
                     .overlay(alignment: .bottomTrailing) {
                         if !interrupted {
-                            Image(systemName: "checkmark")
+                            NudgeImage("checkmark")
                                 .font(.system(size: 8, weight: .heavy))
                                 .foregroundStyle(WTheme.ink)
                                 .frame(width: 16, height: 16)
@@ -152,23 +215,20 @@ struct LiveCardView: View {
                     }
             }
             VStack(alignment: .leading, spacing: 2) {
-                Text(interrupted ? "Transfer interrupted" : files.isEmpty ? "Transfer failed" : "\(batch?.summary ?? "Files") ready to paste")
+                // Just what came ("3 photos"), or why not: with Copy and Save beside it there's no room for more.
+                Text(text.title)
                     .font(.wh(14, .semibold))
-                    .lineLimit(1)
-                Text(files.isEmpty ? "Nothing arrived"
-                     : interrupted ? "\(batch?.summary ?? "") arrived · kept for a day"
-                     : "Kept for a day — Save to keep")
+                    .lineLimit(files.isEmpty ? 2 : 1)
+                    .truncationMode(.middle)
+                Text(text.subtitle)
                     .font(.wh(12, .medium))
                     .foregroundStyle(.white.opacity(0.7))
-                    .lineLimit(1)
+                    .lineLimit(files.isEmpty ? 2 : 1)
             }
             Spacer(minLength: 8)
             if !files.isEmpty {
-                if interrupted {
-                    CopyButton(iconOnly: true, style: WRound(size: 30), label: "Copy \(batch?.summary ?? "files")") { model.copyFiles(id) }
-                } else {
-                    CopyButton(style: WPill(prominent: false, compact: true), label: "Copy \(batch?.summary ?? "files")") { model.copyFiles(id) }
-                }
+                // Icon only, so Save keeps its word.
+                CopyButton(iconOnly: true, style: WRound(size: 30), label: "Copy \(batch?.summary ?? "files")") { model.copyFiles(id) }
                 Button("Save") { model.saveFiles(id) }
                     .buttonStyle(WPill(compact: true))
                     .help("Save to Downloads › From Phone")
@@ -186,6 +246,9 @@ struct LiveCardView: View {
                     .foregroundStyle(.white.opacity(0.65)).lineLimit(1)
             }
             Spacer(minLength: 8)
+            if !(batch?.files.isEmpty ?? true) {
+                CopyButton(iconOnly: true, style: WRound(size: 30), label: "Copy \(batch?.summary ?? "files")") { model.copyFiles(id) }
+            }
             Button("Show") { model.revealFiles(id) }.buttonStyle(WPill(compact: true)).help("Show in Finder")
         }
     }
@@ -220,9 +283,9 @@ struct LiveCardView: View {
 
     // MARK: - Building blocks
 
-    private func row<Trailing: View>(icon: String, title: String, subtitle: String?, trailing: Trailing) -> some View {
+    private func row<Trailing: View>(icon: String, title: String, subtitle: String?, tint: Color = .white, trailing: Trailing) -> some View {
         HStack(spacing: 14) {
-            iconTile(icon, tint: .white)
+            iconTile(icon, tint: tint)
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
                     .font(.wh(14, .semibold))
@@ -239,8 +302,20 @@ struct LiveCardView: View {
         }
     }
 
-    private func iconTile(_ name: String, tint: Color) -> some View {
-        Image(systemName: name)
+    @ViewBuilder private func iconTile(_ name: String, tint: Color) -> some View {
+        if name == LinkCatchView.symbol {
+            // "Connected": Lync's link catches inside the tile.
+            LinkCatchView(connected: true, playOnAppear: true)
+                .frame(width: 26, height: 26)
+                .frame(width: 34, height: 34)
+                .background(Circle().fill(tint.opacity(0.16)))
+        } else {
+            plainIconTile(name, tint: tint)
+        }
+    }
+
+    private func plainIconTile(_ name: String, tint: Color) -> some View {
+        NudgeImage(name)
             .font(.wh(15, .semibold))
             .foregroundStyle(tint)
             .frame(width: 34, height: 34)
@@ -248,7 +323,7 @@ struct LiveCardView: View {
     }
 
     private var copiedBadge: some View {
-        Label("Copied", systemImage: "checkmark")
+        Label { Text("Copied") } icon: { NudgeImage("checkmark") }
             .font(.wh(11, .semibold))
             .labelStyle(.titleAndIcon)
             .padding(.horizontal, 9)
@@ -267,7 +342,7 @@ struct ProgressRing: View {
                 .trim(from: 0, to: max(0.02, progress))
                 .stroke(Color.white, style: StrokeStyle(lineWidth: 3, lineCap: .round))
                 .rotationEffect(.degrees(-90))
-                .animation(WMotion.animation(WMotion.smooth), value: progress)
+                .animation(WMotion.animation(WMotion.quick), value: progress)
         }
         .frame(width: 22, height: 22)
     }
@@ -311,7 +386,7 @@ private struct NotificationCard: View {
                 Button {
                     model.dismissNotification(notification.key)
                 } label: {
-                    Image(systemName: "xmark")
+                    NudgeImage("xmark")
                         .font(.wh(11, .bold))
                         .frame(width: 24, height: 24)
                         .background(Circle().fill(Color.white.opacity(0.12)))
@@ -337,7 +412,11 @@ private struct NotificationCard: View {
                         .buttonStyle(WPill(compact: true))
                         .disabled(draft.trimmingCharacters(in: .whitespaces).isEmpty)
                 }
-                .onAppear { DispatchQueue.main.async { focused = true } }
+                .onAppear {
+                    // A reply that didn't get through comes back to try again.
+                    if draft.isEmpty { draft = model.draft(for: notification.key) }
+                    DispatchQueue.main.async { focused = true }
+                }
             } else if notification.canReply || !otherActions.isEmpty {
                 HStack(spacing: 8) {
                     Spacer()
@@ -370,7 +449,7 @@ struct AppIcon: View {
             if let image {
                 Image(nsImage: image).resizable().interpolation(.high)
             } else {
-                Image(systemName: "app.badge")
+                NudgeImage("app.badge")
                     .font(.wh(size * 0.45))
                     .frame(width: size, height: size)
                     .background(RoundedRectangle(cornerRadius: size * 0.24).fill(Color.white.opacity(0.12)))
@@ -389,6 +468,16 @@ private struct CallCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             header
+            // A button that didn't work: the card stays and says what to do instead.
+            if let problem = model.callProblem {
+                Label { Text([problem.title, problem.detail].compactMap { $0 }.joined(separator: " · ")) } icon: { NudgeImage("exclamationmark.circle.fill") }
+                    .labelStyle(.titleAndIcon)
+                    .font(.wh(12, .medium))
+                    .foregroundStyle(WTheme.danger)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .transition(.opacity)
+            }
             // Decline leads; audio always stays on the phone, so Answer says where.
             if call.state == .ringing {
                 HStack(spacing: 8) {
@@ -462,7 +551,7 @@ private struct CallButton: View {
 
     var body: some View {
         Button(action: action) {
-            Label(title, systemImage: symbol)
+            Label { Text(title) } icon: { NudgeImage(symbol) }
                 .labelStyle(.titleAndIcon)
                 .font(.wh(13, .semibold))
                 .foregroundStyle(WTheme.ink)

@@ -53,10 +53,17 @@ data class Setup(
     val notifications: Boolean,
     val notificationAccess: Boolean,
     val background: Boolean,
+    val bluetooth: Boolean = false,
     /** Features whose Android permission is granted, whether or not they're switched on. */
     val granted: Set<Features.Key>,
     /** Nothing the user switched on is waiting for a permission. */
     val essentialsDone: Boolean,
+    /** Bluetooth backup can't work: Bluetooth is off, or the phone can't do it. */
+    val bluetoothProblem: app.wallhop.core.Problem? = null,
+    /** Alerts are on in Lync, but Android blocks Lync's notifications. */
+    val notificationsBlocked: Boolean = false,
+    /** Run in background is on, but Android refused to keep Lync running. */
+    val cantStayRunning: Boolean = false,
 )
 
 class SettingsActions(
@@ -66,6 +73,7 @@ class SettingsActions(
     val allowNotifications: () -> Unit,
     val openNotificationAccess: () -> Unit,
     val allowBackground: () -> Unit,
+    val allowBluetooth: () -> Unit,
     /** Wallhop's own switch for a feature (Features); off never needs Android's settings. */
     val setFeature: (Features.Key, Boolean) -> Unit,
     val forgetMac: () -> Unit,
@@ -77,6 +85,8 @@ class SettingsActions(
     val finishSetup: () -> Unit,
     /** Adds the "Clipboard to Mac" Quick Settings tile (or explains how). */
     val addTile: () -> Unit,
+    /** Opens the settings page a problem's button points to (Bluetooth, notifications, battery). */
+    val runFix: (app.wallhop.core.Fix) -> Unit = {},
 )
 
 /** Permissions and preferences as an inset grouped list (DESIGN.md §6.6). */
@@ -96,6 +106,8 @@ fun SettingsTab(
         actions.setFeature(key, on)
         if (on && key !in setup.granted) request()
     }
+    val context = LocalContext.current
+    LaunchedEffect(Unit) { if (AppListCache.apps == null) AppListCache.load(context) }
     Page(title = "Settings") {
         // Something the user wanted is still waiting for Android: first thing on the page.
         if (!setup.essentialsDone) {
@@ -173,12 +185,14 @@ fun SettingsTab(
                     row {
                         ListRow(
                             title = "Alerts on this phone",
-                            subtitle = "Files and text from your Mac, and sending progress",
+                            subtitle = if (setup.notificationsBlocked) app.wallhop.core.Problems.NOTIFICATIONS_BLOCKED.sentence
+                                else "Files and text from your Mac, and sending progress",
                             leading = { IconTile(WIcons.Bell, colors.red) },
                             checked = setup.notifications,
                             onCheckedChange = toggle(Features.Key.Notifications, actions.allowNotifications),
                         )
                     }
+                    if (setup.notificationsBlocked) fixRow(app.wallhop.core.Problems.NOTIFICATIONS_BLOCKED, actions.runFix)
                 }
                 Spacer(Modifier.height(32.dp))
             }
@@ -193,11 +207,28 @@ fun SettingsTab(
                         ListRow(
                             title = "Run in background",
                             leading = { IconTile(WIcons.BatteryCharging, colors.orange) },
-                            subtitle = "Stay connected when Lync is closed",
+                            subtitle = if (setup.cantStayRunning) app.wallhop.core.Problems.CANT_STAY_RUNNING.sentence
+                                else "Stay connected when Lync is closed",
                             checked = setup.background,
                             onCheckedChange = toggle(Features.Key.Background, actions.allowBackground),
                         )
                     }
+                    if (setup.cantStayRunning) fixRow(app.wallhop.core.Problems.CANT_STAY_RUNNING, actions.runFix)
+                    val bluetoothProblem = setup.bluetoothProblem
+                    row {
+                        ListRow(
+                            title = "Bluetooth backup",
+                            leading = { IconTile(WIcons.Bluetooth, colors.indigo) },
+                            subtitle = bluetoothProblem?.sentence
+                                ?: "Codes, calls and notifications when your Mac is nearby but not on your Wi‑Fi",
+                            subtitleMaxLines = Int.MAX_VALUE,
+                            checked = setup.bluetooth,
+                            onCheckedChange = toggle(Features.Key.Bluetooth, actions.allowBluetooth),
+                            // A phone without Bluetooth LE can't turn it on at all.
+                            switchEnabled = bluetoothProblem != app.wallhop.core.Problems.BLUETOOTH_UNSUPPORTED,
+                        )
+                    }
+                    if (bluetoothProblem != null) fixRow(bluetoothProblem, actions.runFix)
                     app.wallhop.core.KeepAlive.brand?.let { brand ->
                         row {
                             val context = LocalContext.current
@@ -308,7 +339,31 @@ fun SettingsTab(
     }
 }
 
+/** The row under a setting that isn't working: its problem's button ("Turn on Bluetooth", "Battery settings"). */
+private fun app.wallhop.ui.components.SectionScope.fixRow(problem: app.wallhop.core.Problem, runFix: (app.wallhop.core.Fix) -> Unit) {
+    val fix = problem.fix ?: return
+    row {
+        ListRow(
+            title = if (fix == app.wallhop.core.Fix.TurnOnBluetooth) "Turn on Bluetooth" else fix.label,
+            leading = { Box(Modifier.size(29.dp)) },
+            titleColor = Wallhop.colors.tint,
+            chevron = true,
+            onClick = { runFix(fix) },
+        )
+    }
+}
+
 private data class AppEntry(val packageName: String, val label: String)
+
+/**
+ * The phone's apps, read once and kept: Settings warms it while it's on screen, so the apps page
+ * slides in already filled rather than with a spinner that the list then pops over.
+ */
+private object AppListCache {
+    @Volatile var apps: List<AppEntry>? = null
+    suspend fun load(context: Context): List<AppEntry> =
+        withContext(Dispatchers.IO) { launchableApps(context) }.also { apps = it }
+}
 
 /** Pick which apps' notifications show on the Mac (DESIGN.md §6.7). */
 @Composable
@@ -325,7 +380,8 @@ fun AppsScreen(
     val mirrored = remember { MirroredApps.get(context) }
     val enabled by mirrored.enabled.collectAsStateWithLifecycle()
     var query by remember { mutableStateOf("") }
-    val apps by produceState<List<AppEntry>?>(null) { value = withContext(Dispatchers.IO) { launchableApps(context) } }
+    // Shown from the cache at once; refreshed underneath in case apps were installed or removed.
+    val apps by produceState(AppListCache.apps) { value = AppListCache.load(context) }
     val recent = remember { mirrored.recent() }
 
     Page(

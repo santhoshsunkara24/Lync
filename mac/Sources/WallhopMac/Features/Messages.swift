@@ -24,7 +24,16 @@ struct SmsMessage: Identifiable, Equatable {
     let sim: String?
     var pending = false
     /// Why sending failed, shown on the bubble.
-    var error: String?
+    var error: ProblemText?
+    /// The phone never confirmed it: it may have gone, so the bubble says check before resending.
+    var unconfirmed = false
+
+    /// The same message under another id.
+    func with(id: String) -> SmsMessage {
+        var copy = SmsMessage(id: id, body: body, date: date, outgoing: outgoing, failed: failed, sim: sim, pending: pending, error: error)
+        copy.unconfirmed = unconfirmed
+        return copy
+    }
 }
 
 /// A contact from the phone, for the "To:" field.
@@ -44,9 +53,8 @@ final class MessagesModel: ObservableObject {
     enum Status: Equatable {
         case idle
         case loading
-        case notConnected
-        case needsPermission
-        case failed(String)
+        /// The conversations can't be listed: why and what to do; `retry` offers Try again.
+        case unavailable(symbol: String, ProblemText, retry: Bool)
     }
 
     @Published private(set) var threads: [SmsThread] = []
@@ -55,7 +63,7 @@ final class MessagesModel: ObservableObject {
     @Published private(set) var status: Status = .idle
     @Published private(set) var loadingThread = false
     @Published var selectedThread: String? {
-        didSet { if selectedThread != oldValue { messages = []; loadMessages() } }
+        didSet { if selectedThread != oldValue { messages = []; sentIDs = [:]; loadMessages() } }
     }
     @Published var selectedSim: Int?
     @Published var search = ""
@@ -65,8 +73,10 @@ final class MessagesModel: ObservableObject {
     @Published private(set) var recipientName: String?
     /// The phone's contacts matching what's typed in "To:" (at most 20).
     @Published private(set) var contactResults: [ContactMatch] = []
-    /// The phone can't search its contacts (Contacts not allowed for Texts).
-    @Published private(set) var contactsUnavailable = false
+    /// Why the phone's contacts can't be searched (not allowed, or no answer).
+    @Published private(set) var contactsNote: ProblemText?
+    /// Why the open conversation couldn't be loaded, with Try again.
+    @Published private(set) var threadProblem: ProblemText?
 
     private let server: LinkServer
     private var observer: NSObjectProtocol?
@@ -75,6 +85,9 @@ final class MessagesModel: ObservableObject {
     private var contactQuery = 0
     /// The number just picked from the results: it isn't searched again.
     private var pickedNumber: String?
+    /// The phone's id for a text sent from here → the id its "Sending…" bubble had, so the
+    /// bubble stays the same view and settles in place when the phone confirms it.
+    private var sentIDs: [String: String] = [:]
 
     init(server: LinkServer) {
         self.server = server
@@ -98,18 +111,22 @@ final class MessagesModel: ObservableObject {
         }
         if query == pickedNumber { return }
         recipientName = nil
-        server.request("contacts", ["q": query]) { [weak self] reply in
+        server.request("contacts", ["q": query]) { [weak self] result in
             guard let self, token == self.contactQuery, self.newRecipient != nil else { return }
-            guard let reply else {
+            guard case .reply(let reply) = result else {
+                // No answer: the number can still be typed.
+                self.contactResults = []
+                self.contactsNote = Problem.contactsFailed
+                return
+            }
+            if let err = reply.string("err") {
+                // Only a permission problem asks for Contacts; anything else says type the number.
+                self.contactsNote = err == PhoneError.contactsPermission || err == PhoneError.permission
+                    ? Problem.contactsPermission : Problem.contactsFailed
                 self.contactResults = []
                 return
             }
-            if reply.string("err") != nil {
-                self.contactsUnavailable = true
-                self.contactResults = []
-                return
-            }
-            self.contactsUnavailable = false
+            self.contactsNote = nil
             let json = (try? JSONSerialization.jsonObject(with: reply.body)) as? [String: Any]
             self.contactResults = (json?["items"] as? [[String: Any]] ?? []).prefix(20).compactMap { item in
                 guard let number = item["number"] as? String, !number.isEmpty else { return nil }
@@ -122,7 +139,7 @@ final class MessagesModel: ObservableObject {
     func showContactResults(_ results: [ContactMatch], unavailable: Bool = false) {
         newRecipient = ""
         contactResults = results
-        contactsUnavailable = unavailable
+        contactsNote = unavailable ? Problem.contactsPermission : nil
     }
 
     func pickContact(_ contact: ContactMatch) {
@@ -146,18 +163,35 @@ final class MessagesModel: ObservableObject {
 
     func refresh(quiet: Bool = false) {
         if !quiet { status = .loading }
-        server.request("sms_threads") { [weak self] reply in
+        server.request("sms_threads") { [weak self] result in
             guard let self else { return }
-            guard let reply else {
-                if !quiet || self.threads.isEmpty { self.status = .notConnected }
+            let reply: Message
+            switch result {
+            case .reply(let message):
+                reply = message
+            case .notConnected(let bluetoothOnly):
+                if !quiet || self.threads.isEmpty {
+                    self.status = bluetoothOnly ? .unavailable(symbol: "wifi.exclamationmark", Problem.textsNeedWifi, retry: false)
+                                                : .unavailable(symbol: "iphone.slash", Problem.textsNotConnected, retry: false)
+                }
+                return
+            case .disconnected:
+                if !quiet || self.threads.isEmpty { self.status = .unavailable(symbol: "iphone.slash", Problem.textsNotConnected, retry: false) }
+                return
+            case .timedOut:
+                // Connected, but no answer: not "not connected".
+                if !quiet || self.threads.isEmpty { self.status = .unavailable(symbol: "hourglass", Problem.textsTimedOut, retry: true) }
                 return
             }
-            if reply.string("err") == "permission" {
-                self.status = .needsPermission
+            if let err = reply.string("err") {
+                let symbol = err == PhoneError.permission ? "lock" : err == PhoneError.textsOff ? "message.badge" : "exclamationmark.circle"
+                self.status = .unavailable(symbol: symbol, Problem.textsUnavailable(err),
+                                           retry: err != PhoneError.permission && err != PhoneError.textsOff)
                 return
             }
             guard let json = try? JSONSerialization.jsonObject(with: reply.body) as? [String: Any] else {
-                self.status = .failed("The phone sent something unexpected.")
+                // Something this Mac doesn't understand: most likely an older phone app.
+                self.status = .unavailable(symbol: "arrow.down.app", Problem.textsOutdated, retry: false)
                 return
             }
             self.threads = (json["threads"] as? [[String: Any]] ?? []).compactMap(Self.thread)
@@ -183,15 +217,43 @@ final class MessagesModel: ObservableObject {
 
     func loadMessages(quiet: Bool = false) {
         guard let thread = selectedThread else { return }
-        if !quiet { loadingThread = true }
-        server.request("sms_thread", ["thread": thread]) { [weak self] reply in
+        if !quiet { loadingThread = true; threadProblem = nil }
+        server.request("sms_thread", ["thread": thread]) { [weak self] result in
             guard let self, self.selectedThread == thread else { return }
             self.loadingThread = false
-            guard let reply, let json = try? JSONSerialization.jsonObject(with: reply.body) as? [String: Any] else { return }
+            let failure: ProblemText?
+            var json: [String: Any]?
+            switch result {
+            case .reply(let reply):
+                if let err = reply.string("err") {
+                    let text = Problem.textsUnavailable(err)
+                    // Permission and Texts off say what to do; anything else is "couldn't load".
+                    failure = err == PhoneError.permission || err == PhoneError.textsOff
+                        ? text : ProblemText(title: Problem.conversationFailed, detail: text.detail)
+                } else if let object = try? JSONSerialization.jsonObject(with: reply.body) as? [String: Any] {
+                    json = object
+                    failure = nil
+                } else {
+                    failure = Problem.textsOutdated
+                }
+            case .timedOut: failure = ProblemText(title: Problem.conversationFailed, detail: Problem.textsTimedOut.detail)
+            case .notConnected, .disconnected: failure = nil // The window says the phone isn't connected.
+            }
+            // A quiet refresh that fails keeps what's on screen.
+            if let failure, !quiet || self.messages.isEmpty { self.threadProblem = failure }
+            guard let json else { return }
+            self.threadProblem = nil
             let pending = self.messages.filter(\.pending)
-            let loaded = (json["messages"] as? [[String: Any]] ?? []).compactMap(Self.message)
+            var loaded = (json["messages"] as? [[String: Any]] ?? []).compactMap(Self.message)
+            // The phone's copy of a text sent from here takes over its "Sending…" bubble's id.
+            for p in pending {
+                if let sent = loaded.last(where: { $0.outgoing && $0.body == p.body && self.sentIDs[$0.id] == nil }) {
+                    self.sentIDs[sent.id] = p.id
+                }
+            }
+            if !self.sentIDs.isEmpty { loaded = loaded.map { m in self.sentIDs[m.id].map { m.with(id: $0) } ?? m } }
             // Keep "Sending…" bubbles until the phone's copy shows up.
-            let stillPending = pending.filter { p in !loaded.contains { $0.outgoing && $0.body == p.body } }
+            let stillPending = pending.filter { p in !loaded.contains { $0.id == p.id } }
             self.messages = loaded + stillPending
         }
     }
@@ -236,16 +298,19 @@ final class MessagesModel: ObservableObject {
         let placeholder = SmsMessage(id: "pending-\(UUID().uuidString)", body: trimmed, date: Date(), outgoing: true,
                                      failed: false, sim: simLabel, pending: true)
         messages.append(placeholder)
-        server.sendSMS(to: address, text: trimmed, sim: sim) { [weak self] error in
+        server.sendSMS(to: address, text: trimmed, sim: sim) { [weak self] result in
             guard let self else { return }
-            if let error {
-                // The reason shows on the failed bubble itself, next to Try again.
-                if let index = self.messages.firstIndex(where: { $0.id == placeholder.id }) {
-                    self.messages[index] = SmsMessage(id: placeholder.id, body: trimmed, date: Date(), outgoing: true,
-                                                      failed: true, sim: simLabel, error: error)
-                }
-            } else {
+            if result.ok {
                 self.refresh(quiet: true)
+            } else {
+                // The reason shows on the failed bubble itself, next to Try again (never automatic:
+                // a text that wasn't confirmed may still have gone).
+                if let index = self.messages.firstIndex(where: { $0.id == placeholder.id }) {
+                    var failed = SmsMessage(id: placeholder.id, body: trimmed, date: Date(), outgoing: true,
+                                            failed: true, sim: simLabel, error: Problem.smsFailed(result))
+                    failed.unconfirmed = result == .timedOut
+                    self.messages[index] = failed
+                }
             }
         }
     }
@@ -308,6 +373,7 @@ final class MessagesWindowController: NSObject, NSWindowDelegate {
                 defer: false
             )
             window.title = "Lync — Texts"
+            CapturePrivacy.apply(window)
             window.titlebarAppearsTransparent = true
             // Same dark, phone-coloured style as the panel.
             window.appearance = NSAppearance(named: .darkAqua)
@@ -346,7 +412,8 @@ struct MessagesView: View {
             ThreadList(model: model)
                 .navigationSplitViewColumnWidth(min: 240, ideal: 280, max: 360)
         } detail: {
-            ConversationView(model: model, connected: appModel.connectedPhone != nil)
+            ConversationView(model: model, connected: appModel.connectedPhone != nil,
+                             bluetoothOnly: appModel.connectedPhone == nil && appModel.bluetoothPhone != nil)
                 .background(ThemedBackground())
         }
         .environment(\.colorScheme, .dark)
@@ -355,7 +422,7 @@ struct MessagesView: View {
                 Button {
                     model.startNewMessage()
                 } label: {
-                    Label("New message", systemImage: "square.and.pencil")
+                    Label { Text("New message") } icon: { NudgeImage("square.and.pencil") }
                 }
                 .help("New message")
                 .keyboardShortcut("n")
@@ -364,7 +431,7 @@ struct MessagesView: View {
                 Button {
                     model.refresh()
                 } label: {
-                    Label("Refresh", systemImage: "arrow.clockwise")
+                    Label { Text("Refresh") } icon: { NudgeImage("arrow.clockwise") }
                 }
                 .help("Refresh")
                 .keyboardShortcut("r")
@@ -379,12 +446,9 @@ private struct ThreadList: View {
     var body: some View {
         VStack(spacing: 0) {
             switch model.status {
-            case .notConnected:
-                StatusNote(symbol: "iphone.slash", title: "Phone not connected",
-                           text: "Open Lync on your phone and keep it on the same Wi-Fi.")
-            case .needsPermission:
-                StatusNote(symbol: "lock", title: "Allow texts on your phone",
-                           text: "In Lync on your phone, tap Allow next to \u{201C}Texts on your Mac\u{201D}.")
+            case .unavailable(let symbol, let problem, let retry):
+                StatusNote(symbol: symbol, title: problem.title, text: problem.detail ?? "",
+                           retry: retry ? { model.refresh() } : nil)
             default:
                 List(selection: $model.selectedThread) {
                     ForEach(model.filteredThreads) { thread in
@@ -456,6 +520,8 @@ private struct ThreadRow: View {
 private struct ConversationView: View {
     @ObservedObject var model: MessagesModel
     let connected: Bool
+    /// The phone reaches this Mac over Bluetooth only: texts need Wi‑Fi.
+    var bluetoothOnly = false
     @EnvironmentObject var theme: ThemeStore
     @State private var draft = ""
     @FocusState private var composerFocused: Bool
@@ -495,13 +561,32 @@ private struct ConversationView: View {
                 .overlay {
                     if model.loadingThread && model.messages.isEmpty {
                         ProgressView().controlSize(.small)
+                    } else if let problem = model.threadProblem, model.messages.isEmpty, connected {
+                        VStack(spacing: 8) {
+                            Text(problem.title).font(.wh(13, .semibold))
+                            if let detail = problem.detail {
+                                Text(detail).font(.wh(12, .medium)).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                            }
+                            Button("Try again") { model.loadMessages() }
+                                .buttonStyle(WPill(prominent: false, compact: true))
+                                .padding(.top, 4)
+                        }
+                        .padding(20)
                     } else if model.selectedThread == nil && model.newRecipient == nil {
                         Text(model.threads.isEmpty ? "No conversation open" : "Choose a conversation")
                             .font(.wh(13, .medium)).foregroundStyle(.secondary)
                     }
                 }
                 .onChange(of: model.messages.count) { _, count in
-                    if let last = model.messages.last { withMotion(WMotion.smooth) { proxy.scrollTo(last.id, anchor: .bottom) } }
+                    // A message arriving in the open conversation scrolls into view; another
+                    // conversation (or this one loading) just opens at its latest message.
+                    if let last = model.messages.last {
+                        if appending {
+                            withMotion(WMotion.smooth) { proxy.scrollTo(last.id, anchor: .bottom) }
+                        } else {
+                            proxy.scrollTo(last.id, anchor: .bottom)
+                        }
+                    }
                     shownCount = count
                 }
                 .onAppear {
@@ -509,14 +594,8 @@ private struct ConversationView: View {
                     shownCount = model.messages.count
                 }
             }
-            if case .failed(let error) = model.status {
-                Text(error)
-                    .font(.wh(12, .medium))
-                    .foregroundStyle(WTheme.secondary)
-                    .padding(.top, 6)
-            }
             if !connected {
-                Text("Connect your phone to send texts: open Lync on it, on the same Wi‑Fi as this Mac.")
+                Text(bluetoothOnly ? "\(Problem.textsNeedWifi.title). \(Problem.textsNeedWifi.detail ?? "")" : Problem.textsConnectHint)
                     .font(.wh(12, .medium))
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
@@ -619,7 +698,7 @@ private struct ConversationView: View {
                 .onSubmit(send)
                 .onExitCommand { model.cancelNewMessage() }
             Button(action: send) {
-                Image(systemName: "arrow.up")
+                NudgeImage("arrow.up")
                     .font(.wh(13, .bold))
                     .foregroundStyle(canSend ? theme.theme.onPale : Color.white.opacity(0.5))
                     .frame(width: 34, height: 34)
@@ -676,9 +755,10 @@ private struct Bubble: View {
                         RoundedRectangle(cornerRadius: 18, style: .continuous)
                             .fill(message.outgoing ? theme.theme.pale : Color.white.opacity(0.1))
                     )
-                    // Sending: a little smaller and paler until the phone confirms it.
+                    // Sending: a little smaller and paler until the phone confirms it, then settles.
                     .opacity(message.pending ? 0.6 : 1)
                     .scaleEffect(message.pending ? 0.98 : 1, anchor: .bottomTrailing)
+                    .animation(WMotion.animation(WMotion.quick), value: message.pending)
                     .contextMenu {
                         if message.failed && message.outgoing {
                             Button("Try again", action: retry).disabled(!connected)
@@ -693,20 +773,26 @@ private struct Bubble: View {
                     }
                 HStack(spacing: 6) {
                     if message.failed {
-                        Label(message.error.map { "Not sent · \($0)" } ?? "Not sent", systemImage: "exclamationmark.circle")
+                        // A text that wasn't confirmed may have gone: "Send again", after checking.
+                        Label { Text(message.unconfirmed ? (message.error?.title ?? "Not confirmed")
+                                     : message.error.map { "Not sent · \($0.title)" } ?? "Not sent") } icon: { NudgeImage("exclamationmark.circle") }
                             .foregroundStyle(WTheme.danger)
-                        Button("Try again", action: retry).buttonStyle(WPlainPress()).foregroundStyle(theme.theme.pale)
+                        Button(message.unconfirmed ? "Send again" : "Try again", action: retry).buttonStyle(WPlainPress()).foregroundStyle(theme.theme.pale)
                             .disabled(!connected)
                         Button("Copy") { Clipboard.copy(message.body) }.buttonStyle(WPlainPress()).foregroundStyle(theme.theme.pale)
                     } else if message.pending {
-                        Text("Sending…")
+                        Text("Sending…").transition(.opacity)
                     } else {
-                        Text(message.date.formatted(date: .omitted, time: .shortened))
+                        Text(message.date.formatted(date: .omitted, time: .shortened)).transition(.opacity)
                     }
                     if showSim, let sim = message.sim { Text("· \(sim)") }
                 }
                 .font(.wh(11, .medium))
                 .foregroundStyle(.secondary)
+                .animation(WMotion.animation(WMotion.quick), value: message.pending)
+                if message.failed, let detail = message.error?.detail {
+                    Text(detail).font(.wh(11, .medium)).foregroundStyle(.secondary)
+                }
             }
             if !message.outgoing { Spacer(minLength: 80) }
         }
@@ -724,7 +810,7 @@ private struct Avatar: View {
             if let initials {
                 Text(initials).font(.wh(size * 0.38, .semibold)).foregroundStyle(.white)
             } else {
-                Image(systemName: "person.fill").font(.wh(size * 0.42)).foregroundStyle(.white)
+                NudgeImage("person.fill").font(.wh(size * 0.42)).foregroundStyle(.white)
             }
         }
         .frame(width: size, height: size)
@@ -752,10 +838,10 @@ struct ContactResults: View {
     @EnvironmentObject var theme: ThemeStore
 
     var body: some View {
-        if model.contactsUnavailable && model.contactResults.isEmpty {
+        if let note = model.contactsNote, model.contactResults.isEmpty {
             HStack(spacing: 8) {
-                Image(systemName: "person.crop.circle.badge.exclamationmark").foregroundStyle(WTheme.secondary)
-                Text("Allow Contacts for Texts on your phone to search names")
+                NudgeImage("person.crop.circle.badge.exclamationmark").foregroundStyle(WTheme.secondary)
+                Text([note.title, note.detail].compactMap { $0 }.joined(separator: " · "))
                     .font(.wh(12, .medium)).foregroundStyle(WTheme.secondary)
                 Spacer()
             }
@@ -805,7 +891,7 @@ struct MessagesEmptyState: View {
 
     var body: some View {
         VStack(spacing: 8) {
-            Image(systemName: symbol).font(.wh(22, .medium)).foregroundStyle(WTheme.secondary)
+            NudgeImage(symbol).font(.wh(22, .medium)).foregroundStyle(WTheme.secondary)
                 .frame(width: 52, height: 52).background(Circle().fill(WTheme.chip))
             Text(title).font(.wh(13, .semibold))
             Text(text).font(.wh(12, .medium)).foregroundStyle(WTheme.secondary).multilineTextAlignment(.center)
@@ -819,13 +905,17 @@ private struct StatusNote: View {
     let symbol: String
     let title: String
     let text: String
+    var retry: (() -> Void)?
 
     var body: some View {
         VStack(spacing: 8) {
             Spacer()
-            Image(systemName: symbol).font(.wh(24, .medium)).foregroundStyle(.secondary)
-            Text(title).font(.wh(13, .semibold))
+            NudgeImage(symbol).font(.wh(24, .medium)).foregroundStyle(.secondary)
+            Text(title).font(.wh(13, .semibold)).multilineTextAlignment(.center)
             Text(text).font(.wh(12, .medium)).foregroundStyle(.secondary).multilineTextAlignment(.center)
+            if let retry {
+                Button("Try again", action: retry).buttonStyle(WPill(prominent: false, compact: true)).padding(.top, 4)
+            }
             Spacer()
         }
         .padding(20)

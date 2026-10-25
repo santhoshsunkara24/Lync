@@ -49,7 +49,7 @@ class Identity private constructor(val privateKey: ByteArray) {
                     if (attempt == 0) Thread.sleep(250)
                 }
                 Log.w(TAG, "Couldn't unlock the stored key", failure)
-                if (!regenerateIfUnreadable) throw IllegalStateException("This phone's key can't be unlocked", failure)
+                if (!regenerateIfUnreadable) throw KeyLockedException(failure)
             }
             val privateKey = Crypto.generatePrivateKey()
             // commit(), not apply(): a key that's used but never saved would break the pairing.

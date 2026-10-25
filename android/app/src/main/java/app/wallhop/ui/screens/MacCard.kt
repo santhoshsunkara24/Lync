@@ -2,7 +2,6 @@ package app.wallhop.ui.screens
 
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
@@ -35,6 +34,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -235,7 +235,10 @@ private fun Screen(info: MacInfo, connected: Boolean, width: Dp) {
     val light = LocalLightAngle.current
     val density = LocalDensity.current
     val awake by animateFloatAsState(if (connected) 1f else 0f, Springs.smooth(), label = "awake")
-    val locked by animateFloatAsState(if (info.locked && connected) 1f else 0f, Springs.smooth(), label = "locked")
+    val lockedState = animateFloatAsState(if (info.locked && connected) 1f else 0f, Springs.smooth(), label = "locked")
+    val locked by lockedState
+    // Composed only while any of it shows; checked without recomposing on every frame of the fade.
+    val lockShowing by remember { androidx.compose.runtime.derivedStateOf { lockedState.value > 0.01f } }
     val wallpaper = remember(info.wallpaper) { info.wallpaper?.asImageBitmap() }
     val grey = remember { ColorFilter.colorMatrix(ColorMatrix().apply { setToSaturation(0.15f) }) }
 
@@ -279,7 +282,7 @@ private fun Screen(info: MacInfo, connected: Boolean, width: Dp) {
             }
         }
         // Lock screen: dimmed wallpaper, a lock and the time.
-        if (locked > 0.01f) {
+        if (lockShowing) {
             val time by produceState(now()) {
                 while (true) {
                     delay(60_000 - System.currentTimeMillis() % 60_000)
@@ -328,35 +331,64 @@ private fun Screen(info: MacInfo, connected: Boolean, width: Dp) {
 @Composable
 private fun Notch(event: NotchEvent?, connected: Boolean, width: Dp, modifier: Modifier) {
     val open = event != null
-    val notchWidth by animateDpAsState(if (open) width * 0.5f else width * 0.155f, Springs.bouncy(), label = "notchW")
-    val notchHeight by animateDpAsState(if (open) width * 0.082f else width * 0.046f, Springs.bouncy(), label = "notchH")
-    val content by animateFloatAsState(if (open) 1f else 0f, Springs.snappy(), label = "notchContent")
+    val reduceMotion = Wallhop.a11y.reduceMotion
+    // Laid out once at the open pill's size; the black shape is drawn growing inside it, so the
+    // morph moves pixels only and never re-measures the card.
+    val morph by animateFloatAsState(
+        if (open) 1f else 0f,
+        if (reduceMotion) androidx.compose.animation.core.snap() else Springs.bouncy(),
+        label = "notch",
+    )
+    val content by animateFloatAsState(
+        if (open) 1f else 0f,
+        if (reduceMotion) androidx.compose.animation.core.snap() else Springs.snappy(),
+        label = "notchContent",
+    )
     val density = LocalDensity.current
     // Keep the last event on screen while the pill closes.
     var shown by remember { mutableStateOf(event) }
     if (event != null) shown = event
     val green = Wallhop.colors.green
+    val shape = remember { androidx.compose.ui.graphics.Path() }
+    val closedHeight = width * 0.046f
+    val lightSize = width * 0.011f
 
     Box(
         modifier
-            .size(notchWidth, notchHeight)
-            .clip(RoundedCornerShape(bottomStart = notchHeight * 0.45f, bottomEnd = notchHeight * 0.45f))
-            .background(Color(0xFF0B0B0D)),
+            .size(width * 0.5f, width * 0.082f)
+            .drawWithContent {
+                val m = morph
+                val w = androidx.compose.ui.util.lerp(width.toPx() * 0.155f, size.width, m)
+                val h = androidx.compose.ui.util.lerp(closedHeight.toPx(), size.height, m)
+                val left = (size.width - w) / 2
+                val corner = CornerRadius(h * 0.45f)
+                shape.reset()
+                shape.addRoundRect(
+                    androidx.compose.ui.geometry.RoundRect(
+                        left, 0f, left + w, h,
+                        topLeftCornerRadius = CornerRadius.Zero, topRightCornerRadius = CornerRadius.Zero,
+                        bottomRightCornerRadius = corner, bottomLeftCornerRadius = corner,
+                    ),
+                )
+                drawPath(shape, NotchBlack)
+                clipPath(shape) { this@drawWithContent.drawContent() }
+            },
         contentAlignment = Alignment.Center,
     ) {
-        if (content < 0.99f && connected) {
+        if (connected) {
             // The camera light: green while the link is up.
             Box(
                 Modifier
-                    .offset(x = width * 0.025f, y = width * 0.006f)
-                    .size(width * 0.011f)
+                    .align(Alignment.TopCenter)
+                    .offset(x = width * 0.025f, y = closedHeight / 2 - lightSize / 2 + width * 0.006f)
+                    .size(lightSize)
                     .graphicsLayer { alpha = 1f - content }
                     .clip(capsule())
                     .background(green),
             )
         }
         val current = shown
-        if (current != null && content > 0.01f) {
+        if (current != null) {
             Row(
                 Modifier
                     .padding(top = width * 0.022f, start = width * 0.035f, end = width * 0.035f)
@@ -385,6 +417,8 @@ private fun Notch(event: NotchEvent?, connected: Boolean, width: Dp, modifier: M
     }
 }
 
+private val NotchBlack = Color(0xFF0B0B0D)
+
 @Composable
 private fun ProgressRing(progress: Float, modifier: Modifier) {
     val track = Color.White.copy(alpha = 0.25f)
@@ -393,7 +427,7 @@ private fun ProgressRing(progress: Float, modifier: Modifier) {
     val reduceMotion = Wallhop.a11y.reduceMotion
     val shown by animateFloatAsState(
         progress.coerceIn(0f, 1f),
-        if (reduceMotion) androidx.compose.animation.core.snap() else Springs.smooth(),
+        if (reduceMotion) androidx.compose.animation.core.snap() else tween(250, easing = androidx.compose.animation.core.LinearEasing),
         label = "notchRing",
     )
     Canvas(modifier) {
@@ -423,84 +457,3 @@ internal fun duration(ms: Long): String {
     }
 }
 
-/**
- * The Bridge (Home's Mac card): your phone stands in front of the big Mac, and a mint link arcs
- * from it to the notch with a light that travels along it while they're linked. Fill the
- * picture area with it, on top of [LiveMac].
- */
-@Composable
-fun BridgeLink(connected: Boolean, home: app.wallhop.ui.design.HomeColors, modifier: Modifier = Modifier) {
-    val reduceMotion = Wallhop.a11y.reduceMotion
-    val active = app.wallhop.ui.components.LocalScreenActive.current
-    val mint = app.wallhop.ui.design.HomeColors.CodeMint
-    // One slow loop drives both the dotted link's drift and the travelling light.
-    val flow = remember { Animatable(0f) }
-    LaunchedEffect(connected, reduceMotion, active) {
-        if (!connected || reduceMotion || !active) return@LaunchedEffect
-        while (true) {
-            flow.snapTo(0f)
-            flow.animateTo(1f, tween(4200, easing = androidx.compose.animation.core.LinearEasing))
-        }
-    }
-    val linked by animateFloatAsState(if (connected) 1f else 0f, Springs.smooth(), label = "linked")
-    val time by produceState(now()) {
-        while (true) {
-            delay(60_000 - System.currentTimeMillis() % 60_000)
-            value = now()
-        }
-    }
-    BoxWithConstraints(modifier) {
-        val w = maxWidth
-        val lid = minOf(w * 0.8f, 300.dp)
-        val phoneW = 52.dp
-        val phoneH = 108.dp
-        val phoneX = w * 0.86f - phoneW / 2
-        val phoneY = 52.dp
-        Canvas(Modifier.fillMaxSize().graphicsLayer { alpha = linked }) {
-            val start = Offset((phoneX + phoneW / 2 + 3.dp).toPx(), (phoneY - 3.dp).toPx())
-            val end = Offset(size.width / 2 + (lid * 0.155f / 2 + 4.dp).toPx(), 21.dp.toPx())
-            val path = androidx.compose.ui.graphics.Path().apply {
-                moveTo(start.x, start.y)
-                cubicTo(start.x + 10.dp.toPx(), 6.dp.toPx(), end.x + 34.dp.toPx(), 4.dp.toPx(), end.x, end.y)
-            }
-            drawPath(path, mint.copy(alpha = 0.22f), style = Stroke(6.dp.toPx(), cap = StrokeCap.Round))
-            val dash = 10.dp.toPx()
-            drawPath(
-                path, mint,
-                style = Stroke(
-                    2.dp.toPx(), cap = StrokeCap.Round,
-                    pathEffect = androidx.compose.ui.graphics.PathEffect.dashPathEffect(floatArrayOf(0.1f, dash), -flow.value * dash * 6),
-                ),
-            )
-            // The light: travels phone → notch in the first 60 % of each loop.
-            val p = flow.value / 0.6f
-            if (p in 0.01f..1f) {
-                val measure = androidx.compose.ui.graphics.PathMeasure().apply { setPath(path, false) }
-                val at = measure.getPosition(measure.length * FastOutSlowInEasing.transform(p))
-                val a = sin(p * PI).toFloat()
-                drawCircle(Brush.radialGradient(listOf(mint.copy(alpha = 0.7f * a), Color.Transparent), at, 12.dp.toPx()), 12.dp.toPx(), at)
-                drawCircle(Color.White.copy(alpha = a), 3.dp.toPx(), at)
-            }
-        }
-        // The phone: dark frame, punch-hole camera, a lock screen in Home's own colours.
-        Box(
-            Modifier
-                .offset(phoneX, phoneY)
-                .size(phoneW, phoneH)
-                .graphicsLayer { rotationZ = 6f; shadowElevation = 14.dp.toPx(); shape = RoundedCornerShape(13.dp); clip = true }
-                .background(Color(0xFF18181A))
-                .padding(2.5.dp)
-                .clip(RoundedCornerShape(11.dp))
-                .background(Brush.verticalGradient(listOf(home.top, home.mid, Color(0xFF0B0B0C)))),
-        ) {
-            Box(Modifier.align(Alignment.TopCenter).padding(top = 5.dp).size(4.5.dp).clip(capsule()).background(Color.Black))
-            Text(
-                time,
-                color = Color.White,
-                maxLines = 1,
-                style = Type.caption2.copy(fontSize = androidx.compose.ui.unit.TextUnit(13f, androidx.compose.ui.unit.TextUnitType.Sp), fontWeight = FontWeight.Light),
-                modifier = Modifier.align(Alignment.TopCenter).padding(top = 15.dp),
-            )
-        }
-    }
-}

@@ -50,10 +50,14 @@ import app.wallhop.ui.design.Type
 import app.wallhop.ui.design.WIcons
 import app.wallhop.ui.design.Wallhop
 
+/** What Bluetooth backup does, for the guided setup and the Settings switch (Play's prominent disclosure). */
+const val BLUETOOTH_DISCLOSURE =
+    "Off your Mac's Wi‑Fi, codes, calls and notifications still reach it over Bluetooth while it's nearby (about 10 m, like the same room) and awake. Files wait for the same Wi‑Fi. Lync talks only to your paired Mac, everything is encrypted, and Bluetooth is never used to find your location."
+
 /** One step of the guided setup: what the feature does and why, which doubles as Play's prominent disclosure. */
 class SetupStep(val key: Features.Key, val icon: ImageVector, val title: String, val message: String)
 
-/** The guided setup's steps, in order: Codes, Phone notifications on Mac, Calls, Texts, Run in background, Alerts. */
+/** The guided setup's steps, in order: Codes, Phone notifications on Mac, Calls, Texts, Run in background, Bluetooth backup, Alerts. */
 val SetupSteps = listOf(
     SetupStep(
         Features.Key.Codes, WIcons.Code, "Codes",
@@ -74,6 +78,10 @@ val SetupSteps = listOf(
     SetupStep(
         Features.Key.Background, WIcons.BatteryCharging, "Run in background",
         "Lets Lync stay connected while it's closed, so codes and files reach your Mac without opening the app.",
+    ),
+    SetupStep(
+        Features.Key.Bluetooth, WIcons.Bluetooth, "Bluetooth backup",
+        BLUETOOTH_DISCLOSURE,
     ),
     SetupStep(
         Features.Key.Notifications, WIcons.Bell, "Alerts on this phone",
@@ -135,7 +143,7 @@ fun GuidedSetup(
                 ) {
                     IconTile(shown.icon, home.pale, size = 72.dp)
                     Spacer(Modifier.height(24.dp))
-                    Text(shown.title, style = Type.largeTitle, color = Color.White, modifier = Modifier.semantics { heading() })
+                    Text(shown.title, style = Type.pageTitle, color = Color.White, modifier = Modifier.semantics { heading() })
                     Spacer(Modifier.height(12.dp))
                     Text(shown.message, style = Type.body, color = Color.White.copy(alpha = 0.78f))
                     extra(shown)

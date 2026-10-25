@@ -18,6 +18,7 @@ let savedItems = (board.pasteboardItems ?? []).map { item -> NSPasteboardItem in
 }
 
 CTFontManagerRegisterFontsForURL(URL(fileURLWithPath: "Resources/Figtree.ttf") as CFURL, .process, nil)
+CTFontManagerRegisterFontsForURL(URL(fileURLWithPath: "Resources/Galindo.ttf") as CFURL, .process, nil)
 
 @MainActor func render<V: View>(_ name: String, _ view: V) {
     let renderer = ImageRenderer(content: view.environment(\.colorScheme, .dark))
@@ -42,6 +43,8 @@ CTFontManagerRegisterFontsForURL(URL(fileURLWithPath: "Resources/Figtree.ttf") a
 
 @MainActor func run() {
     PanelSnapshots.active = true
+    // The phone's lock screen reads 9:41 on Fri 23 Oct 2026, whenever this runs.
+    PanelSnapshots.clock = Calendar.current.date(from: DateComponents(year: 2026, month: 10, day: 23, hour: 23, minute: 24))
     // Contrast self check (Theme.swift): every phone hue keeps white text ≥ 4.5:1, codes too.
     let problems = WTheme.contrastProblems()
     if problems.isEmpty { print("contrast check: OK") } else { problems.forEach { print("contrast check FAILED: \($0)") } }
@@ -63,37 +66,53 @@ CTFontManagerRegisterFontsForURL(URL(fileURLWithPath: "Resources/Figtree.ttf") a
         exit(0)
     }
     let server = LinkServer(identity: Identity.loadOrCreate(), paired: PairedPhones())
+    // First launch each run: the panel starts on "Lync lives here".
+    UserDefaults.standard.removeObject(forKey: "onboardingHotkeySeen")
     let model = AppModel(server: server)
     let send: (LinkEvent) -> Void = { server.onEvent?($0) }
     let phone = PairedPhone(id: "test", name: "Nothing Phone (3a) Pro", publicKey: Data(count: 32), pairedAt: Date())
 
-    // Not paired yet: onboarding with the QR.
+    // Not paired yet, first launch: "Lync lives here" teaches ⌥⌘L, then the QR.
+    render("1a_onboarding_hotkey", PanelView(model: model, theme: model.themeStore, fromNotch: true).fixedSize())
+    model.finishHotkeyStep()
     render("1_onboarding", PanelView(model: model, theme: model.themeStore, fromNotch: true).fixedSize())
 
     // A connected phone with a bit of everything.
     server.paired.add(phone)
     send(.pairingEnded(id: UUID()))
-    // Paired, phone not around yet: "looking for your phone".
+    send(.listening(port: 47474))
+    // Paired, phone not around yet: the header says it isn't connected and what to do.
     render("1b_home_searching", PanelView(model: model, theme: model.themeStore, fromNotch: true).fixedSize())
     send(.connected(phone, host: "192.168.0.12"))
-    send(.status(battery: 76, charging: true))
-    send(.theme(seed: 0xFF6B4EFF, accent: 0xFFE8505B))
+    send(.status(battery: 62, charging: true))
+    // Lync's own mint and rose (HomeColors.Default on the phone), not a wallpaper's colours.
+    send(.theme(seed: WTheme.defaultSeed, accent: WTheme.defaultAccent))
     send(.media(NowPlaying(app: "YouTube Music", title: "Midnight City", artist: "M83", playing: true), art: nil))
     send(.notification(PhoneNotification(key: "n1", packageName: "com.whatsapp", appName: "WhatsApp", title: "Design team",
                                          text: "Can you share the new home screen?", time: Date(), canReply: true), icon: nil))
     send(.text("Meeting moved to 4:30, see you there", from: phone))
     let folder = URL(fileURLWithPath: NSTemporaryDirectory() + "wallhop-snapshot-files", isDirectory: true)
     try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-    let image = NSImage(size: NSSize(width: 300, height: 220))
-    image.lockFocus()
-    NSGradient(colors: [.systemPink, .systemIndigo])!.draw(in: NSRect(x: 0, y: 0, width: 300, height: 220), angle: 35)
-    image.unlockFocus()
-    let photo = folder.appendingPathComponent("Sunset.png")
-    try? NSBitmapImageRep(data: image.tiffRepresentation!)!.representation(using: .png, properties: [:])!.write(to: photo)
-    send(.batchStarted(id: "b1", count: 1, bytes: 1000))
-    send(.fileSaved(batch: "b1", url: photo))
+    // Three small photos, each its own colours.
+    let photos = [("Sunset", NSColor.systemPink, NSColor.systemIndigo), ("Beach", .systemTeal, .systemYellow),
+                  ("Forest", .systemGreen, .systemBrown)].map { name, from, to -> URL in
+        let image = NSImage(size: NSSize(width: 300, height: 220))
+        image.lockFocus()
+        NSGradient(colors: [from, to])!.draw(in: NSRect(x: 0, y: 0, width: 300, height: 220), angle: 35)
+        image.unlockFocus()
+        let url = folder.appendingPathComponent("\(name).png")
+        try? NSBitmapImageRep(data: image.tiffRepresentation!)!.representation(using: .png, properties: [:])!.write(to: url)
+        return url
+    }
+    let photo = photos[0]
+    send(.batchStarted(id: "b1", count: photos.count, bytes: 3000))
+    for url in photos { send(.fileSaved(batch: "b1", url: url)) }
     send(.batchFinished(id: "b1"))
-    send(.otp(code: "731942", sender: "HDFC Bank", app: "SMS"))
+    // A large send halfway across, for the receiving card.
+    send(.batchStarted(id: "b3", count: 1, bytes: 1_800_000_000))
+    send(.fileSaved(batch: "b3", url: photo))
+    send(.batchProgress(id: "b3", bytes: 860_000_000))
+    send(.otp(code: "482913", sender: "HDFC Bank", app: "SMS"))
 
     render("2_home_notch", PanelView(model: model, theme: model.themeStore, fromNotch: true).fixedSize())
     render("3_home_menubar", PanelView(model: model, theme: model.themeStore, fromNotch: false).fixedSize())
@@ -117,7 +136,11 @@ CTFontManagerRegisterFontsForURL(URL(fileURLWithPath: "Resources/Figtree.ttf") a
     render("8_toast", PanelView(model: model, theme: model.themeStore, fromNotch: false).fixedSize())
     model.showToast(Toast(symbol: "bell.slash", message: "Cleared 1 notification", actionTitle: "Undo") {})
     render("8b_toast_undo", PanelView(model: model, theme: model.themeStore, fromNotch: false).fixedSize())
-    model.panelOpen = false
+    // A problem: why, what to do, and the button that does it, on two lines.
+    let storage = Problem.sendFailed(.refused(PhoneError.storageFull))
+    model.report(Problem(title: storage.title, detail: storage.detail).with("Try again") {})
+    render("8c_toast_problem", PanelView(model: model, theme: model.themeStore, fromNotch: false).fixedSize())
+    model.closePanel()
 
     // Messages with nothing in it, and with a search that finds nothing.
     let empty = VStack(spacing: 0) {
@@ -134,9 +157,9 @@ CTFontManagerRegisterFontsForURL(URL(fileURLWithPath: "Resources/Figtree.ttf") a
     send(.batchInterrupted(id: "b2"))
 
     // A phone asking to pair, and a ringing call.
-    let request = PairingRequest(id: UUID(), phoneName: "Pixel 9", code: "482913", decide: { _ in })
+    let request = PairingRequest(id: UUID(), phoneName: phone.name, code: "305718", decide: { _ in })
     send(.pairingRequested(request))
-    send(.call(PhoneCall(id: "c1", state: .ringing, number: "+44 7700 900123", name: "Alex Morgan", sim: "SIM 1")))
+    send(.call(PhoneCall(id: "c1", state: .ringing, number: "+44 7700 900123", name: "mi amor ❤️", sim: "SIM 1")))
 
     // Contacts search under "To:" in Texts, and the phone saying it can't search.
     let texts = MessagesModel(server: server)
@@ -152,10 +175,15 @@ CTFontManagerRegisterFontsForURL(URL(fileURLWithPath: "Resources/Figtree.ttf") a
     // Live moments, drawn the way the notch shows them.
     for (name, card) in [("7c_live_pairing", LiveCard.pairing(request.id)),
                          ("7d_live_call", LiveCard.call("c1")),
-                         ("7e_live_notification", LiveCard.notification(key: "n1")),("5_live_code", LiveCard.otp(code: "731942", sender: "HDFC Bank")),
+                         ("7e_live_notification", LiveCard.notification(key: "n1")),("5_live_code", LiveCard.otp(code: "482913", sender: "HDFC Bank")),
                          ("6_live_files", LiveCard.added(batchId: "b1")),
+                         ("6b_live_receiving", LiveCard.receiving(batchId: "b3")),
                          ("7_live_text", LiveCard.text("Meeting moved to 4:30")),
-                         ("7b_live_interrupted", LiveCard.added(batchId: "b2"))] {
+                         ("7b_live_interrupted", LiveCard.added(batchId: "b2")),
+                         ("7g_live_problem", LiveCard.problem({
+                             let text = Problem.partlySent(sent: 2, total: 3, firstFailedName: "Report.pdf", failure: .disconnected)
+                             return Problem(symbol: "iphone.slash", title: text.title, detail: text.detail).with("Try again") {}
+                         }()))] {
         let content = LiveCardView(model: model, card: card)
             .frame(width: 364, alignment: .leading)
             .padding(.top, 42).padding(.horizontal, 18).padding(.bottom, 16)
@@ -176,8 +204,12 @@ CTFontManagerRegisterFontsForURL(URL(fileURLWithPath: "Resources/Figtree.ttf") a
     model.hideLive()
     model.hideLive()
     // Quiet moments.
-    model.show(.quiet(symbol: "iphone.radiowaves.left.and.right", text: "Nothing Phone (3a) Pro connected"), for: nil)
+    model.show(.quiet(symbol: "iphone.radiowaves.left.and.right", text: "\(phone.name) connected"), for: nil)
     render("10d_overlay_quiet_connected", overlay(model))
+    model.hideLive()
+    // Just paired (Pair on the card, or the QR): the link catches, "Linked with …".
+    model.show(.quiet(symbol: LinkCatchView.symbol, text: "Linked with \(phone.name)"), for: nil)
+    render("7f_live_linked", overlay(model))
     model.hideLive()
     // Files dragged somewhere on the Mac: the glow, then the drop zone near the notch.
     model.fileDragBegan(files: [photo, photo, photo])
@@ -200,8 +232,19 @@ CTFontManagerRegisterFontsForURL(URL(fileURLWithPath: "Resources/Figtree.ttf") a
     // The phone went away: the panel says so.
     send(.disconnected(phone))
     render("10h_home_offline", PanelView(model: model, theme: model.themeStore, fromNotch: true).fixedSize())
+    // Still reachable over Bluetooth only: what works, and what Wi‑Fi would add. (Recent
+    // cleared first, so the header isn't cut off: snapshots don't scroll.)
+    model.clearActivity()
+    model.closePanel()
+    send(.bluetooth(phone))
+    render("10j_home_bluetooth", PanelView(model: model, theme: model.themeStore, fromNotch: true).fixedSize())
+    send(.bluetooth(nil))
+    // Bluetooth off on this Mac: a second note under "isn't connected".
+    send(.bluetoothRadio(.off))
+    render("10k_home_bluetooth_off", PanelView(model: model, theme: model.themeStore, fromNotch: true).fixedSize())
+    send(.bluetoothRadio(.ready))
     send(.connected(phone, host: "192.168.0.12"))
-    send(.call(PhoneCall(id: "c1", state: .ringing, number: "+44 7700 900123", name: "Alex Morgan", sim: "SIM 1")))
+    send(.call(PhoneCall(id: "c1", state: .ringing, number: "+44 7700 900123", name: "mi amor ❤️", sim: "SIM 1")))
 
     // The real overlay: a code that arrived during the call waits, then shows once the call ends.
     model.show(.call("c1"), for: nil)

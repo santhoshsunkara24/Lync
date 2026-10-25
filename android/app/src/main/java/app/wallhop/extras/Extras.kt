@@ -27,6 +27,22 @@ import app.wallhop.link.LinkManager
 import app.wallhop.link.Notifications
 import kotlinx.coroutines.launch
 
+/**
+ * The clipboard's text, or why there's none to send: it's empty, or it holds something that
+ * isn't text (a photo, a file). Android only lets the app in front read it.
+ */
+fun readClipboard(context: Context): Pair<String?, app.wallhop.core.Problem?> {
+    val clip = runCatching { context.getSystemService(ClipboardManager::class.java)?.primaryClip }.getOrNull()
+        ?.takeIf { it.itemCount > 0 } ?: return null to app.wallhop.core.Problems.CLIPBOARD_EMPTY
+    val item = clip.getItemAt(0)
+    // A photo or file copied: coerceToText would send its content:// address, which is no use on the Mac.
+    if (item.text == null && item.htmlText == null && (item.uri != null || item.intent != null)) {
+        return null to app.wallhop.core.Problems.CLIPBOARD_NOT_TEXT
+    }
+    val text = item.coerceToText(context)?.toString()
+    return if (text.isNullOrBlank()) null to app.wallhop.core.Problems.CLIPBOARD_EMPTY else text to null
+}
+
 /** True when [text] is a single web link and nothing else. */
 fun isSingleUrl(text: String): Boolean {
     val trimmed = text.trim()
@@ -141,8 +157,10 @@ class StopRingingReceiver : BroadcastReceiver() {
 
 /** Shows "Open link from your Mac"; Android doesn't let background apps open a browser by themselves. */
 object LinkFromMac {
+    /** False when Android blocks Lync's notifications, so the Mac can say it couldn't be shown. */
     @android.annotation.SuppressLint("MissingPermission") // notify() is wrapped in runCatching.
-    fun show(context: Context, url: String) {
+    fun show(context: Context, url: String): Boolean {
+        if (Notifications.blocked(context, Notifications.CHANNEL_FROM_MAC)) return false
         val open = PendingIntent.getActivity(
             context, url.hashCode(),
             Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
@@ -156,7 +174,7 @@ object LinkFromMac {
             .setAutoCancel(true)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .build()
-        runCatching { NotificationManagerCompat.from(context).notify(url.hashCode(), notification) }
+        return runCatching { NotificationManagerCompat.from(context).notify(url.hashCode(), notification) }.isSuccess
     }
 }
 
@@ -188,26 +206,41 @@ class SendClipboardActivity : ComponentActivity() {
         super.onWindowFocusChanged(hasFocus)
         if (!hasFocus || sent) return
         sent = true
-        val text = getSystemService(ClipboardManager::class.java).primaryClip
-            ?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.coerceToText(this)?.toString()
-        if (text.isNullOrBlank()) {
-            Toast.makeText(this, "Your clipboard is empty", Toast.LENGTH_SHORT).show()
+        val (text, empty) = readClipboard(this)
+        if (text == null) {
+            say(empty ?: app.wallhop.core.Problems.CLIPBOARD_EMPTY)
             finish()
             return
         }
         val link = LinkManager.get(this)
+        // Not paired, forgotten, or already known to be away: say so now instead of after a wait.
+        val state = link.state.value
+        val now = when {
+            link.pairedMac == null -> app.wallhop.core.Problems.NOT_PAIRED
+            state is app.wallhop.link.LinkState.Forgotten -> app.wallhop.core.Problem(app.wallhop.core.Problems.FORGOTTEN.title, "Pair again in Lync.")
+            state is app.wallhop.link.LinkState.Searching && state.reason != null -> link.reachProblem()
+            else -> null
+        }
+        if (now != null) {
+            say(now)
+            finish()
+            return
+        }
+        Toast.makeText(this, "Sending to Mac…", Toast.LENGTH_SHORT).show()
         lifecycleScope.launch {
-            val ok = if (isSingleUrl(text)) link.openOnMac(text.trim()) else link.sendText(text)
-            Toast.makeText(
+            val problem = if (isSingleUrl(text)) link.openOnMac(text.trim()) else link.sendText(text)
+            if (problem != null) say(problem)
+            else Toast.makeText(
                 this@SendClipboardActivity,
-                when {
-                    !ok -> "Couldn't reach your Mac"
-                    isSingleUrl(text) -> "Opened on your Mac"
-                    else -> app.wallhop.core.Wording.READY
-                },
+                if (isSingleUrl(text)) "Opened on your Mac" else app.wallhop.core.Wording.READY,
                 Toast.LENGTH_SHORT,
             ).show()
             finish()
         }
+    }
+
+    /** A problem as an Android toast, the only thing this see-through screen can show. */
+    private fun say(problem: app.wallhop.core.Problem) {
+        Toast.makeText(this, problem.sentence, Toast.LENGTH_LONG).show()
     }
 }

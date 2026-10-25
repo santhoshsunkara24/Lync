@@ -105,6 +105,9 @@ val Figtree = FontFamily(
     },
 )
 
+/** Galindo (SIL OFL): Lync's wordmark face, also used for the big page titles. One weight. */
+val Galindo = FontFamily(Font(R.font.galindo))
+
 /**
  * Type scale in Figtree (DESIGN.md §3.4): calm medium weights for titles, like Material 3
  * Expressive; semibold only for headlines and labels. Tracking in sp.
@@ -119,6 +122,10 @@ object Type {
     )
 
     val largeTitle = style(30, 38, 500, -1.2f)
+    /** The big title at the top of a page (Home, Activity, Settings…), in the wordmark's Galindo. */
+    val pageTitle = TextStyle(fontFamily = Galindo, fontSize = 30.sp, lineHeight = 38.sp, letterSpacing = 0.sp)
+    /** A section's title within a page ("On your Mac", "Recent"), also in Galindo. */
+    val sectionTitle = TextStyle(fontFamily = Galindo, fontSize = 18.sp, lineHeight = 24.sp, letterSpacing = 0.sp)
     val title1 = style(26, 32, 500, -0.8f)
     val title2 = style(22, 28, 500, -0.4f)
     val title3 = style(19, 24, 600, -0.2f)
@@ -161,7 +168,14 @@ object Springs {
     /** Glass dematerializing: the same things going away. */
     fun <T> dematerialize(): SpringSpec<T> = spring(dampingRatio = 1f, stiffness = 500f)
     /** A button menu morphing out of its button (DESIGN.md §5.12). */
-    fun <T> menu(): SpringSpec<T> = spring(dampingRatio = 0.75f, stiffness = 350f)
+    fun <T> menu(): SpringSpec<T> = spring(dampingRatio = 0.8f, stiffness = 500f)
+    /** A press letting go: quicker than [bouncy], with only a hint of overshoot. */
+    fun <T> release(): SpringSpec<T> = spring(dampingRatio = 0.8f, stiffness = 700f)
+    /** A small thing popping in (a tick, a badge): settles fast, barely overshoots. */
+    fun <T> pop(): SpringSpec<T> = spring(dampingRatio = 0.75f, stiffness = 600f)
+    /** A full-screen sheet over the app (the sending screen): quick, no bounce, interruptible. */
+    fun <T> sheetIn(): SpringSpec<T> = spring(dampingRatio = 1f, stiffness = 380f)
+    fun <T> sheetOut(): SpringSpec<T> = spring(dampingRatio = 1f, stiffness = 600f)
 }
 
 /** System accessibility state that changes how things draw and move. */
@@ -197,16 +211,21 @@ object Wallhop {
 }
 
 fun readAccessibility(context: Context): Accessibility {
-    val animationScale = Settings.Global.getFloat(context.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 1f)
+    // "Remove animations" sets both scales to 0; some phones only change one of them.
+    val animationScale = minOf(
+        Settings.Global.getFloat(context.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 1f),
+        Settings.Global.getFloat(context.contentResolver, Settings.Global.TRANSITION_ANIMATION_SCALE, 1f),
+    )
     val highContrast = Settings.Secure.getInt(context.contentResolver, "high_text_contrast_enabled", 0) == 1
     val powerSave = context.getSystemService(PowerManager::class.java)?.isPowerSaveMode == true
     return Accessibility(reduceMotion = animationScale == 0f, reduceTransparency = highContrast || powerSave)
 }
 
 @Composable
-fun WallhopTheme(content: @Composable () -> Unit) {
+fun WallhopTheme(brand: Boolean = false, content: @Composable () -> Unit) {
     val context = LocalContext.current
-    val home = rememberHomeColors()
+    // [brand]: Lync's own mint instead of the wallpaper's colours (sample data, so screenshots match).
+    val home = if (brand) HomeColors.Default else rememberHomeColors()
     val palette = remember(home) { expressivePalette(home) }
     // Read again whenever the animation scale or high-contrast text changes, so Reduce Motion
     // (Remove animations) applies straight away, not on the next launch.
@@ -218,6 +237,7 @@ fun WallhopTheme(content: @Composable () -> Unit) {
         val resolver = context.contentResolver
         runCatching {
             resolver.registerContentObserver(Settings.Global.getUriFor(Settings.Global.ANIMATOR_DURATION_SCALE), false, observer)
+            resolver.registerContentObserver(Settings.Global.getUriFor(Settings.Global.TRANSITION_ANIMATION_SCALE), false, observer)
             resolver.registerContentObserver(Settings.Secure.getUriFor("high_text_contrast_enabled"), false, observer)
         }
         onDispose { runCatching { resolver.unregisterContentObserver(observer) } }

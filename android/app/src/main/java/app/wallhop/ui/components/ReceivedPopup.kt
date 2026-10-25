@@ -98,7 +98,7 @@ fun BoxScope.ReceivedPopup(batch: ReceivedBatch?, onDismiss: () -> Unit, bottom:
                 .fillMaxWidth()
                 .offset { IntOffset(0, drag.value.roundToInt()) }
                 .draggable(dragState, Orientation.Vertical, onDragStopped = { velocity ->
-                    if (drag.value > 80f || velocity > 1500f) onDismiss() else drag.animateTo(0f, Springs.bouncy())
+                    if (drag.value > 80f || velocity > 1500f) onDismiss() else drag.animateTo(0f, Springs.snappy())
                 })
                 .clip(rounded(28.dp))
                 .background(colors.backgroundElevated)

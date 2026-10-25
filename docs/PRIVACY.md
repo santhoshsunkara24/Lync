@@ -1,6 +1,6 @@
 # Lync privacy policy
 
-_Last updated: 19 October 2026_
+_Last updated: 23 October 2026_
 
 Lync connects your Android phone to your own Mac. This policy explains what the Android app and the Mac
 app do with your data.
@@ -8,8 +8,8 @@ app do with your data.
 ## The short version
 
 - Lync has **no servers, no accounts, no analytics, no ads and no tracking**.
-- Data goes **only from your phone to the Mac you paired it with**, directly over your local network,
-  end-to-end encrypted. The developer never receives any of it.
+- Data goes **only from your phone to the Mac you paired it with**, directly over your local network
+  or, when the two aren't on the same network, over Bluetooth, end-to-end encrypted either way. The developer never receives any of it.
 - Nothing is sold or shared with anyone.
 
 ## What the app reads, and why
@@ -25,6 +25,7 @@ Nothing below is read while its switch is off or its Android permission isn't gr
 | Notifications | Notifications from the apps you pick (notification access) | Shown on your Mac. Codes in them are copied the same way as SMS codes |
 | Pairing | The camera (`CAMERA`) | Only to scan the QR code your Mac shows. No images are saved or sent |
 | Files and links | Files, text and links you choose to share | Sent to your Mac only when you send them |
+| Bluetooth backup | Nearby devices (`BLUETOOTH_ADVERTISE`, `BLUETOOTH_CONNECT`) | Lets your paired Mac connect to the phone over Bluetooth when Wi-Fi can't reach it. Never used to scan for other devices or to find your location |
 
 Lync also shares your phone's battery level, its name and its wallpaper colours with your Mac, so the
 Mac app can show them.
@@ -34,6 +35,14 @@ Mac app can show them.
 The phone and the Mac find each other on your local network (Bonjour/mDNS) and talk over a direct
 connection that is encrypted with keys created on your devices during pairing (X25519,
 ChaCha20-Poly1305). Data never passes through the internet or anyone else's computer.
+
+When Wi-Fi can't reach your Mac (different networks, or Wi-Fi off), and Bluetooth backup is on, the
+phone advertises over Bluetooth LE and only your paired Mac connects to it. The advertisement carries
+no name or account: just a code that only your Mac can recognise and that changes every 15 minutes, so
+it can't be used to follow your phone. Over Bluetooth only codes, calls and notifications are sent,
+encrypted the same way, with fresh keys for every connection; anything that fails that check is
+dropped. Bluetooth stops as soon as Wi-Fi reconnects. On the Mac, macOS asks once whether Lync may
+use Bluetooth.
 
 ## What is stored
 

@@ -36,6 +36,7 @@ struct WTheme: Equatable {
     /// contrasting accent. From the first connection on, it follows that phone's wallpaper.
     static let defaultSeed: UInt32 = 0xFF2FB57E
     static let defaultAccent: UInt32 = 0xFFE0386A
+    static let brand = WTheme(seed: defaultSeed, accent: defaultAccent)
 
     init(seed: UInt32, accent: UInt32?) {
         let (hue, saturation, _) = Self.hsl(seed)
@@ -189,11 +190,16 @@ enum WRadius {
 }
 
 /// Motion tokens (DESIGN.md: calm motion, physical response). Every animation in the app uses one
-/// of these springs, through `WMotion.animation(_:)` so Reduce Motion turns movement into a
+/// of these, through `WMotion.animation(_:)` so Reduce Motion turns movement into a
 /// short fade.
 enum WMotion {
     /// A finger (or click) going down: immediate, a little give.
     static let press = Animation.spring(response: 0.22, dampingFraction: 0.7)
+    /// Letting go: back to rest a little faster than it went down.
+    static let release = Animation.spring(response: 0.15, dampingFraction: 0.8)
+    /// Something swapping in place (a copy icon turning into a tick, "Sending…" settling) and a
+    /// progress line advancing: quick, no overshoot.
+    static let quick = Animation.easeOut(duration: 0.2)
     /// Hover, toggles, small state changes, closing things.
     static let snappy = Animation.spring(response: 0.28, dampingFraction: 0.82)
     /// Layout: pages, lists, the panel opening.
@@ -202,6 +208,13 @@ enum WMotion {
     static let bouncy = Animation.spring(response: 0.42, dampingFraction: 0.68)
     /// What Reduce Motion uses instead of any of the above.
     static let reduced = Animation.easeOut(duration: 0.12)
+
+    /// The panel opened from the keyboard (⌥⌘L): there at once, with only this fade (seconds).
+    static let instantFade: TimeInterval = 0.1
+    /// The panel's window fading in or out under the menu bar icon (seconds).
+    static let panelFade: TimeInterval = 0.15
+    /// The panel opened with a click: its sections follow each other this closely (seconds).
+    static let revealDelay = 0.03, revealStep = 0.02
 
     /// True while System Settings › Accessibility › Display › Reduce motion is on (kept current).
     static var reduceMotion: Bool { ReduceMotionObserver.shared.isOn }
@@ -240,11 +253,14 @@ final class ReduceMotionObserver: ObservableObject {
     }
 }
 
-/// Figtree, the phone app's font (SIL OFL, bundled in Resources).
+/// Figtree, the phone app's font, and Galindo, the wordmark's, for big titles (both SIL OFL,
+/// bundled in Resources).
 enum WFont {
     static func register() {
-        guard let url = Bundle.main.url(forResource: "Figtree", withExtension: "ttf") else { return }
-        CTFontManagerRegisterFontsForURL(url as CFURL, .process, nil)
+        for name in ["Figtree", "Galindo"] {
+            guard let url = Bundle.main.url(forResource: name, withExtension: "ttf") else { continue }
+            CTFontManagerRegisterFontsForURL(url as CFURL, .process, nil)
+        }
     }
 
     static func make(_ size: CGFloat, _ weight: Font.Weight = .regular) -> Font {
@@ -255,6 +271,8 @@ enum WFont {
 extension Font {
     /// Figtree at `size`; titles use `.medium`, labels `.semibold`, like the phone.
     static func wh(_ size: CGFloat, _ weight: Font.Weight = .regular) -> Font { WFont.make(size, weight) }
+    /// A page's big title, in Galindo like the wordmark (one weight).
+    static func whTitle(_ size: CGFloat) -> Font { .custom("Galindo", size: size) }
 }
 
 /// Pale pill (main action) or see-through pill (secondary), like the phone's buttons.
@@ -302,25 +320,41 @@ struct WRound: ButtonStyle {
     }
 }
 
-/// Holds the current theme and keeps the phone's last colours across launches.
+/// The current theme. With no phone connected the Mac uses Lync's own colours (mint, rose accent);
+/// while one is connected it uses that phone's wallpaper colours, and goes back to Lync's the
+/// moment it disconnects. The phone's last colours are kept so a reconnect looks right at once,
+/// before the phone sends them again.
 final class ThemeStore: ObservableObject {
-    @Published private(set) var theme: WTheme
+    @Published private(set) var theme = WTheme.brand
+    private var connected = false
 
-    init() {
+    private var saved: WTheme? {
         let defaults = UserDefaults.standard
-        if let seed = (defaults.object(forKey: "themeSeed") as? NSNumber)?.uint32Value {
-            let accent = (defaults.object(forKey: "themeAccent") as? NSNumber)?.uint32Value
-            theme = WTheme(seed: seed, accent: accent)
-        } else {
-            theme = WTheme(seed: WTheme.defaultSeed, accent: WTheme.defaultAccent)
-        }
+        guard let seed = (defaults.object(forKey: "themeSeed") as? NSNumber)?.uint32Value else { return nil }
+        return WTheme(seed: seed, accent: (defaults.object(forKey: "themeAccent") as? NSNumber)?.uint32Value)
     }
 
+    /// The phone sent its colours.
     func update(seed: UInt32, accent: UInt32?) {
         let defaults = UserDefaults.standard
         defaults.set(NSNumber(value: seed), forKey: "themeSeed")
-        if let accent { defaults.set(NSNumber(value: accent), forKey: "themeAccent") }
-        let next = WTheme(seed: seed, accent: accent)
-        if next != theme { theme = next }
+        // No accent this time: forget the old one too, so a reconnect matches this wallpaper.
+        if let accent { defaults.set(NSNumber(value: accent), forKey: "themeAccent") } else { defaults.removeObject(forKey: "themeAccent") }
+        if connected { set(WTheme(seed: seed, accent: accent)) }
+    }
+
+    func phoneConnected() {
+        connected = true
+        if let saved { set(saved) }
+    }
+
+    func phoneDisconnected() {
+        connected = false
+        set(.brand)
+    }
+
+    private func set(_ next: WTheme) {
+        guard next != theme else { return }
+        withMotion(WMotion.smooth) { theme = next }
     }
 }

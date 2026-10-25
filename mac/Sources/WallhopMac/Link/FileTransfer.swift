@@ -2,8 +2,8 @@ import CoreServices
 import CryptoKit
 import Foundation
 
-/// Where files from the phone go. They land in a private inbox and on the clipboard; they reach
-/// Downloads › From Phone only when the user saves them. The inbox empties itself after a day.
+/// Where files from the phone go. They arrive in a private inbox and move to Downloads › From Phone
+/// as soon as the batch is complete; anything that couldn't move stays in the inbox for a day.
 enum ReceivedFiles {
     /// ~/Library/Application Support/Wallhop/Inbox/<batch>/<name>
     static var inbox: URL {
@@ -28,20 +28,30 @@ enum ReceivedFiles {
         }
     }
 
-    /// Moves inbox files into Downloads › From Phone. Returns where each one is now and whether
-    /// its move worked; a file that couldn't be moved stays in the inbox.
-    static func save(_ urls: [URL]) -> [(url: URL, ok: Bool)] {
+    /// Moves inbox files into Downloads › From Phone. Returns where each one is now and, if its
+    /// move failed, why; a file that couldn't be moved stays in the inbox.
+    static func save(_ urls: [URL]) -> [(url: URL, error: FileErrorKind?)] {
         urls.map { url in
-            guard url.path.hasPrefix(inbox.path) else { return (url, true) } // Already saved.
+            guard url.path.hasPrefix(inbox.path) else { return (url, nil) } // Already saved.
+            // Cleaned out of the inbox after a day.
+            guard FileManager.default.fileExists(atPath: url.path) else { return (url, .missing) }
             let destination = uniqueURL(for: url.lastPathComponent, in: folder)
             do {
                 try FileManager.default.moveItem(at: url, to: destination)
-                return (destination, true)
+                return (destination, nil)
             } catch {
                 NSLog("Lync: couldn't save \(url.lastPathComponent) to Downloads: \(error.localizedDescription)")
-                return (url, false)
+                return (url, FileErrorKind(error))
             }
         }
+    }
+
+    /// Whether `bytes` more fit on the disk with the inbox, with a little to spare.
+    static func hasRoom(for bytes: Int64) -> Bool {
+        guard bytes > 0,
+              let free = try? Storage.directory.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
+                .volumeAvailableCapacityForImportantUsage, free > 0 else { return true }
+        return bytes + 50_000_000 < free
     }
 
     /// Marks a file as downloaded by Lync, so Gatekeeper checks it before it's opened.
@@ -92,9 +102,12 @@ enum ReceivedFiles {
 /// Receives files from the phone into a temporary file, checks the hash, then moves them into place.
 /// One per connection; runs on the link queue.
 final class FileReceiver {
+    /// `reason`/`code`: the file-ack `err` code sent back to the phone (docs/PROTOCOL.md).
     enum Result {
         case saved(batch: String, url: URL)
         case failed(batch: String, name: String, reason: String)
+        /// Part of a batch refused up front; the app already said so.
+        case refused(reason: String)
     }
 
     private struct Incoming {
@@ -102,17 +115,20 @@ final class FileReceiver {
         let name: String
         let size: Int64
         let tempURL: URL
-        let handle: FileHandle
+        let handle: FileHandle?
         var received: Int64 = 0
         var hasher = SHA256()
-        /// More arrived than `file_start` announced; the rest is dropped and the file fails.
-        var overflowed = false
+        /// Why the file fails (the ack code), once it does: nothing more is written, the rest of
+        /// it is dropped. More than `file_start` announced counts as damaged (`checksum`).
+        var failure: String?
     }
 
     private var incoming: [String: Incoming] = [:]
     private var batchBytes: [String: Int64] = [:]
     /// Batches between `batch_start` and `batch_end`.
     private var openBatches: Set<String> = []
+    /// Batches turned away at `batch_start`, with the ack code for each of their files.
+    private var refusedBatches: [String: String] = [:]
 
     static var tempFolder: URL {
         let url = Storage.directory.appendingPathComponent("incoming", isDirectory: true)
@@ -132,43 +148,60 @@ final class FileReceiver {
         openBatches.insert(batch)
     }
 
-    func endBatch(_ batch: String) {
+    /// Refuses a whole batch (e.g. not enough space): its files are acked with `reason` and
+    /// nothing is written.
+    func refuseBatch(_ batch: String, reason: String) {
+        refusedBatches[batch] = reason
+    }
+
+    /// False for a refused batch, which the app was already told about.
+    @discardableResult
+    func endBatch(_ batch: String) -> Bool {
         openBatches.remove(batch)
         batchBytes[batch] = nil
+        return refusedBatches.removeValue(forKey: batch) == nil
     }
 
     func begin(_ message: Message) {
         guard let id = message.string("id") else { return }
         // The same id again: drop the half-written copy and start over.
         if let old = incoming.removeValue(forKey: id) { discard(old) }
-        let tempURL = Self.tempFolder.appendingPathComponent(UUID().uuidString)
-        FileManager.default.createFile(atPath: tempURL.path, contents: nil)
-        guard let handle = try? FileHandle(forWritingTo: tempURL) else { return }
         let batch = message.string("batch") ?? id
-        openBatches.insert(batch)
+        let tempURL = Self.tempFolder.appendingPathComponent(UUID().uuidString)
+        var handle: FileHandle?
+        var failure = refusedBatches[batch]
+        if failure == nil {
+            FileManager.default.createFile(atPath: tempURL.path, contents: nil)
+            do {
+                handle = try FileHandle(forWritingTo: tempURL)
+            } catch {
+                failure = FileErrorKind(error).ackCode
+            }
+        }
+        if refusedBatches[batch] == nil { openBatches.insert(batch) }
         incoming[id] = Incoming(
             batch: batch,
             name: message.string("name") ?? "File",
             size: Int64(max(0, message.int("size") ?? 0)),
             tempURL: tempURL,
-            handle: handle
+            handle: handle,
+            failure: failure
         )
     }
 
     /// Returns the batch and its total bytes received so far.
     func append(_ message: Message) -> (String, Int64)? {
-        guard let id = message.string("id"), var file = incoming[id], !file.overflowed else { return nil }
+        guard let id = message.string("id"), var file = incoming[id], file.failure == nil, let handle = file.handle else { return nil }
         guard file.received + Int64(message.body.count) <= file.size else {
             // Never write past the announced size.
-            file.overflowed = true
-            try? file.handle.close()
-            try? FileManager.default.removeItem(at: file.tempURL)
-            incoming[id] = file
+            fail(&file, id: id, code: PhoneError.checksum)
             return nil
         }
         do {
-            try file.handle.write(contentsOf: message.body)
+            try handle.write(contentsOf: message.body)
         } catch {
+            // Out of space, or the folder went away: the rest of this file is dropped.
+            fail(&file, id: id, code: FileErrorKind(error).ackCode)
             return nil
         }
         file.received += Int64(message.body.count)
@@ -179,19 +212,28 @@ final class FileReceiver {
         return (file.batch, total)
     }
 
+    private func fail(_ file: inout Incoming, id: String, code: String) {
+        file.failure = code
+        try? file.handle?.close()
+        try? FileManager.default.removeItem(at: file.tempURL)
+        incoming[id] = file
+    }
+
     func finish(_ message: Message) -> Result {
         guard let id = message.string("id"), let file = incoming.removeValue(forKey: id) else {
-            return .failed(batch: message.string("batch") ?? "", name: "File", reason: "unknown file")
+            // Not started here (e.g. the connection was reset in between).
+            return .failed(batch: message.string("batch") ?? "", name: "File", reason: PhoneError.cancelled)
         }
-        guard !file.overflowed else {
-            return .failed(batch: file.batch, name: file.name, reason: "larger than announced")
+        if let refused = refusedBatches[file.batch] { return .refused(reason: refused) }
+        if let failure = file.failure {
+            return .failed(batch: file.batch, name: file.name, reason: failure)
         }
-        try? file.handle.close()
+        try? file.handle?.close()
 
         let digest = Data(file.hasher.finalize()).hex
         guard digest == message.string("sha256")?.lowercased() else {
             try? FileManager.default.removeItem(at: file.tempURL)
-            return .failed(batch: file.batch, name: file.name, reason: "checksum mismatch")
+            return .failed(batch: file.batch, name: file.name, reason: PhoneError.checksum)
         }
         let destination = ReceivedFiles.inboxURL(batch: file.batch, name: file.name)
         do {
@@ -200,7 +242,7 @@ final class FileReceiver {
             return .saved(batch: file.batch, url: destination)
         } catch {
             try? FileManager.default.removeItem(at: file.tempURL)
-            return .failed(batch: file.batch, name: file.name, reason: error.localizedDescription)
+            return .failed(batch: file.batch, name: file.name, reason: FileErrorKind(error).ackCode)
         }
     }
 
@@ -208,26 +250,37 @@ final class FileReceiver {
     /// tell the user they were interrupted.
     @discardableResult
     func cancelAll() -> [String] {
-        let open = openBatches.union(incoming.values.map(\.batch))
+        let open = openBatches.union(incoming.values.map(\.batch)).subtracting(refusedBatches.keys)
         for file in incoming.values { discard(file) }
         incoming.removeAll()
         batchBytes.removeAll()
         openBatches.removeAll()
+        refusedBatches.removeAll()
         return Array(open)
     }
 
     private func discard(_ file: Incoming) {
-        try? file.handle.close()
+        try? file.handle?.close()
         try? FileManager.default.removeItem(at: file.tempURL)
     }
 }
 
+/// How a send to the phone went, file by file.
+struct OutgoingResult {
+    var total: Int
+    /// The files that didn't arrive, and why.
+    var failed: [(url: URL, failure: Problem.SendFailure)]
+
+    var ok: Bool { failed.isEmpty }
+    var sent: Int { total - failed.count }
+}
+
 /// Streams files to the phone in 256 KiB chunks. Runs on the link queue. Reports success only
-/// once the phone has acknowledged every file.
+/// once the phone has acknowledged every file; otherwise which files failed and why.
 final class FileSender {
     enum Event {
         case progress(sent: Int64, total: Int64)
-        case finished(ok: Bool)
+        case finished(OutgoingResult)
     }
 
     private static let chunkSize = 256 * 1024
@@ -239,10 +292,12 @@ final class FileSender {
     private let connection: PhoneConnection
     private let queue: DispatchQueue
     private let onEvent: (Event) -> Void
-    private let registerAck: (String, @escaping (Bool) -> Void) -> Void
+    private let registerAck: (String, @escaping (AckResult) -> Void) -> Void
     private var sent: Int64 = 0
     private var total: Int64 = 0
-    private var failures = 0
+    /// By index in `urls`: files that failed, and files the phone confirmed.
+    private var failures: [Int: Problem.SendFailure] = [:]
+    private var delivered: Set<Int> = []
     private var awaitingAcks = 0
     private var allSent = false
     private var done = false
@@ -250,7 +305,7 @@ final class FileSender {
 
     init(batch: String, urls: [URL], connection: PhoneConnection, queue: DispatchQueue,
          onEvent: @escaping (Event) -> Void,
-         registerAck: @escaping (String, @escaping (Bool) -> Void) -> Void) {
+         registerAck: @escaping (String, @escaping (AckResult) -> Void) -> Void) {
         self.batch = batch
         self.urls = urls
         self.connection = connection
@@ -265,16 +320,21 @@ final class FileSender {
         sendFile(at: 0)
     }
 
-    /// Reports the result once. Every later event is ignored.
-    private func finish(ok: Bool) {
+    /// Reports the result once. Every later event is ignored. `stopped`: why the files not
+    /// confirmed or failed by then didn't arrive (the connection dropped, or no answer).
+    private func finish(stopped: Problem.SendFailure? = nil) {
         guard !done else { return }
         done = true
-        onEvent(.finished(ok: ok))
+        var failed: [(url: URL, failure: Problem.SendFailure)] = []
+        for (index, url) in urls.enumerated() where !delivered.contains(index) {
+            if let failure = failures[index] ?? stopped { failed.append((url, failure)) }
+        }
+        onEvent(.finished(OutgoingResult(total: urls.count, failed: failed)))
     }
 
     private func finishIfAcked() {
         guard allSent, awaitingAcks == 0 else { return }
-        finish(ok: failures == 0)
+        finish()
     }
 
     private func sendFile(at index: Int) {
@@ -284,14 +344,14 @@ final class FileSender {
             allSent = true
             finishIfAcked()
             queue.asyncAfter(deadline: .now() + Self.ackTimeout) { [self] in
-                if !done { finish(ok: false) }
+                if !done { finish(stopped: .timedOut) }
             }
             return
         }
         let url = urls[index]
         let id = UUID().uuidString
         guard let handle = try? FileHandle(forReadingFrom: url) else {
-            failures += 1
+            failures[index] = .unreadable
             sendFile(at: index + 1)
             return
         }
@@ -304,11 +364,18 @@ final class FileSender {
             guard let self else { return }
             try? handle.close()
             self.awaitingAcks += 1
-            // Called on the link queue: by the phone's ack, or with false if the connection drops.
-            self.registerAck(id) { ok in
+            // Called on the link queue: by the phone's ack, or `disconnected` if the connection drops.
+            self.registerAck(id) { result in
                 self.queue.async {
                     self.awaitingAcks -= 1
-                    if !ok { self.failures += 1 }
+                    switch result {
+                    case .ok: self.delivered.insert(index)
+                    case .refused(let code): self.failures[index] = .refused(code)
+                    case .timedOut: self.failures[index] = .timedOut
+                    case .disconnected:
+                        self.failures[index] = .disconnected
+                        self.finish(stopped: .disconnected)
+                    }
                     self.finishIfAcked()
                 }
             }
@@ -330,7 +397,7 @@ final class FileSender {
                 guard let self else { return }
                 guard ok else {
                     try? handle.close()
-                    self.queue.async { self.finish(ok: false) }
+                    self.queue.async { self.finish(stopped: .disconnected) }
                     return
                 }
                 self.queue.async {
@@ -353,5 +420,31 @@ final class FileSender {
 
     static func mimeType(of url: URL) -> String {
         (try? url.resourceValues(forKeys: [.contentTypeKey]).contentType?.preferredMIMEType) ?? "application/octet-stream"
+    }
+}
+
+/// Which picked or dropped files Lync can actually read, before sending them.
+enum FileAccess {
+    struct Check {
+        var readable: [URL] = []
+        /// No permission (Privacy & Security › Files and Folders), or gone.
+        var unreadable: [URL] = []
+        /// iCloud files that are only placeholders on this Mac.
+        var notDownloaded: [URL] = []
+    }
+
+    static func check(_ urls: [URL]) -> Check {
+        var check = Check()
+        for url in urls {
+            let values = try? url.resourceValues(forKeys: [.isUbiquitousItemKey, .ubiquitousItemDownloadingStatusKey])
+            if values?.isUbiquitousItem == true, let status = values?.ubiquitousItemDownloadingStatus, status != .current {
+                check.notDownloaded.append(url)
+            } else if FileManager.default.isReadableFile(atPath: url.path) {
+                check.readable.append(url)
+            } else {
+                check.unreadable.append(url)
+            }
+        }
+        return check
     }
 }

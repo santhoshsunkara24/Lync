@@ -28,8 +28,8 @@ final class StatusItemController: NSObject {
         }
 
         model.$connectedPhone
-            .combineLatest(model.$pairingRequest.map { $0 != nil })
-            .sink { [weak self] phone, pairing in self?.updateIcon(connected: phone != nil, attention: pairing) }
+            .combineLatest(model.$pairingRequest.map { $0 != nil }, model.$listenerProblem.map { $0 != nil })
+            .sink { [weak self] phone, pairing, failing in self?.updateIcon(connected: phone != nil, attention: pairing, failing: failing) }
             .store(in: &cancellables)
         // Files dragged anywhere on the Mac: the icon glows Mint (pulsing gently; steady under Reduce Motion).
         model.$fileDrag.map { $0 != nil }.removeDuplicates()
@@ -72,11 +72,12 @@ final class StatusItemController: NSObject {
         return frame
     }
 
-    private func updateIcon(connected: Bool, attention: Bool) {
+    private func updateIcon(connected: Bool, attention: Bool, failing: Bool = false) {
         // The Lync droid (Resources/MenuBarIcon*.png, a template image); a dot at its top right when something
-        // needs attention. Dimmed while no phone is connected.
-        let image = attention ? Self.markWithDot : Self.mark
-        let state = attention ? "Lync, needs attention" : connected ? "Lync, phone connected" : "Lync, phone not connected"
+        // needs attention, a ring when Lync can't accept connections at all. Dimmed while no phone is connected.
+        let image = attention ? Self.markWithDot : failing ? Self.markWithRing : Self.mark
+        let state = attention ? "Lync, needs attention" : failing ? "Lync, can't accept connections"
+            : connected ? "Lync, phone connected" : "Lync, phone not connected"
         image?.accessibilityDescription = state
         guard let button = item.button else { return }
         button.setAccessibilityLabel(state)
@@ -106,6 +107,22 @@ final class StatusItemController: NSObject {
         let image = NSImage(size: size, flipped: false) { _ in
             base.draw(in: NSRect(origin: .zero, size: base.size))
             NSBezierPath(ovalIn: NSRect(x: size.width - dot, y: size.height - dot, width: dot, height: dot)).fill()
+            return true
+        }
+        image.isTemplate = true
+        return image
+    }()
+
+    /// The listener failed: a hollow ring where the attention dot goes, so it reads as a problem
+    /// with Lync itself rather than "phone away".
+    private static let markWithRing: NSImage? = {
+        guard let base = mark else { return nil }
+        let dot: CGFloat = 6, size = NSSize(width: base.size.width + dot / 2, height: base.size.height)
+        let image = NSImage(size: size, flipped: false) { _ in
+            base.draw(in: NSRect(origin: .zero, size: base.size))
+            let ring = NSBezierPath(ovalIn: NSRect(x: size.width - dot + 0.75, y: size.height - dot + 0.75, width: dot - 1.5, height: dot - 1.5))
+            ring.lineWidth = 1.5
+            ring.stroke()
             return true
         }
         image.isTemplate = true
@@ -166,7 +183,8 @@ final class FileDropHandler {
     func entered(_ info: NSDraggingInfo, update: Bool = false) -> NSDragOperation {
         let (files, folders) = Self.read(info)
         guard !files.isEmpty || folders > 0 else { return [] }
-        if !update { model.dropHover(true, source: source) }
+        // Only folders: "Folders can't be sent" while they hover.
+        if !update { model.dropHover(true, source: source, foldersOnly: files.isEmpty) }
         return model.connectedPhone != nil && !files.isEmpty ? .copy : []
     }
 

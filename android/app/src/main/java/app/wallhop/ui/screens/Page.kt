@@ -115,7 +115,17 @@ fun Page(
             contentPadding = PaddingValues(start = start + extra + 20.dp, end = end + extra + 20.dp, top = statusBar + 14.dp, bottom = navBar + bottomClearance),
         ) {
             item(key = "title") {
-                Column(Modifier.staggerIn(0).fillMaxWidth().padding(bottom = 22.dp)) {
+                Column(
+                    Modifier
+                        .staggerIn(0)
+                        .graphicsLayer {
+                            // Gone before the small title arrives, so the two never show at once.
+                            alpha = if (state.firstVisibleItemIndex > 0) 0f
+                                else 1f - (state.firstVisibleItemScrollOffset / (collapseAt * 0.7f)).coerceIn(0f, 1f)
+                        }
+                        .fillMaxWidth()
+                        .padding(bottom = 22.dp),
+                ) {
                     if (leading != null) {
                         Row(Modifier.fillMaxWidth().padding(bottom = 18.dp), verticalAlignment = Alignment.CenterVertically) {
                             leading()
@@ -124,7 +134,7 @@ fun Page(
                         }
                     }
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(title, style = Type.largeTitle, color = colors.label, modifier = Modifier.weight(1f).semantics { heading() })
+                        Text(title, style = Type.pageTitle, color = colors.label, modifier = Modifier.weight(1f).semantics { heading() })
                         if (leading == null) trailing?.invoke()
                     }
                     if (subtitle != null) {
@@ -175,7 +185,7 @@ fun SectionHeader(text: String, trailing: (@Composable () -> Unit)? = null) {
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        Text(text, style = Type.headline, color = Wallhop.colors.label, modifier = Modifier.semantics { heading() })
+        Text(text, style = Type.sectionTitle, color = Wallhop.colors.label, modifier = Modifier.semantics { heading() })
         trailing?.invoke()
     }
 }

@@ -11,6 +11,12 @@ class QrInvite(val name: String, val hosts: List<String>, val port: Int, val mac
     val host: String get() = hosts.first()
 
     companion object {
+        /** A Lync pairing code of a format this version doesn't know (`v` other than 1): from a newer Mac app. */
+        fun isFromNewerLync(text: String): Boolean = runCatching {
+            val uri = Uri.parse(text.trim())
+            uri.scheme == "wallhop" && uri.host == "pair" && uri.getQueryParameter("v") != "1"
+        }.getOrDefault(false)
+
         /** Null for anything that isn't a valid Wallhop pairing QR. */
         fun parse(text: String): QrInvite? = runCatching {
             val uri = Uri.parse(text.trim())

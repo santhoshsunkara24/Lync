@@ -86,10 +86,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in self?.panel.open(byHover: false) }
         }
         // ⌥⌘L from anywhere: gives a card with buttons keyboard focus, otherwise opens or closes the panel.
+        // First launch: while "Lync lives here" teaches it, pressing it is the step done; the
+        // panel stays (or opens) on the QR instead of closing.
         hotKey = HotKey { [weak self] in
             guard let self else { return }
-            if !self.overlay.focusCard() { self.panel.toggle() }
+            if self.model.hotkeyStepPending {
+                self.model.finishHotkeyStep(viaShortcut: true)
+                if !self.model.panelOpen { self.panel.open(byHover: false, fromKeyboard: true) }
+                return
+            }
+            if !self.overlay.focusCard() { self.panel.toggle(fromKeyboard: true) }
         }
+        // Another app has ⌥⌘L: don't teach it, and Settings says so.
+        if hotKey?.registered == false { model.hotkeyUnavailable() }
         // Files dragged anywhere on the Mac: the notch (or menu bar icon) offers to take them.
         dragWatcher = FileDragWatcher(model: model) { [weak self] in
             guard let self else { return nil }
@@ -109,8 +118,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ) { _ in server.refreshAdvertising() }
         // And whenever the Mac's network changes (another Wi-Fi, Ethernet, back from a VPN):
         // the phone's search sees the new address within seconds instead of waiting it out.
-        pathMonitor.pathUpdateHandler = { path in
-            guard path.status == .satisfied else { return }
+        pathMonitor.pathUpdateHandler = { [weak self] path in
+            // The panel says "This Mac is offline" instead of waiting for the phone forever.
+            let online = path.status == .satisfied
+            DispatchQueue.main.async { self?.model.setOnline(online) }
+            guard online else { return }
             DispatchQueue.main.async {
                 networkRefresh?.cancel()
                 let work = DispatchWorkItem { server.refreshAdvertising() }

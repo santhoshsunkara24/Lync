@@ -46,7 +46,7 @@ final class OverlayController {
         panel.becomesKeyOnlyIfNeeded = true
         // OTPs and messages never show up in screen shares or recordings.
         // WALLHOP_CAPTURE=1 allows screenshots, for development only.
-        panel.sharingType = ProcessInfo.processInfo.environment["WALLHOP_CAPTURE"] == "1" ? .readOnly : .none
+        CapturePrivacy.apply(panel)
         panel.ignoresMouseEvents = true
 
         let root = OverlayRoot(model: model, placement: placementState).environmentObject(model.themeStore)
@@ -264,7 +264,11 @@ struct OverlayRoot: View {
     @ViewBuilder private func quietView(_ card: LiveCard) -> some View {
         if case .quiet(let symbol, let text) = card {
             let label = HStack(spacing: 8) {
-                Image(systemName: symbol).font(.wh(12, .semibold)).foregroundStyle(WTheme.codeMint)
+                if symbol == LinkCatchView.symbol {
+                    LinkCatchView(connected: true, shaded: false, playOnAppear: true).frame(width: 18, height: 18)
+                } else {
+                    NudgeImage(symbol).font(.wh(12, .semibold)).foregroundStyle(WTheme.codeMint)
+                }
                 Text(text).font(.wh(12, .semibold)).foregroundStyle(.white).lineLimit(1)
             }
             .accessibilityElement(children: .combine)
@@ -395,7 +399,7 @@ struct OverlayRoot: View {
     @ViewBuilder private func closeButton(_ card: LiveCard) -> some View {
         if hovering && isPassive(card) {
             Button { model.hideLive() } label: {
-                Image(systemName: "xmark")
+                NudgeImage("xmark")
                     .font(.wh(11, .bold))
                     .foregroundStyle(.white)
                     .frame(width: 24, height: 24)
@@ -423,12 +427,14 @@ struct OverlayRoot: View {
         case .notification(let key): return "notif-\(key)"
         case .call(let id): return "call-\(id)"
         case .info(_, let title, _): return "info-\(title)"
+        case .problem(let problem): return "problem-\(problem.id)"
         }
     }
 }
 
 /// While files are dragged anywhere on the Mac: the notch grows a little with a soft Mint glow
-/// and "Send to <phone>" (or a small pill at the top of a screen without a notch). A static
+/// and "Send to <phone>" (or a small pill at the top of a screen without a notch). The glow is
+/// blurred once and only its opacity breathes, so the blur isn't redrawn every frame. A static
 /// highlight under Reduce Motion.
 struct DragGlow: View {
     @ObservedObject var model: AppModel
@@ -440,18 +446,17 @@ struct DragGlow: View {
     var body: some View {
         let label = Text("Send to \(model.connectedPhone?.name ?? "your phone")")
             .font(.wh(11, .semibold)).foregroundStyle(WTheme.codeMint).lineLimit(1)
-        let glow = WTheme.codeMint.opacity(breathe ? 0.55 : 0.3)
         Group {
             switch placement {
             case .notch(let notchHeight):
                 label
                     .padding(.top, notchHeight + 4).padding(.bottom, 8).padding(.horizontal, 16)
                     .frame(width: notchWidth + 36)
-                    .background(NotchShape(cornerRadius: 14).fill(Color.black).shadow(color: glow, radius: 12))
+                    .background(NotchShape(cornerRadius: 14).fill(Color.black).background(glow(NotchShape(cornerRadius: 14), radius: 12)))
             case .pill, .menuBar:
                 label
                     .padding(.horizontal, 14).frame(height: 28)
-                    .background(Capsule().fill(Color.black).shadow(color: glow, radius: 10))
+                    .background(Capsule().fill(Color.black).background(glow(Capsule(), radius: 10)))
                     .overlay(Capsule().strokeBorder(WTheme.codeMint.opacity(0.4), lineWidth: 1))
                     .padding(.top, 8)
             }
@@ -462,6 +467,13 @@ struct DragGlow: View {
             withAnimation(.easeInOut(duration: 1.1).repeatForever(autoreverses: true)) { breathe = true }
         }
         .accessibilityHidden(true)
+    }
+
+    /// The shape in Mint, blurred (a fixed radius), behind the black shape: only its opacity changes.
+    private func glow<S: Shape>(_ shape: S, radius: CGFloat) -> some View {
+        shape.fill(WTheme.codeMint)
+            .blur(radius: radius)
+            .opacity(breathe ? 0.55 : 0.3)
     }
 }
 

@@ -19,6 +19,8 @@ final class PanelController {
     private var outsideSince: Date?
     /// Opened by hovering the notch: closes when the pointer leaves.
     private(set) var openedByHover = false
+    /// How the panel is opening, shared with its content.
+    private let opening = PanelOpening()
 
     init(model: AppModel, statusFrame: @escaping () -> NSRect?) {
         self.model = model
@@ -33,9 +35,11 @@ final class PanelController {
         panel.hidesOnDeactivate = false
         panel.becomesKeyOnlyIfNeeded = false
         // Codes and messages never show up in screen shares or recordings (WALLHOP_CAPTURE=1 for development).
-        panel.sharingType = ProcessInfo.processInfo.environment["WALLHOP_CAPTURE"] == "1" ? .readOnly : .none
+        CapturePrivacy.apply(panel)
 
-        let root = PanelRoot(model: model, theme: model.themeStore) { [weak self] size in self?.resize(to: size) }
+        let root = PanelRoot(model: model, theme: model.themeStore, opening: opening,
+                             onSize: { [weak self] size in self?.resize(to: size) },
+                             onRevealed: { [weak self] in self?.revealed() })
         let hosting = NSHostingView(rootView: root)
         hosting.layer?.backgroundColor = .clear
         // The window is sized by `resize(to:)`, sometimes a moment after the content changes.
@@ -57,15 +61,17 @@ final class PanelController {
     }
 
     /// `user`: opened by the user (click, shortcut, menu), not by Lync itself at first launch.
-    func open(byHover: Bool, user: Bool = true) {
+    /// `fromKeyboard`: opened with ⌥⌘L, so it's there at once (a 100 ms fade, no reveal).
+    func open(byHover: Bool, user: Bool = true, fromKeyboard: Bool = false) {
         if user { model.noteUserOpenedPanel() }
         if model.panelOpen { if !byHover { openedByHover = false }; panel.makeKey(); return }
         openedByHover = byHover
+        opening.instant = fromKeyboard
         model.openPanel()
     }
 
-    func toggle() {
-        if model.panelOpen { model.closePanel() } else { open(byHover: false) }
+    func toggle(fromKeyboard: Bool = false) {
+        if model.panelOpen { model.closePanel() } else { open(byHover: false, fromKeyboard: fromKeyboard) }
     }
 
     private var inNotch: Bool { model.displayMode == .notch && model.hasNotch }
@@ -74,33 +80,43 @@ final class PanelController {
         shrinkWork?.cancel()
         position(size: contentSize ?? panel.frame.size)
         panel.ignoresMouseEvents = false
-        if inNotch {
+        let instant = opening.instant
+        if inNotch && !instant {
             // The content grows out of the notch itself (PanelRoot); the window stays put and
-            // opaque, and gets its shadow once the shape has settled.
+            // opaque, and gets its shadow once the shape has settled (`revealed`).
             panel.hasShadow = false
             panel.alphaValue = 1
         } else {
-            // Menu bar: the window fades while the content drops in from 96 %.
+            // Menu bar: the window fades, its shadow with it, while the content drops in from
+            // 96 %. From the keyboard: the whole panel is simply there, after a short fade.
+            panel.hasShadow = true
             panel.alphaValue = 0
         }
         panel.orderFrontRegardless()
         panel.makeKey()
-        if !inNotch {
+        if instant || !inNotch {
             NSAnimationContext.runAnimationGroup { context in
-                context.duration = 0.18
+                context.duration = instant ? WMotion.instantFade : WMotion.panelFade
+                context.timingFunction = CAMediaTimingFunction(name: .easeOut)
                 panel.animator().alphaValue = 1
+            } completionHandler: { [weak self] in
+                // Content that appeared without animation has drawn by now: fit the shadow to it.
+                if instant { self?.revealed() }
             }
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { [weak self] in
-            guard let self, self.model.panelOpen else { return }
-            self.panel.hasShadow = true
-            self.panel.invalidateShadow()
         }
         installMonitors()
     }
 
+    /// The content has finished opening: the shadow follows its final shape.
+    private func revealed() {
+        guard model.panelOpen, panel.isVisible else { return }
+        panel.hasShadow = true
+        panel.invalidateShadow()
+    }
+
     private func dismiss() {
         removeMonitors()
+        opening.instant = false
         // Stops taking clicks at once; removed after the fade even if the animation never runs
         // (e.g. while the screen is locked).
         panel.ignoresMouseEvents = true
@@ -110,7 +126,7 @@ final class PanelController {
             panel.hasShadow = false
         } else {
             NSAnimationContext.runAnimationGroup { context in
-                context.duration = 0.14
+                context.duration = WMotion.panelFade
                 panel.animator().alphaValue = 0
             }
         }
@@ -211,17 +227,30 @@ final class PanelController {
     }
 }
 
+/// How the panel is being opened. Set by `PanelController` just before `model.panelOpen`
+/// changes, read by `PanelRoot` when it does.
+private final class PanelOpening {
+    /// Opened from the keyboard: no reveal, everything there at once.
+    var instant = false
+}
+
 /// The panel's shape: square top under the notch (it grows out of it), rounded elsewhere.
-/// Opening from the notch, the panel starts as the notch's own shape and springs to full size
-/// (smooth), its sections fading in once it's mostly open; closing shrinks it back (snappy).
-/// In menu bar mode it drops in from 96 % under the icon while the window fades.
+/// Opening from the notch with a click, the panel starts as the notch's own shape and springs
+/// to full size (snappy), its sections following a few milliseconds apart; closing shrinks it
+/// back (snappy). In menu bar mode it drops in from 96 % under the icon while the window fades.
+/// Opened from the keyboard it's at full size at once and only the window fades in.
 private struct PanelRoot: View {
     @ObservedObject var model: AppModel
     @ObservedObject var theme: ThemeStore
     @ObservedObject private var motion = ReduceMotionObserver.shared
+    let opening: PanelOpening
     let onSize: (CGSize) -> Void
+    /// The opening animation has settled (not called for an instant open).
+    let onRevealed: () -> Void
     /// Follows `model.panelOpen`, animated.
     @State private var shown = false
+    /// This opening came from the keyboard.
+    @State private var instant = false
 
     private var inNotch: Bool { model.displayMode == .notch && model.hasNotch }
 
@@ -232,6 +261,7 @@ private struct PanelRoot: View {
             : AnyShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
         PanelView(model: model, theme: theme, fromNotch: inNotch)
             .environment(\.panelRevealed, inNotch ? shown : true)
+            .environment(\.panelRevealInstant, instant)
             .clipShape(shape)
             .overlay(shape.stroke(Color.white.opacity(inNotch ? 0 : 0.08), lineWidth: 1))
             .fixedSize()
@@ -247,7 +277,16 @@ private struct PanelRoot: View {
     }
 
     private func reveal(_ open: Bool) {
-        withMotion(open ? WMotion.smooth : WMotion.snappy) { shown = open }
+        if open { instant = opening.instant }
+        if open && instant {
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) { shown = true }
+            return
+        }
+        withAnimation(WMotion.animation(WMotion.snappy)) { shown = open } completion: {
+            if open { onRevealed() }
+        }
     }
 
     /// The notch's size on the built-in display.

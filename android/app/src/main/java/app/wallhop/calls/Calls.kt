@@ -46,6 +46,8 @@ class CallReceiver : BroadcastReceiver() {
 
 object CallTracker {
     private var current: CallInfo? = null
+    /** A call is ringing or under way, as far as Lync has seen. */
+    val active: Boolean get() = current != null
     private var answered = false
     /** When the current call started ringing (wall clock, like the call log). */
     private var ringingSince = 0L
@@ -140,23 +142,39 @@ object CallTracker {
         ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
 }
 
-/** Answers or declines the ringing call when the Mac asks. Needs the "answer calls" permission. */
+/**
+ * Answers or declines the ringing call when the Mac asks. Answering needs the "answer calls"
+ * permission; declining can also press the phone app's own hang-up button.
+ */
 object CallControl {
-    @SuppressLint("MissingPermission")
-    fun perform(context: Context, action: String): Boolean {
-        if (!app.wallhop.core.Features.on(context, app.wallhop.core.Features.Key.Calls)) return false
-        if (ContextCompat.checkSelfPermission(context, Manifest.permission.ANSWER_PHONE_CALLS) != PackageManager.PERMISSION_GRANTED) {
-            return false
-        }
-        val telecom = context.getSystemService(TelecomManager::class.java) ?: return false
+    /**
+     * Does it. Null when it worked, else why not, for the `call_cmd` ack (PROTOCOL.md): calls_off,
+     * permission, no_call or failed.
+     */
+    @SuppressLint("MissingPermission") // Both checked below.
+    fun performErr(context: Context, action: String): String? {
+        if (!app.wallhop.core.Features.on(context, app.wallhop.core.Features.Key.Calls)) return "calls_off"
+        val canAnswer = granted(context, Manifest.permission.ANSWER_PHONE_CALLS)
+        val telecom = context.getSystemService(TelecomManager::class.java) ?: return "failed"
+        // What Lync saw, or Android's answer when it may ask (Lync may have started mid-call).
+        val inCall = CallTracker.active || !granted(context, Manifest.permission.READ_PHONE_STATE) ||
+            runCatching { telecom.isInCall }.getOrDefault(true)
+        if (!inCall) return "no_call"
         return runCatching {
             when (action) {
-                "answer" -> { telecom.acceptRingingCall(); true }
-                "decline", "end" -> app.wallhop.otp.OtpNotificationListener.endCall(context)
-                else -> false
+                "answer" -> if (!canAnswer) "permission" else { telecom.acceptRingingCall(); null }
+                "decline", "end" -> when {
+                    app.wallhop.otp.OtpNotificationListener.endCall(context) -> null
+                    !canAnswer -> "permission"
+                    else -> "failed"
+                }
+                else -> "failed"
             }
-        }.getOrDefault(false)
+        }.getOrDefault("failed")
     }
+
+    private fun granted(context: Context, permission: String) =
+        ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
 
     /** Calls needs these: call state, the caller's number (call log) and answering. */
     val required = arrayOf(

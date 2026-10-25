@@ -34,6 +34,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Size
+import androidx.compose.animation.core.tween
+import kotlinx.coroutines.flow.first
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.geometry.Offset
@@ -81,15 +86,16 @@ fun WSwitch(
     val source = interactionSource ?: remember { MutableInteractionSource() }
     val pressed by source.collectIsPressedAsState()
     // Under a finger the thumb also stretches sideways, toward the middle (DESIGN.md §5.6).
-    val stretch by animateDpAsState(if (pressed && enabled && !reduceMotion) 6.dp else 0.dp, Springs.snappy(), label = "thumbStretch")
+    // Everything moving here is drawn, not laid out, so flicking switches costs no measuring.
+    val stretch by animateFloatAsState(if (pressed && enabled && !reduceMotion) 6f else 0f, Springs.snappy(), label = "thumbStretch")
     val track by animateColorAsState(if (checked) home.pale else Color.Transparent, Springs.snappy(), label = "track")
     val outline by animateColorAsState(if (checked) home.pale else Color.White.copy(alpha = 0.45f), Springs.snappy(), label = "outline")
     val thumbColor by animateColorAsState(if (checked) home.onPale else Color.White.copy(alpha = 0.6f), Springs.snappy(), label = "thumb")
-    val thumb by animateDpAsState(
+    val thumb by animateFloatAsState(
         when {
-            pressed -> 28.dp
-            checked -> 24.dp
-            else -> 16.dp
+            pressed -> 28f
+            checked -> 24f
+            else -> 16f
         },
         Springs.snappy(), label = "thumbSize",
     )
@@ -98,9 +104,21 @@ fun WSwitch(
         Modifier
             .size(52.dp, 32.dp)
             .alpha(if (enabled) 1f else DisabledAlpha)
-            .clip(capsule())
-            .background(track)
-            .border(2.dp, outline, capsule())
+            .drawBehind {
+                val radius = CornerRadius(size.height / 2)
+                drawRoundRect(track, cornerRadius = radius)
+                val line = 2.dp.toPx()
+                drawRoundRect(
+                    outline, topLeft = Offset(line / 2, line / 2), size = Size(size.width - line, size.height - line),
+                    cornerRadius = CornerRadius((size.height - line) / 2), style = androidx.compose.ui.graphics.drawscope.Stroke(line),
+                )
+                // Thumb centre runs from 16 dp to 36 dp; a stretch grows it toward the other end.
+                val t = thumb.dp.toPx()
+                val st = stretch.dp.toPx()
+                val w = t + st
+                val centre = 16.dp.toPx() + 20.dp.toPx() * travel + st / 2 * (1f - 2f * travel)
+                drawRoundRect(thumbColor, topLeft = Offset(centre - w / 2, (size.height - t) / 2), size = Size(w, t), cornerRadius = CornerRadius(t / 2))
+            }
             .then(
                 if (onCheckedChange == null) Modifier else Modifier.toggleable(
                     value = checked,
@@ -113,19 +131,7 @@ fun WSwitch(
                     onCheckedChange(it)
                 },
             ),
-        contentAlignment = Alignment.CenterStart,
-    ) {
-        // Thumb centre runs from 16 dp to 36 dp; a stretch grows it toward the other end.
-        val thumbWidth = thumb + stretch
-        val centre = 16.dp + 20.dp * travel + stretch / 2 * (1f - 2f * travel)
-        Box(
-            Modifier
-                .offset(x = centre - thumbWidth / 2)
-                .size(thumbWidth, thumb)
-                .clip(capsule())
-                .background(thumbColor),
-        )
-    }
+    )
 }
 
 /**
@@ -247,7 +253,14 @@ fun ActivityIndicator(color: Color = Wallhop.colors.labelSecondary, size: Dp = 2
 @Composable
 fun ProgressBar(progress: Float?, modifier: Modifier = Modifier, color: Color = Wallhop.colors.tint) {
     val colors = Wallhop.colors
-    val value by animateFloatAsState(progress ?: 0f, Springs.smooth(), label = "progress")
+    // Updates arrive about ten times a second; a short linear glide between them reads as one
+    // steady fill. Drawn, so it never re-measures.
+    val reduceMotion = Wallhop.a11y.reduceMotion
+    val value by animateFloatAsState(
+        progress ?: 0f,
+        if (reduceMotion) androidx.compose.animation.core.snap() else tween(250, easing = androidx.compose.animation.core.LinearEasing),
+        label = "progress",
+    )
     BoxWithConstraints(
         modifier
             .fillMaxWidth()
@@ -256,7 +269,10 @@ fun ProgressBar(progress: Float?, modifier: Modifier = Modifier, color: Color = 
             .background(colors.fill),
     ) {
         if (progress != null) {
-            Box(Modifier.fillMaxHeight().width(maxWidth * value.coerceIn(0f, 1f)).clip(capsule()).background(color))
+            Box(Modifier.fillMaxSize().drawBehind {
+                val w = size.width * value.coerceIn(0f, 1f)
+                if (w > 0f) drawRoundRect(color, size = Size(maxOf(w, size.height), size.height), cornerRadius = CornerRadius(size.height / 2))
+            })
         } else {
             val transition = androidx.compose.animation.core.rememberInfiniteTransition(label = "indeterminate")
             val t = transition.animateFloat(
@@ -293,17 +309,22 @@ fun ProgressCheck(
     track: Color = Color.White.copy(alpha = 0.25f),
 ) {
     val reduceMotion = Wallhop.a11y.reduceMotion
-    val shown by animateFloatAsState(
+    val shownState = animateFloatAsState(
         if (done) 1f else progress.coerceIn(0f, 1f),
-        if (reduceMotion) androidx.compose.animation.core.snap() else Springs.smooth(),
+        if (reduceMotion) androidx.compose.animation.core.snap() else tween(250, easing = androidx.compose.animation.core.LinearEasing),
         label = "ring",
     )
-    // The check waits for the ring to close, then pops in as the ring fades.
-    val check by animateFloatAsState(
-        if (done && (shown > 0.97f || reduceMotion)) 1f else 0f,
-        if (reduceMotion) androidx.compose.animation.core.snap() else Springs.bouncy(),
-        label = "check",
-    )
+    // The check waits for the ring to close, then pops in as the ring fades. Watched off the
+    // composition, so the ring filling never recomposes this.
+    val checkAnim = remember { androidx.compose.animation.core.Animatable(if (done) 1f else 0f) }
+    androidx.compose.runtime.LaunchedEffect(done, reduceMotion) {
+        if (!done) { checkAnim.snapTo(0f); return@LaunchedEffect }
+        if (reduceMotion) { checkAnim.snapTo(1f); return@LaunchedEffect }
+        androidx.compose.runtime.snapshotFlow { shownState.value }.first { it > 0.97f }
+        checkAnim.animateTo(1f, Springs.pop())
+    }
+    val check by checkAnim.asState()
+    val shown by shownState
     Box(modifier, contentAlignment = Alignment.Center) {
         Canvas(Modifier.fillMaxSize().graphicsLayer { alpha = (1f - check).coerceIn(0f, 1f) }) {
             val stroke = size.minDimension * 0.18f
@@ -316,11 +337,11 @@ fun ProgressCheck(
                 style = androidx.compose.ui.graphics.drawscope.Stroke(stroke, cap = StrokeCap.Round),
             )
         }
-        if (check > 0.01f) {
+        if (done) {
             androidx.compose.material3.Icon(
                 app.wallhop.ui.design.WIcons.CheckCircle, null, tint = color,
                 modifier = Modifier.fillMaxSize().graphicsLayer {
-                    val s = 0.6f + 0.4f * check
+                    val s = 0.85f + 0.15f * check
                     scaleX = s
                     scaleY = s
                     alpha = check.coerceIn(0f, 1f)

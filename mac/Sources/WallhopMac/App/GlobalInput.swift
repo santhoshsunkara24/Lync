@@ -7,6 +7,8 @@ final class HotKey {
     private var hotKey: EventHotKeyRef?
     private var handler: EventHandlerRef?
     private let action: () -> Void
+    /// False when another app already has the shortcut.
+    private(set) var registered = false
 
     init(keyCode: Int = kVK_ANSI_L, modifiers: Int = optionKey | cmdKey, action: @escaping () -> Void) {
         self.action = action
@@ -20,7 +22,8 @@ final class HotKey {
         }, 1, &spec, context, &handler)
         let id = EventHotKeyID(signature: OSType(0x4C59_4E43), id: 1) // "LYNC"
         let status = RegisterEventHotKey(UInt32(keyCode), UInt32(modifiers), id, GetApplicationEventTarget(), 0, &hotKey)
-        if status != noErr { NSLog("Lync: couldn't register ⌥⌘L (\(status)); another app may use it") }
+        registered = status == noErr
+        if !registered { NSLog("Lync: couldn't register ⌥⌘L (\(status)); another app may use it") }
     }
 
     deinit {

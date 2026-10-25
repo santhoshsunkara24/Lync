@@ -40,6 +40,9 @@ final class Identity {
         self.privateKey = privateKey
     }
 
+    /// The new key couldn't be written: phones paired now won't recognise this Mac after a restart.
+    nonisolated(unsafe) private(set) static var saveFailed = false
+
     static func loadOrCreate() -> Identity {
         let file = "identity.key"
         if let raw = Storage.read(file),
@@ -47,7 +50,12 @@ final class Identity {
             return Identity(privateKey: key)
         }
         let key = Curve25519.KeyAgreement.PrivateKey()
-        try? Storage.writePrivate(key.rawRepresentation, to: file)
+        do {
+            try Storage.writePrivate(key.rawRepresentation, to: file)
+        } catch {
+            NSLog("Lync: couldn't save this Mac's key: \(error.localizedDescription)")
+            saveFailed = true
+        }
         return Identity(privateKey: key)
     }
 }
@@ -65,6 +73,8 @@ final class PairedPhones {
     private let file = "paired-phones.json"
     private let lock = NSLock()
     private var phones: [PairedPhone]
+    /// Called (on the caller's thread) when the list couldn't be written to disk.
+    var onSaveFailed: (() -> Void)?
 
     init() {
         if let data = Storage.read(file),
@@ -103,8 +113,11 @@ final class PairedPhones {
     }
 
     private func save(_ snapshot: [PairedPhone]) {
-        if let data = try? JSONEncoder().encode(snapshot) {
-            try? Storage.writePrivate(data, to: file)
+        do {
+            try Storage.writePrivate(JSONEncoder().encode(snapshot), to: file)
+        } catch {
+            NSLog("Lync: couldn't save the paired phones: \(error.localizedDescription)")
+            onSaveFailed?()
         }
     }
 }

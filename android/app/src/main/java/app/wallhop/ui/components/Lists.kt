@@ -324,7 +324,7 @@ fun IconTile(icon: ImageVector, color: Color, size: Dp = 36.dp) {
 @Composable
 fun LargeTitle(text: String, modifier: Modifier = Modifier, subtitle: String? = null) {
     Column(modifier.padding(horizontal = 4.dp)) {
-        Text(text, style = Type.largeTitle, color = Wallhop.colors.label, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(text, style = Type.pageTitle, color = Wallhop.colors.label, maxLines = 1, overflow = TextOverflow.Ellipsis)
         if (subtitle != null) {
             Spacer(Modifier.height(6.dp))
             Text(subtitle, style = Type.callout, color = Wallhop.colors.labelSecondary)

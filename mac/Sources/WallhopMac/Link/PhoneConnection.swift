@@ -19,6 +19,11 @@ final class PhoneConnection {
     static let handshakeTimeout: TimeInterval = 15
     /// Time a pairing request waits for the user before it's declined.
     static let pairingDecisionTimeout: TimeInterval = 120
+    /// The session protocol (`v` in `hello`/`hello_ok`) this Mac speaks, and the range it accepts.
+    static let protocolVersion = 1
+    static let supportedProtocols = 1...2
+    /// This app's version, sent as `app` in `hello_ok`.
+    static let appVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "dev"
 
     let id = UUID()
     private let connection: NWConnection
@@ -35,6 +40,11 @@ final class PhoneConnection {
     private var pairing: (pub: Data, name: String, commit: Data, macNonce: Data)?
     /// A new name from `hello`, saved only once `ready` proves the phone holds its key.
     private var pendingName: String?
+    /// What the phone said in `hello`: its app version (`app`) and protocol version (`v`).
+    private(set) var phoneApp: String?
+    private(set) var phoneProtocol: Int?
+    /// The pairing request ran out of time waiting for the user (not the phone giving up).
+    private(set) var pairingTimedOut = false
 
     var remoteHost: String {
         if case let .hostPort(host, _) = connection.endpoint { return "\(host)" }
@@ -71,6 +81,7 @@ final class PhoneConnection {
         deadline?.cancel()
         let work = DispatchWorkItem { [weak self] in
             guard let self, self.state != .ready, self.state != .closed else { return }
+            if self.pairingId != nil { self.pairingTimedOut = true }
             self.close()
         }
         deadline = work
@@ -157,11 +168,12 @@ final class PhoneConnection {
         }
         // v1 compared a code an attacker could grind for; only v2 is accepted (PROTOCOL.md, Pairing).
         guard (json["v"] as? NSNumber)?.intValue == 2 else {
-            sendHandshake(["t": "pair_no", "err": "version"], thenClose: true)
+            server.refusedOldPhone()
+            sendHandshake(["t": "pair_no", "err": PhoneError.version], thenClose: true)
             return
         }
         guard server.allowPairAttempt(from: remoteHost) else {
-            sendHandshake(["t": "pair_no", "err": "rate"], thenClose: true)
+            sendHandshake(["t": "pair_no", "err": PhoneError.rate], thenClose: true)
             return
         }
         let name = (json["name"] as? String).map { String($0.prefix(60)) } ?? "Android phone"
@@ -174,8 +186,9 @@ final class PhoneConnection {
             state = .awaitingPairingDecision
             sendHandshake(["t": "pair_wait", "name": server.macName, "pub": macPub,
                            "nonce": (Handshake.randomBytes(16) ?? Data(count: 16)).base64EncodedString()])
-            guard server.redeemInvite(proof: proof, phonePub: pub) else {
-                sendHandshake(["t": "pair_no"], thenClose: true)
+            // Expired, used or replaced (`expired`), or not this QR's proof (`mismatch`).
+            if let refusal = server.redeemInvite(proof: proof, phonePub: pub) {
+                sendHandshake(["t": "pair_no", "err": refusal], thenClose: true)
                 return
             }
             server.paired.add(PairedPhone(id: Handshake.deviceId(of: pub), name: name, publicKey: pub, pairedAt: Date()))
@@ -193,7 +206,7 @@ final class PhoneConnection {
         }
         // One pairing request on screen at a time.
         guard server.beginPairing(self) else {
-            sendHandshake(["t": "pair_no", "err": "busy"], thenClose: true)
+            sendHandshake(["t": "pair_no", "err": PhoneError.busy], thenClose: true)
             return
         }
         pairing = (pub, name, commit, macNonce)
@@ -229,7 +242,7 @@ final class PhoneConnection {
                 self.armDeadline(Self.handshakeTimeout)
                 self.sendHandshake(["t": "pair_ok"])
             } else {
-                self.sendHandshake(["t": "pair_no"], thenClose: true)
+                self.sendHandshake(["t": "pair_no", "err": PhoneError.declined], thenClose: true)
             }
         }
     }
@@ -252,6 +265,8 @@ final class PhoneConnection {
         if let name = json["name"] as? String, !name.isEmpty, name != phone.name {
             pendingName = String(name.prefix(60))
         }
+        phoneApp = (json["app"] as? String).map { String($0.prefix(40)) }
+        phoneProtocol = (json["v"] as? NSNumber)?.intValue
 
         let macEphemeral = Curve25519.KeyAgreement.PrivateKey()
         do {
@@ -264,6 +279,8 @@ final class PhoneConnection {
 
             sendHandshake([
                 "t": "hello_ok",
+                "v": Self.protocolVersion,
+                "app": Self.appVersion,
                 "name": server.macName,
                 "pub": server.identity.publicKey.base64EncodedString(),
                 "eph": macEphPub.base64EncodedString(),

@@ -1,8 +1,6 @@
 package app.wallhop.ui.screens
 
-import androidx.core.net.toUri
 import android.content.Context
-import android.content.Intent
 import android.net.Uri
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Spacer
@@ -37,6 +35,7 @@ private fun hasGlyphSdk(): Boolean = runCatching { Class.forName("com.nothing.ke
 private fun credits(): List<Credit> = buildList {
     add(Credit("Figtree", "SIL Open Font License 1.1", text = R.raw.license_figtree))
     add(Credit("Doto", "SIL Open Font License 1.1", text = R.raw.license_doto))
+    add(Credit("Galindo", "SIL Open Font License 1.1", text = R.raw.license_galindo))
     add(Credit("Phosphor Icons", "MIT License", text = R.raw.license_phosphor))
     add(Credit("AndroidX and Jetpack Compose", "Apache License 2.0", url = APACHE))
     add(Credit("ZXing", "Apache License 2.0", url = APACHE))
@@ -95,11 +94,7 @@ private fun showLicence(overlays: Overlays, context: Context, name: String, res:
 }
 
 /** Opens a web page; does nothing if the phone has no browser. */
-internal fun openLink(context: Context, url: String) {
-    runCatching {
-        context.startActivity(Intent(Intent.ACTION_VIEW, url.toUri()).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-    }
-}
+internal fun openLink(context: Context, url: String) = app.wallhop.core.Open.link(context, url)
 
 /**
  * Licence files are hard-wrapped at ~80 columns, which leaves ragged half-empty lines on a phone.

@@ -28,6 +28,8 @@
     <string>public.app-category.productivity</string>
     <key>NSLocalNetworkUsageDescription</key>
     <string>Lync connects to your phone over your local network.</string>
+    <key>NSBluetoothAlwaysUsageDescription</key>
+    <string>When your phone isn't on the same Wi-Fi, Lync gets its codes, calls and notifications over Bluetooth. It only connects to the phone you paired.</string>
     <key>NSBonjourServices</key>
     <array>
         <string>_wallhop._tcp</string>

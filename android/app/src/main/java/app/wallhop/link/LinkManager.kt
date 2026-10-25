@@ -15,9 +15,15 @@ import android.provider.Settings
 import android.os.Build
 import android.util.Log
 import app.wallhop.BuildConfig
+import app.wallhop.core.Away
 import app.wallhop.core.Crypto
+import app.wallhop.core.Failure
 import app.wallhop.core.Identity
+import app.wallhop.core.LocalNetwork
 import app.wallhop.core.Message
+import app.wallhop.core.PairStep
+import app.wallhop.core.Problem
+import app.wallhop.core.Problems
 import app.wallhop.core.Wording
 import app.wallhop.core.toHex
 import app.wallhop.link.Session.Companion.b64
@@ -49,11 +55,12 @@ import java.util.concurrent.ConcurrentHashMap
 /** What the connection to the Mac is doing. */
 sealed interface LinkState {
     data object NotPaired : LinkState
-    data class Searching(val macName: String) : LinkState
+    /** [reason]: why the last round of attempts failed; null until one has. */
+    data class Searching(val macName: String, val reason: Away? = null) : LinkState
     data class Connected(val macName: String, val host: String) : LinkState
     /** `code` is null while connecting, then the 6-digit code to compare on both screens. */
     data class Pairing(val macName: String, val code: String?) : LinkState
-    data class PairingFailed(val macName: String, val reason: String) : LinkState
+    data class PairingFailed(val macName: String, val problem: Problem) : LinkState
     /** The Mac forgot this phone, so it has to pair again. */
     data class Forgotten(val macName: String) : LinkState
 }
@@ -61,6 +68,18 @@ sealed interface LinkState {
 /** Files that just arrived from the Mac, for the "received" popup and notification. */
 data class ReceivedBatch(val macName: String, val uris: List<Uri>, val names: List<String>, val mimes: List<String>) {
     val summary: String get() = app.wallhop.core.Wording.received(mimes, macName)
+}
+
+/** Files on their way from the Mac, for the receiving banner. [uris] fill in as each file is saved. */
+data class IncomingTransfer(
+    val batch: String,
+    val count: Int,
+    val totalBytes: Long,
+    val receivedBytes: Long = 0,
+    val mimes: List<String> = emptyList(),
+    val uris: List<Uri> = emptyList(),
+) {
+    val progress: Float get() = if (totalBytes <= 0) 0f else (receivedBytes.toFloat() / totalBytes).coerceIn(0f, 1f)
 }
 
 data class TransferItem(val uri: Uri, val name: String, val size: Long, val mime: String)
@@ -73,7 +92,10 @@ data class TransferState(
     val sentBytes: Long,
     val totalBytes: Long,
     val phase: TransferPhase,
+    /** A short note under the title: why it failed, or "2 of 3 sent". */
     val message: String? = null,
+    /** Why it failed (or only partly went), with the buttons that help. */
+    val problem: Problem? = null,
     /** A shared text or link waiting its turn, instead of files. */
     val text: String? = null,
     val isLink: Boolean = false,
@@ -135,12 +157,33 @@ class LinkManager private constructor(private val context: Context) {
     /** The transfer to show: the one sending, else the next waiting, else the last finished. */
     val transfer: StateFlow<TransferState?> = _transfer.asStateFlow()
 
+    private val _incoming = MutableStateFlow<IncomingTransfer?>(null)
+    /** Files coming from the Mac right now; null when nothing is arriving. */
+    val incomingTransfer: StateFlow<IncomingTransfer?> = _incoming.asStateFlow()
+    /** The live count, published at most every 100 ms so the banner doesn't redraw per chunk. */
+    private var incomingNow: IncomingTransfer? = null
+    private var incomingPublishedAt = 0L
+    private fun publishIncoming(force: Boolean = false) {
+        val now = android.os.SystemClock.elapsedRealtime()
+        if (force || now - incomingPublishedAt >= 100) {
+            incomingPublishedAt = now
+            _incoming.value = incomingNow
+        }
+    }
+
     private val _received = kotlinx.coroutines.flow.MutableSharedFlow<ReceivedBatch>(extraBufferCapacity = 4)
     /** Files from the Mac, as each batch finishes (the in-app popup listens while a screen is open). */
     val received: kotlinx.coroutines.flow.SharedFlow<ReceivedBatch> = _received
 
     private val _activity = MutableStateFlow<List<ActivityEntry>>(emptyList())
     val activity: StateFlow<List<ActivityEntry>> = _activity.asStateFlow()
+
+    private val _notices = kotlinx.coroutines.flow.MutableSharedFlow<Problem>(extraBufferCapacity = 4)
+    /** Problems with no screen of their own (files from the Mac that didn't save), for a toast while Lync is open. */
+    val notices: kotlinx.coroutines.flow.SharedFlow<Problem> = _notices
+
+    /** Rounds of connection attempts that failed, so "Try again" can wait for the next one's outcome. */
+    private val attempts = MutableStateFlow(0)
 
     val pairedMac: PairedMac? get() = store.get()
 
@@ -158,6 +201,30 @@ class LinkManager private constructor(private val context: Context) {
     val connectedSince: StateFlow<Long?> = _connectedSince.asStateFlow()
 
     @Volatile private var session: Session? = null
+    /** The Bluetooth fallback once its handshake is done; only used while [session] is down. */
+    @Volatile private var blePath: MacPath? = null
+    private val _bluetooth = MutableStateFlow(false)
+    /** Codes, calls and notifications are going over Bluetooth because Wi-Fi can't reach the Mac. */
+    val bluetooth: StateFlow<Boolean> = _bluetooth.asStateFlow()
+    private val ble = BleLink(context, scope, onPath = { path ->
+        blePath = path
+        _bluetooth.value = path != null
+        // Codes that waited for the Mac go across now, over Bluetooth.
+        if (path != null) pendingCodes.drain(System.currentTimeMillis()).forEach { sendOtp(it.code, it.sender, it.app) }
+    }) { message ->
+        when (message.type) {
+            "call_cmd" -> message.string("action")?.let { action ->
+                val err = app.wallhop.calls.CallControl.performErr(context, action)
+                val id = message.string("id")
+                val path = blePath
+                if (id != null && path != null) scope.launch { runCatching { path.send(ack(id, err)) } }
+            }
+            else -> Unit // Everything else needs Wi-Fi.
+        }
+    }
+    /** Why the Bluetooth backup isn't advertising (it failed to start), for Settings. */
+    val bluetoothProblem: StateFlow<Problem?> get() = ble.problem
+    private var bleJob: Job? = null
     private var loopJob: Job? = null
     private var pairingJob: Job? = null
     private val queueLock = Any()
@@ -165,9 +232,15 @@ class LinkManager private constructor(private val context: Context) {
     private var queueWorker: Job? = null
     @Volatile private var runningId: String? = null
     @Volatile private var runningJob: Job? = null
-    /** What each queued transfer sends: the URIs (described when its turn comes) and files already skipped. */
-    private val sources = ConcurrentHashMap<String, Pair<List<Uri>, Int>>()
+    /**
+     * What each queued transfer sends: the URIs (described when its turn comes), files already
+     * skipped, and whether they were skipped because the phone's storage is full.
+     */
+    private data class Source(val uris: List<Uri>, val skipped: Int, val storageFull: Boolean = false)
+    private val sources = ConcurrentHashMap<String, Source>()
     private val pendingCodes = PendingCodes()
+    /** Codes that didn't reach the Mac: their Activity entry, updated when they go or expire. */
+    private val pendingEntries = ConcurrentHashMap<String, String>()
     private val wake = Channel<Unit>(Channel.CONFLATED)
     private val recentCodes = ConcurrentHashMap<String, Long>()
     private val iconsSent = ConcurrentHashMap.newKeySet<String>()
@@ -200,7 +273,30 @@ class LinkManager private constructor(private val context: Context) {
             return
         }
         loopJob = scope.launch { connectLoop() }
+        // Wi-Fi gets a few seconds to connect before Bluetooth steps in.
+        updateBluetooth(BLUETOOTH_GRACE_MS)
     }
+
+    /**
+     * Path selection: Bluetooth advertises only while paired, switched on, allowed, and the Wi-Fi
+     * session is down ([delayMs] after it went). Wi-Fi coming back closes it.
+     */
+    private fun updateBluetooth(delayMs: Long = 0) {
+        synchronized(this) {
+            bleJob?.cancel()
+            bleJob = scope.launch {
+                delay(delayMs)
+                val mac = store.get()
+                val wanted = loopJob?.isActive == true && mac != null && session?.closed != false &&
+                    app.wallhop.core.Features.on(context, app.wallhop.core.Features.Key.Bluetooth) && BleLink.permitted(context)
+                val id = if (wanted) runCatching { identity }.getOrNull() else null
+                if (mac != null && id != null) ble.start(id, mac) else ble.stop()
+            }
+        }
+    }
+
+    /** The Bluetooth switch or permission changed. */
+    fun bluetoothChanged() = updateBluetooth()
 
     /**
      * Stops everything [start] started: the reconnect loop, the connection, Bonjour, the network
@@ -212,6 +308,8 @@ class LinkManager private constructor(private val context: Context) {
         loopJob?.cancel()
         loopJob = null
         session?.close()
+        bleJob?.cancel()
+        ble.stop()
         discovery.stop()
         unregisterNetworkCallback()
         mainHandler.post { media.stop(); smsWatcher.stop() }
@@ -243,13 +341,24 @@ class LinkManager private constructor(private val context: Context) {
                 continue
             }
             // "Forgotten" stays up (it's a prompt for the user) while we keep trying in the background.
+            // The last reason stays too, so Home doesn't flick back to "looking" on every round.
             if (_state.value !is LinkState.Connected && _state.value !is LinkState.Forgotten) {
-                _state.value = LinkState.Searching(mac.name)
+                _state.value = LinkState.Searching(mac.name, (_state.value as? LinkState.Searching)?.reason)
+            }
+            // Nothing can be tried until the phone's key unlocks (e.g. just after a reboot).
+            if (runCatching { identity }.isFailure) {
+                if (_state.value !is LinkState.Forgotten) _state.value = LinkState.Searching(mac.name, Away.KeyLocked)
+                attempts.value++
+                waitForWake(backoffMs)
+                backoffMs = (backoffMs * 2).coerceAtMost(15_000L)
+                continue
             }
 
             var connected = false
             var sessionMs = 0L
-            for ((host, port, resolved) in candidates(mac)) {
+            // How each of our Mac's own addresses failed, for the reason shown on Home.
+            val failures = mutableListOf<Failure>()
+            for ((host, port, resolved, own) in candidates(mac)) {
                 val result = runCatching {
                     val socket = Session.open(host, port)
                     try {
@@ -269,6 +378,9 @@ class LinkManager private constructor(private val context: Context) {
                 if (unpaired != null) {
                     if (resolved && unpaired.macPub != null && java.security.MessageDigest.isEqual(unpaired.macPub, mac.publicKey)) {
                         _state.value = LinkState.Forgotten(mac.name)
+                    } else if (resolved && unpaired.macPub != null) {
+                        // Our Mac's name with a new key: Lync on it was reinstalled or reset.
+                        failures += Failure.WrongMac
                     }
                     continue
                 }
@@ -284,6 +396,10 @@ class LinkManager private constructor(private val context: Context) {
                     sessionMs = android.os.SystemClock.elapsedRealtime() - startedAt
                     break
                 }
+                // Another Mac's address says nothing about ours; a different key only counts where
+                // Bonjour found our Mac's name (an old address may belong to another Mac now).
+                val failure = Problems.classify(result.exceptionOrNull())
+                if (own && (failure != Failure.WrongMac || resolved)) failures += failure
             }
             if (store.get() == null) continue
             if (connected && sessionMs >= SHORT_SESSION_MS) {
@@ -294,24 +410,78 @@ class LinkManager private constructor(private val context: Context) {
                 delay(backoffMs)
                 backoffMs = (backoffMs * 2).coerceAtMost(15_000L)
             } else {
-                if (_state.value !is LinkState.Forgotten) _state.value = LinkState.Searching(mac.name)
+                val reason = awayReason(mac.name, failures)
+                if (_state.value !is LinkState.Forgotten) _state.value = LinkState.Searching(mac.name, reason)
+                attempts.value++
                 waitForWake(backoffMs)
-                backoffMs = (backoffMs * 2).coerceAtMost(if (_state.value is LinkState.Forgotten) 60_000L else 15_000L)
+                val stuck = _state.value is LinkState.Forgotten || reason == Away.MacReset
+                backoffMs = (backoffMs * 2).coerceAtMost(if (stuck) 60_000L else 15_000L)
             }
         }
     }
 
     /**
-     * Places to try, best first: Bonjour results for this Mac, its last address, other Macs found.
-     * The flag marks addresses Bonjour resolved for this Mac's name.
+     * A place to try. [resolved]: Bonjour found it under this Mac's name. [own]: it's this Mac's
+     * (Bonjour's or its last address), not another Mac that was found.
      */
-    private fun candidates(mac: PairedMac): List<Triple<String, Int, Boolean>> {
+    private data class Candidate(val host: String, val port: Int, val resolved: Boolean, val own: Boolean)
+
+    /** Places to try, best first: Bonjour results for this Mac, its last address, other Macs found. */
+    private fun candidates(mac: PairedMac): List<Candidate> {
         val found = discovery.macs.value
-        val list = mutableListOf<Triple<String, Int, Boolean>>()
-        found.filter { it.name == mac.name }.forEach { list += Triple(it.host, it.port, true) }
-        if (mac.host != null) list += Triple(mac.host, mac.port, false)
-        found.filter { it.name != mac.name }.forEach { list += Triple(it.host, it.port, false) }
-        return list.distinctBy { it.first to it.second }
+        val list = mutableListOf<Candidate>()
+        found.filter { it.name == mac.name }.forEach { list += Candidate(it.host, it.port, resolved = true, own = true) }
+        if (mac.host != null) list += Candidate(mac.host, mac.port, resolved = false, own = true)
+        found.filter { it.name != mac.name }.forEach { list += Candidate(it.host, it.port, resolved = false, own = false) }
+        return list.distinctBy { it.host to it.port }
+    }
+
+    /** Why the Mac called [name] isn't connected, after a round that failed with [failures]. */
+    private fun awayReason(name: String, failures: Collection<Failure> = emptyList()): Away = Problems.away(
+        failures,
+        wifiOn = LocalNetwork.radioOn(context),
+        onWifi = LocalNetwork.joined(context),
+        macSeen = discovery.macs.value.any { it.name == name },
+        discoveryWorks = discovery.working,
+    )
+
+    /**
+     * "Try again": tries now and waits (up to 15 s) for the outcome, so the answer is connected
+     * or the specific reason, never just "looking".
+     */
+    suspend fun retryNow(): LinkState {
+        val before = attempts.value
+        start()
+        poke()
+        withTimeoutOrNull(15_000) {
+            while (_state.value is LinkState.Searching && attempts.value == before) delay(200)
+        }
+        return _state.value
+    }
+
+    /**
+     * Why something can't go to the Mac right now, or null while the Wi‑Fi link is up. Text and
+     * [files] need Wi‑Fi, so a Bluetooth-only link says so.
+     */
+    fun reachProblem(files: Boolean = false): Problem? {
+        if (session?.closed == false) return null
+        return when (val s = _state.value) {
+            is LinkState.Connected -> null
+            is LinkState.Forgotten -> Problems.FORGOTTEN
+            is LinkState.Searching -> when {
+                _bluetooth.value -> if (files) Problems.FILES_NEED_WIFI else Problems.TEXT_NEEDS_WIFI
+                else -> Problems.away(s.reason ?: awayReason(s.macName))
+            }
+            else -> Problems.NOT_PAIRED
+        }
+    }
+
+    /** Why a queued send stopped waiting: the Mac forgot this phone, or why it's away. */
+    private fun giveUpProblem(): Problem = when (val s = _state.value) {
+        is LinkState.Forgotten -> Problems.FORGOTTEN_SEND
+        is LinkState.Searching -> Problems.away(s.reason ?: awayReason(s.macName))
+        is LinkState.Connected -> Problems.MAC_STOPPED_ANSWERING
+        else -> Problems.NOT_PAIRED
     }
 
     private suspend fun waitForWake(timeoutMs: Long) {
@@ -332,6 +502,7 @@ class LinkManager private constructor(private val context: Context) {
             app.wallhop.glyph.Glyphs.play(context, app.wallhop.glyph.Glyphs.Effect.Connected)
         }
         iconsSent.clear()
+        updateBluetooth() // Wi-Fi is back: Bluetooth stands down.
         _state.value = LinkState.Connected(session.macName, session.host)
         _connectedSince.value = System.currentTimeMillis()
         lastBatterySent = -1
@@ -358,13 +529,18 @@ class LinkManager private constructor(private val context: Context) {
         } finally {
             heartbeat.cancel()
             session.close()
-            incoming.cancelAll()
+            // Files were still arriving: say the transfer stopped, and keep the ones that saved.
+            incoming.cancelAll()?.let { stopped ->
+                reportIncoming(Problems.received(stopped.saved.size, stopped.total, null, stopped = true), stopped.saved)
+            }
+            incomingNow = null; publishIncoming(force = true)
             if (this.session === session) this.session = null
             disconnectedAt = android.os.SystemClock.elapsedRealtime()
             _latencyMs.value = null
             _connectedSince.value = null
             _macInfo.value = _macInfo.value.copy(locked = false)
             store.get()?.let { _state.value = LinkState.Searching(it.name) }
+            updateBluetooth(BLUETOOTH_GRACE_MS)
         }
     }
 
@@ -402,12 +578,16 @@ class LinkManager private constructor(private val context: Context) {
                 record(ActivityEntry(UUID.randomUUID().toString(), ActivityEntry.Kind.FromMac, "Text from your Mac", "Copied on this phone"))
                 message.string("id")?.let { session.send(Message.of("ack", "id" to it, "ok" to true)) }
             }
-            // Replies, actions and dismissals only while notification mirroring is on in Lync.
+            // Replies, actions and dismissals only while notification mirroring is on in Lync. The
+            // ack says why one didn't work (PROTOCOL.md, notif_reply ack codes).
             "notif_reply" -> {
-                val ok = notificationsOn && message.string("key")?.let {
-                    app.wallhop.otp.OtpNotificationListener.reply(context, it, message.bodyText)
-                } ?: false
-                message.string("id")?.let { session.send(Message.of("ack", "id" to it, "ok" to ok)) }
+                val err = when {
+                    !notificationsOn -> "mirroring_off"
+                    else -> message.string("key")?.let {
+                        app.wallhop.otp.OtpNotificationListener.replyErr(context, it, message.bodyText)
+                    } ?: "gone"
+                }
+                message.string("id")?.let { session.send(ack(it, err)) }
             }
             "notif_dismiss" -> if (notificationsOn) {
                 message.string("key")?.let { app.wallhop.otp.OtpNotificationListener.dismiss(it) }
@@ -415,9 +595,12 @@ class LinkManager private constructor(private val context: Context) {
             "notif_action" -> {
                 val key = message.string("key")
                 val index = message.header.optInt("i", -1)
-                if (notificationsOn && key != null && index >= 0) {
-                    app.wallhop.otp.OtpNotificationListener.performAction(context, key, index)
+                val err = when {
+                    !notificationsOn -> "mirroring_off"
+                    key == null || index < 0 -> "failed"
+                    else -> app.wallhop.otp.OtpNotificationListener.performActionErr(context, key, index)
                 }
+                message.string("id")?.let { session.send(ack(it, err)) }
             }
             "sms_threads", "sms_thread" -> {
                 val id = message.string("id") ?: return
@@ -426,13 +609,14 @@ class LinkManager private constructor(private val context: Context) {
                     // error reply instead of crashing the app.
                     val reply = runCatching {
                         when {
-                            !sms.canRead || !app.wallhop.core.Features.on(context, app.wallhop.core.Features.Key.Texts) -> Message.of("sms_result", "id" to id, "err" to "permission")
+                            !app.wallhop.core.Features.on(context, app.wallhop.core.Features.Key.Texts) -> Message.of("sms_result", "id" to id, "err" to "texts_off")
+                            !sms.canRead -> Message.of("sms_result", "id" to id, "err" to "permission")
                             message.type == "sms_threads" ->
                                 Message.of("sms_result", "id" to id, body = sms.threads().toString().toByteArray())
                             else -> Message.of("sms_result", "id" to id,
                                 body = sms.messages(message.string("thread").orEmpty()).toString().toByteArray())
                         }
-                    }.getOrElse { Message.of("sms_result", "id" to id, "err" to "unavailable") }
+                    }.getOrElse { Message.of("sms_result", "id" to id, "err" to "failed") }
                     runCatching { session.send(reply) }
                 }
             }
@@ -442,8 +626,10 @@ class LinkManager private constructor(private val context: Context) {
                 val query = message.string("q").orEmpty()
                 scope.launch {
                     val reply = runCatching {
-                        if (!app.wallhop.core.Features.on(context, app.wallhop.core.Features.Key.Texts) || !sms.canReadContacts) {
-                            Message.of("sms_result", "id" to id, "err" to "unavailable")
+                        if (!app.wallhop.core.Features.on(context, app.wallhop.core.Features.Key.Texts)) {
+                            Message.of("sms_result", "id" to id, "err" to "texts_off")
+                        } else if (!sms.canReadContacts) {
+                            Message.of("sms_result", "id" to id, "err" to "contacts_permission")
                         } else {
                             val items = org.json.JSONArray()
                             sms.searchContacts(query).forEach { (name, number) ->
@@ -451,7 +637,7 @@ class LinkManager private constructor(private val context: Context) {
                             }
                             Message.of("sms_result", "id" to id, body = JSONObject().put("items", items).toString().toByteArray())
                         }
-                    }.getOrElse { Message.of("sms_result", "id" to id, "err" to "unavailable") }
+                    }.getOrElse { Message.of("sms_result", "id" to id, "err" to "failed") }
                     runCatching { session.send(reply) }
                 }
             }
@@ -460,35 +646,78 @@ class LinkManager private constructor(private val context: Context) {
                 val sim = if (message.header.has("sim")) message.header.optInt("sim", -1) else null
                 // Off the read loop: waiting for the carrier can take a while.
                 scope.launch {
-                    val result = if (app.wallhop.core.Features.on(context, app.wallhop.core.Features.Key.Texts)) {
+                    // A code the Mac can word (PROTOCOL.md, sms_send ack), never the exception's text.
+                    val err = if (app.wallhop.core.Features.on(context, app.wallhop.core.Features.Key.Texts)) {
                         sms.send(message.string("address").orEmpty(), message.bodyText, sim)
+                            .exceptionOrNull()?.let { (it as? app.wallhop.sms.SmsError)?.code ?: "failed" }
                     } else {
-                        Result.failure(IllegalStateException("Texts are turned off in Lync"))
+                        "texts_off"
                     }
-                    runCatching {
-                        session.send(Message.of("ack", "id" to id, "ok" to result.isSuccess,
-                            "err" to result.exceptionOrNull()?.message))
-                    }
+                    if (id != null) runCatching { session.send(ack(id, err)) }
                 }
             }
-            "open_url" -> message.string("url")?.let { app.wallhop.extras.LinkFromMac.show(context, it) }
+            // Android doesn't let a background app open the browser: a notification does, and
+            // Activity keeps the link (tap opens it) in case notifications are blocked.
+            "open_url" -> message.string("url")?.let { url ->
+                val shown = app.wallhop.extras.LinkFromMac.show(context, url)
+                record(ActivityEntry(UUID.randomUUID().toString(), ActivityEntry.Kind.FromMac, "Link from your Mac", url))
+                message.string("id")?.let { session.send(ack(it, if (shown) null else "notifications_blocked")) }
+            }
             "ring" -> if (message.string("action") == "stop") app.wallhop.extras.PhoneFinder.stop(context)
                 else app.wallhop.extras.PhoneFinder.start(context)
             "media_cmd" -> message.string("action")?.let { action -> mainHandler.post { media.command(action) } }
-            "call_cmd" -> message.string("action")?.let { app.wallhop.calls.CallControl.perform(context, it) }
-            // Files fail one at a time (reported in the file_end ack); the link stays up.
-            "batch_start" -> runCatching { incoming.batchStart(message) }
-            "file_start" -> runCatching { incoming.fileStart(message) }
-            "file_chunk" -> runCatching { incoming.fileChunk(message) }
-            "file_end" -> {
-                val error = runCatching { incoming.fileEnd(message) }.getOrElse { "couldn't save" }
-                session.send(Message.of("ack", "id" to message.string("id"), "ok" to (error == null), "err" to error))
+            // The Mac waits up to 3 s for this ack before saying the button didn't work.
+            "call_cmd" -> message.string("action")?.let { action ->
+                val err = app.wallhop.calls.CallControl.performErr(context, action)
+                message.string("id")?.let { session.send(ack(it, err)) }
             }
-            "batch_end" -> runCatching { incoming.batchEnd(message, session.macName) }.getOrNull()?.let { batch ->
-                record(ActivityEntry(UUID.randomUUID().toString(), ActivityEntry.Kind.FromMac, batch.summary,
-                    "Saved to Downloads › Lync", uris = batch.uris.map { it.toString() }))
-                // A Lync screen in front shows its own popup; otherwise a heads-up notification.
-                if (AppVisibility.foreground) _received.tryEmit(batch) else Notifications.filesFromMac(context, batch)
+            // Files fail one at a time (reported in the file_end ack); the link stays up.
+            "batch_start" -> {
+                runCatching { incoming.batchStart(message) }
+                message.string("batch")?.let { batch ->
+                    incomingNow = IncomingTransfer(batch, message.header.optInt("count", 1), message.header.optLong("bytes", 0L))
+                    publishIncoming(force = true)
+                }
+            }
+            "file_start" -> {
+                runCatching { incoming.fileStart(message) }
+                incomingNow?.let { now ->
+                    if (now.mimes.size < 3) {
+                        incomingNow = now.copy(mimes = now.mimes + (message.string("mime") ?: "application/octet-stream"))
+                        publishIncoming(force = true)
+                    }
+                }
+            }
+            "file_chunk" -> {
+                runCatching { incoming.fileChunk(message) }
+                incomingNow?.let { incomingNow = it.copy(receivedBytes = it.receivedBytes + message.body.size); publishIncoming() }
+            }
+            "file_end" -> {
+                // A file ack code (PROTOCOL.md): storage_full, checksum, write_failed, permission.
+                val error = runCatching { incoming.fileEnd(message) }.getOrElse { "write_failed" }
+                session.send(Message.of("ack", "id" to message.string("id"), "ok" to (error == null), "err" to error))
+                val saved = incoming.lastSaved
+                incomingNow?.let { now ->
+                    if (error == null && saved != null && now.uris.size < 3 && saved.first !in now.uris) {
+                        incomingNow = now.copy(uris = now.uris + saved.first)
+                        publishIncoming(force = true)
+                    }
+                }
+            }
+            "batch_end" -> {
+                val finished = runCatching { incoming.batchEnd(message, session.macName) }.getOrNull()
+                incomingNow = null
+                publishIncoming(force = true)
+                finished?.batch?.let { batch ->
+                    record(ActivityEntry(UUID.randomUUID().toString(), ActivityEntry.Kind.FromMac, batch.summary,
+                        "Saved to Downloads › Lync", uris = batch.uris.map { it.toString() }))
+                    // A Lync screen in front shows its own popup; otherwise a heads-up notification.
+                    if (AppVisibility.foreground) _received.tryEmit(batch) else Notifications.filesFromMac(context, batch)
+                }
+                // Some or all didn't save: say so, even when nothing did.
+                if (finished != null && finished.failed > 0) {
+                    reportIncoming(Problems.received(finished.total - finished.failed, finished.total, finished.err))
+                }
             }
             else -> Unit // Unknown types are ignored so newer Macs keep working.
         }
@@ -497,24 +726,41 @@ class LinkManager private constructor(private val context: Context) {
     private val notificationsOn: Boolean
         get() = app.wallhop.core.Features.on(context, app.wallhop.core.Features.Key.AppNotifications)
 
+    /** An `ack` for [id]: ok, or not with [err] (a PROTOCOL.md code). */
+    private fun ack(id: String, err: String?): Message = Message.of("ack", "id" to id, "ok" to (err == null), "err" to err)
+
+    /**
+     * Files from the Mac that didn't (all) save: an Activity entry (with any that did, [saved]),
+     * and a toast while Lync is open or a notification otherwise.
+     */
+    private fun reportIncoming(problem: Problem, saved: List<Uri> = emptyList()) {
+        record(ActivityEntry(UUID.randomUUID().toString(), ActivityEntry.Kind.FromMac, problem.title, problem.action,
+            uris = saved.map { it.toString() }))
+        if (AppVisibility.foreground) _notices.tryEmit(problem) else Notifications.problem(context, problem)
+    }
+
     // MARK: - Pairing
 
     /** Pairs using a scanned QR: no code to compare, and the Mac's key is checked against it. */
     fun pair(invite: QrInvite) = pair(invite.host, invite.port, invite.name, invite)
 
-    /** Starts pairing with a Mac found on the network or typed in by hand. */
-    fun pair(host: String, port: Int, name: String, invite: QrInvite? = null) {
+    /** Starts pairing with a Mac found on the network, or typed in by hand ([typed]). */
+    fun pair(host: String, port: Int, name: String, invite: QrInvite? = null, typed: Boolean = false) {
         stopPairing()
         _state.value = LinkState.Pairing(name, null)
         // Set once connected, so cancelling closes the socket and unblocks the read straight away.
         val pairingSocket = java.util.concurrent.atomic.AtomicReference<java.net.Socket?>(null)
         lateinit var job: Job
         job = scope.launch(start = kotlinx.coroutines.CoroutineStart.LAZY) {
+            // Where it got to, so a failure can say what went wrong at that point.
+            var step = PairStep.Connecting
+            var askedAt = 0L
+            var target = host
             try {
                 // Pairing again replaces a key the Keystore can no longer unlock.
                 val identity = Identity.get(context, regenerateIfUnreadable = true)
                 // A QR lists every address the Mac has; use whichever answers first.
-                val target = if (invite != null && invite.hosts.size > 1) firstReachable(invite.hosts, port) ?: host else host
+                target = if (invite != null && invite.hosts.size > 1) firstReachable(invite.hosts, port) ?: host else host
                 val socket = Session.open(target, port)
                 pairingSocket.set(socket)
                 socket.use {
@@ -535,46 +781,60 @@ class LinkManager private constructor(private val context: Context) {
                         val proof = Crypto.qrProof(invite.token, identity.publicKey, invite.macPub)
                         request.put("qr", proof.b64())
                     }
+                    step = PairStep.Asking
                     Session.writeJson(output, request)
 
                     val wait = Session.readJson(input)
-                    if (wait.optString("t") != "pair_wait") throw IOException("This Mac didn't accept pairing")
+                    when (wait.optString("t")) {
+                        "pair_wait" -> Unit
+                        // Turned down straight away: busy, too many tries, an old version, a used code.
+                        "pair_no" -> throw PairingDeclinedException(wait.optString("err").takeIf { it.isNotEmpty() })
+                        else -> throw HandshakeException("Not a pairing reply")
+                    }
                     val macPub = android.util.Base64.decode(wait.getString("pub"), android.util.Base64.NO_WRAP)
                     val macNonce = runCatching { android.util.Base64.decode(wait.optString("nonce"), android.util.Base64.NO_WRAP) }
                         .getOrNull()?.takeIf { it.size == Crypto.PAIR_NONCE_SIZE }
-                        ?: throw IOException("This Mac needs an update to pair. Update Lync on your Mac.")
-                    if (macPub.size != 32) throw IOException("Pairing failed.")
+                        ?: throw MacTooOldException()
+                    if (macPub.size != 32) throw HandshakeException("Bad key")
                     val macName = wait.optString("name", name)
                     // With a QR, the Mac must be the one whose key is in the code.
                     if (invite != null && !java.security.MessageDigest.isEqual(macPub, invite.macPub)) {
-                        throw IOException("This isn't the Mac from the QR code.")
+                        throw PairingDeclinedException("mismatch")
                     }
                     Session.writeJson(output, JSONObject().put("t", "pair_nonce").put("nonce", phoneNonce.b64()))
                     val code = if (invite != null) null else Crypto.pairingCode(identity.publicKey, macPub, phoneNonce, macNonce)
                     _state.value = LinkState.Pairing(macName, code)
+                    step = PairStep.Confirming
+                    askedAt = android.os.SystemClock.elapsedRealtime()
 
-                    when (Session.readJson(input).optString("t")) {
+                    val answer = Session.readJson(input)
+                    when (answer.optString("t")) {
                         "pair_ok" -> {
                             // Cancelled while the Mac was accepting: don't pair behind the user's back.
                             ensureActive()
                             store.save(PairedMac(Crypto.deviceId(macPub), macName, macPub, target, port))
+                            updateBluetooth(BLUETOOTH_GRACE_MS)
                             _state.value = LinkState.Searching(macName)
                         }
-                        "pair_no" -> throw PairingDeclinedException()
-                        else -> throw IOException("Pairing ended unexpectedly")
+                        "pair_no" -> throw PairingDeclinedException(answer.optString("err").takeIf { it.isNotEmpty() })
+                        else -> throw java.io.EOFException("Pairing ended unexpectedly")
                     }
                 }
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (e: Exception) {
-                val reason = when (e) {
-                    is PairingDeclinedException ->
-                        if (invite != null) "That QR code has expired. Scan the new one on your Mac." else "Pairing was declined on the Mac."
-                    is java.net.SocketTimeoutException -> "The Mac didn't respond in time."
-                    is java.net.ConnectException -> "Couldn't reach the Mac. Check it's on the same Wi-Fi and Lync is open."
-                    else -> e.message ?: "Pairing failed."
+                // Why, in the user's words: never the exception's own text.
+                val problem = when (e) {
+                    is PairingDeclinedException -> Problems.pairNo(e.err, qr = invite != null)
+                    is MacTooOldException -> Problems.MAC_NEEDS_UPDATE
+                    else -> Problems.pairing(
+                        Problems.classify(e), step, qr = invite != null, typed = typed,
+                        onWifi = LocalNetwork.joined(context),
+                        macSeen = discovery.macs.value.any { it.name == name || it.host == target || invite?.hosts?.contains(it.host) == true },
+                        confirmingMs = if (askedAt > 0) android.os.SystemClock.elapsedRealtime() - askedAt else 0,
+                    )
                 }
-                if (_state.value is LinkState.Pairing && job.isActive) _state.value = LinkState.PairingFailed(name, reason)
+                if (_state.value is LinkState.Pairing && job.isActive) _state.value = LinkState.PairingFailed(name, problem)
             } finally {
                 synchronized(this@LinkManager) { if (pairingJob === job) pairingJob = null }
                 poke()
@@ -632,10 +892,16 @@ class LinkManager private constructor(private val context: Context) {
             }
         }
         store.forget()
+        updateBluetooth()
         macInfoStore.clear()
         _macInfo.value = MacInfo()
         _state.value = LinkState.NotPaired
         poke()
+    }
+
+    /** Drops the old pairing (the Mac forgot this phone, was reset, or the key is locked) so the phone can pair again. */
+    fun pairAgain() {
+        if (store.get() != null) forgetMac() else _state.value = LinkState.NotPaired
     }
 
     fun dismissPairingProblem() {
@@ -649,18 +915,49 @@ class LinkManager private constructor(private val context: Context) {
 
     // MARK: - Sending
 
-    /** The open session, waiting up to [timeoutMs] for one. Never returns a closed session. */
-    private suspend fun awaitSession(timeoutMs: Long): Session? {
+    /**
+     * The open session, waiting up to [timeoutMs] for one. Never returns a closed session. Gives up
+     * at once when waiting can't help (the Mac forgot this phone or was reset); with [interactive]
+     * (someone is watching a spinner), also for reasons a few seconds won't fix, like Wi‑Fi off.
+     */
+    private suspend fun awaitSession(timeoutMs: Long, interactive: Boolean = false): Session? {
         session?.takeIf { !it.closed }?.let { return it }
+        if (hopeless(_state.value, interactive)) return null
         start()
         return withTimeoutOrNull(timeoutMs) {
             var open: Session? = null
             while (open == null) {
-                state.first { it is LinkState.Connected }
+                val now = state.first { it is LinkState.Connected || hopeless(it, interactive) }
+                if (now !is LinkState.Connected) return@withTimeoutOrNull null
                 open = session?.takeIf { !it.closed }
                 if (open == null) delay(200) // Connected but the session just dropped: wait for the next one.
             }
             open
+        }
+    }
+
+    private fun hopeless(state: LinkState, interactive: Boolean): Boolean = when (state) {
+        is LinkState.Forgotten, LinkState.NotPaired -> true
+        is LinkState.Searching -> state.reason == Away.MacReset ||
+            (interactive && state.reason in setOf(Away.NoWifi, Away.NotOnWifi, Away.KeyLocked, Away.VersionMismatch))
+        else -> false
+    }
+
+    /**
+     * The best way to the Mac: the Wi-Fi session, else the Bluetooth fallback, waiting up to
+     * [timeoutMs] for either. Wi-Fi only things (files, text) use [awaitSession] instead.
+     */
+    private suspend fun awaitPath(timeoutMs: Long): MacPath? {
+        fun open(): MacPath? = session?.takeIf { !it.closed } ?: blePath?.takeIf { !it.closed }
+        open()?.let { return it }
+        start()
+        return withTimeoutOrNull(timeoutMs) {
+            var path = open()
+            while (path == null) {
+                delay(200)
+                path = open()
+            }
+            path
         }
     }
 
@@ -706,22 +1003,33 @@ class LinkManager private constructor(private val context: Context) {
         if (recentCodes.putIfAbsent(code, now) != null) return null
 
         return scope.launch {
-            val session = awaitSession(20_000)
+            val path = awaitPath(20_000)
             val id = UUID.randomUUID().toString()
-            val ack = session?.let {
+            val ack = path?.let {
                 runCatching {
-                    it.request(Message.of("otp", "id" to id, "code" to code, "sender" to sender, "app" to app))
+                    it.request(Message.of("otp", "id" to id, "code" to code, "sender" to sender, "app" to app), 10_000)
                 }.getOrNull()
             }
             if (BuildConfig.STRESS_HOOKS) Log.d("WallhopLink", "otp delivered=${ack != null}")
             if (ack != null) {
-                record(ActivityEntry(id, ActivityEntry.Kind.Otp, code, if (sender.isBlank()) Wording.READY else "From $sender · ready to paste"))
+                // A code that waited for the Mac keeps its entry, now saying it's ready.
+                val entry = pendingEntries.remove(code) ?: id
+                record(ActivityEntry(entry, ActivityEntry.Kind.Otp, code, if (sender.isBlank()) Wording.READY else "From $sender · ready to paste"))
             } else {
                 // Not delivered: forget it, so the same code from another source (or the inbox
                 // scan after reconnecting) can still go across, and keep it with its time to send
                 // when the Mac comes back (if that's within five minutes of the code arriving).
                 recentCodes.remove(code, now)
                 pendingCodes.add(PendingCodes.Code(code, sender, app, now))
+                // Activity says so, and a tap copies it here instead.
+                val entry = pendingEntries.getOrPut(code) { id }
+                record(ActivityEntry(entry, ActivityEntry.Kind.Otp, code, Problems.CODE_NOT_DELIVERED))
+                scope.launch {
+                    delay(PendingCodes.MAX_AGE_MS)
+                    if (pendingEntries.remove(code, entry)) {
+                        _activity.update { list -> list.map { if (it.id == entry) it.copy(detail = Problems.CODE_EXPIRED_AWAY) else it } }
+                    }
+                }
             }
         }
     }
@@ -737,9 +1045,10 @@ class LinkManager private constructor(private val context: Context) {
         canReply: Boolean,
         actions: List<Pair<String, Boolean>> = emptyList(),
     ) {
-        val session = session?.takeIf { !it.closed } ?: return
+        val path: MacPath = session?.takeIf { !it.closed } ?: blePath?.takeIf { !it.closed } ?: return
         scope.launch {
-            val icon = if (iconsSent.add(packageName)) appIconPng(packageName) else null
+            // Icons only over Wi-Fi: Bluetooth is kept to small messages.
+            val icon = if (path is Session && iconsSent.add(packageName)) appIconPng(packageName) else null
             val message = Message.of(
                 "notif",
                 "key" to key, "pkg" to packageName, "app" to appName,
@@ -752,16 +1061,16 @@ class LinkManager private constructor(private val context: Context) {
                 },
                 body = icon ?: ByteArray(0),
             )
-            runCatching { session.send(message) }.onFailure { iconsSent.remove(packageName) }
+            runCatching { path.send(message) }.onFailure { if (icon != null) iconsSent.remove(packageName) }
         }
     }
 
     /** Tells the Mac about a call. Waits briefly for the link so a ringing call still shows. */
     fun sendCall(call: app.wallhop.calls.CallInfo) {
         scope.launch {
-            val session = awaitSession(if (call.state == "ringing") 6_000 else 2_000) ?: return@launch
+            val path = awaitPath(if (call.state == "ringing") 6_000 else 2_000) ?: return@launch
             runCatching {
-                session.send(Message.of("call", "id" to call.id, "state" to call.state,
+                path.send(Message.of("call", "id" to call.id, "state" to call.state,
                     "number" to call.number, "name" to call.name, "sim" to call.sim))
             }
             if (call.state == "missed") {
@@ -772,8 +1081,8 @@ class LinkManager private constructor(private val context: Context) {
     }
 
     fun notificationRemoved(key: String) {
-        val session = session?.takeIf { !it.closed } ?: return
-        scope.launch { runCatching { session.send(Message.of("notif_removed", "key" to key)) } }
+        val path: MacPath = session?.takeIf { !it.closed } ?: blePath?.takeIf { !it.closed } ?: return
+        scope.launch { runCatching { path.send(Message.of("notif_removed", "key" to key)) } }
     }
 
     private fun appIconPng(packageName: String): ByteArray? = runCatching {
@@ -788,21 +1097,31 @@ class LinkManager private constructor(private val context: Context) {
         }
     }.getOrNull()
 
-    /** Opens a link in the Mac's browser. */
-    suspend fun openOnMac(url: String): Boolean {
-        val session = awaitSession(8_000) ?: return false
+    /** Opens a link in the Mac's browser. Null when it did; otherwise why not. */
+    suspend fun openOnMac(url: String): Problem? {
         val id = UUID.randomUUID().toString()
-        val ack = runCatching { session.request(Message.of("open_url", "id" to id, "url" to url)) }.getOrNull()
-        if (ack != null) record(ActivityEntry(id, ActivityEntry.Kind.TextSent, "Link opened on your Mac", url))
-        return ack != null
+        val problem = request(Message.of("open_url", "id" to id, "url" to url))
+        if (problem == null) record(ActivityEntry(id, ActivityEntry.Kind.TextSent, "Link opened on your Mac", url))
+        return problem
     }
 
-    suspend fun sendText(text: String): Boolean {
-        val session = awaitSession(8_000) ?: return false
+    /** Puts text on the Mac's clipboard. Null when it arrived; otherwise why not. */
+    suspend fun sendText(text: String): Problem? {
         val id = UUID.randomUUID().toString()
-        val ack = runCatching { session.request(Message.of("text", "id" to id, body = text.toByteArray())) }.getOrNull()
-        if (ack != null) record(ActivityEntry(id, ActivityEntry.Kind.TextSent, app.wallhop.core.Wording.READY, text))
-        return ack != null
+        val problem = request(Message.of("text", "id" to id, body = text.toByteArray()))
+        if (problem == null) record(ActivityEntry(id, ActivityEntry.Kind.TextSent, app.wallhop.core.Wording.READY, text))
+        return problem
+    }
+
+    /** Sends [message] over Wi‑Fi and waits for its ack: null when the Mac took it, else why not. */
+    private suspend fun request(message: Message): Problem? {
+        val session = awaitSession(8_000, interactive = true) ?: return reachProblem() ?: Problems.MAC_DIDNT_ANSWER
+        val ack = runCatching { session.request(message) }.getOrNull()
+        return when {
+            ack == null -> if (session.closed) Problems.connectionLost(LocalNetwork.joined(context)) else Problems.MAC_DIDNT_ANSWER
+            !ack.header.optBoolean("ok", true) -> Problems.MAC_REFUSED
+            else -> null
+        }
     }
 
     /**
@@ -811,8 +1130,8 @@ class LinkManager private constructor(private val context: Context) {
      * share sheet can follow its own. [skipped] counts files the caller already couldn't read
      * (the share fallback copy); they're reported in the finished transfer's message.
      */
-    fun sendFiles(uris: List<Uri>, id: String = UUID.randomUUID().toString(), skipped: Int = 0) {
-        sources[id] = uris to skipped
+    fun sendFiles(uris: List<Uri>, id: String = UUID.randomUUID().toString(), skipped: Int = 0, storageFull: Boolean = false) {
+        sources[id] = Source(uris, skipped, storageFull)
         updateTransfers { TransferQueue.enqueue(it, TransferState(id, emptyList(), 0, 0, TransferPhase.Waiting)) }
         // Names and sizes for the card straight away; reading them queries other apps' providers.
         scope.launch {
@@ -869,19 +1188,20 @@ class LinkManager private constructor(private val context: Context) {
         if (state.text != null) {
             val session = awaitSession(10 * 60_000)
             if (session == null) {
-                fail(id, "Your Mac isn't nearby. Try again when it's on the same Wi-Fi.")
+                fail(id, giveUpProblem())
                 return
             }
             updateOne(id) { it.copy(phase = TransferPhase.Sending) }
-            val ok = if (state.isLink) openOnMac(state.text.trim()) else sendText(state.text)
-            if (ok) updateOne(id) { it.copy(phase = TransferPhase.Done) } else fail(id, "Couldn't reach your Mac. Check it's awake and on the same Wi-Fi.")
+            val problem = if (state.isLink) openOnMac(state.text.trim()) else sendText(state.text)
+            if (problem == null) updateOne(id) { it.copy(phase = TransferPhase.Done) } else fail(id, problem)
             return
         }
-        val (uris, skipped) = sources[id] ?: (emptyList<Uri>() to 0)
-        val items = state.items.ifEmpty { uris.mapNotNull { describe(it) } }
-        val unreadable = skipped + uris.size - items.size
+        val source = sources[id] ?: Source(emptyList(), 0)
+        val items = state.items.ifEmpty { source.uris.mapNotNull { describe(it) } }
+        // Files this phone couldn't open before sending; their names aren't known.
+        val skipped = source.skipped + source.uris.size - items.size
         if (items.isEmpty()) {
-            updateOne(id) { it.copy(phase = TransferPhase.Failed, message = "Couldn't read these files") }
+            fail(id, if (source.storageFull) Problems.PHONE_FULL_SHARE else Problems.CANT_OPEN)
             return
         }
         val total = items.sumOf { it.size.coerceAtLeast(0) }
@@ -889,75 +1209,93 @@ class LinkManager private constructor(private val context: Context) {
 
         val session = awaitSession(10 * 60_000)
         if (session == null) {
-            fail(id, "Your Mac isn't nearby. Try again when it's on the same Wi-Fi.")
+            fail(id, giveUpProblem())
             return
         }
         updateOne(id) { it.copy(phase = TransferPhase.Sending) }
         // Progress at most ten times a second: every chunk would redraw the screens for nothing.
         var shownAt = 0L
-        val error = stream(session, id, items) { sent ->
+        val streamed = stream(session, id, items) { sent ->
             val now = android.os.SystemClock.elapsedRealtime()
             if (now - shownAt >= 100) {
                 shownAt = now
                 updateOne(id) { it.copy(sentBytes = sent) }
             }
         }
-        if (error != null) {
-            fail(id, error)
+        // The connection went or the Mac stopped answering: nothing is known to have arrived.
+        streamed.problem?.let { fail(id, it); return }
+        val unreadable = streamed.unreadable + List(skipped) { "a file" }
+        val problem = Problems.sent(items.size + skipped, streamed.errs, unreadable)
+        val arrived = items.size - streamed.errs.size - streamed.unreadable.size
+        if (problem != null && (arrived <= 0 || streamed.errs.isNotEmpty())) {
+            fail(id, problem)
         } else {
-            // Some files couldn't be read at all: say so rather than a plain "Done".
-            val note = if (unreadable > 0) "${items.size} of ${items.size + unreadable} sent — couldn't read $unreadable" else null
-            updateOne(id) { it.copy(sentBytes = total, phase = TransferPhase.Done, message = note) }
-            record(ActivityEntry(id, ActivityEntry.Kind.FilesSent, summary(items), note ?: app.wallhop.core.Wording.READY,
+            // Some files couldn't be opened here: "2 of 3 sent" rather than a plain "Done".
+            updateOne(id) { it.copy(sentBytes = total, phase = TransferPhase.Done, message = problem?.title, problem = problem) }
+            record(ActivityEntry(id, ActivityEntry.Kind.FilesSent, summary(items), problem?.title ?: app.wallhop.core.Wording.READY,
                 uris = items.map { it.uri.toString() }))
         }
     }
 
-    /** Streams files in one batch. Returns an error message, or null when the Mac confirmed every file. */
+    /**
+     * How a batch went: the `err` of each file the Mac turned down, the names of files this phone
+     * couldn't open, or a [problem] that stopped the whole batch (connection lost, no answer).
+     */
+    private class Streamed(val errs: List<String?>, val unreadable: List<String>, val problem: Problem? = null)
+
+    /** Streams files in one batch and waits for the Mac's ack for each. */
     private suspend fun stream(
         session: Session,
         id: String,
         items: List<TransferItem>,
         onSent: (Long) -> Unit,
-    ): String? = try {
-        val acks = mutableListOf<kotlinx.coroutines.CompletableDeferred<Message>>()
-        val total = items.sumOf { it.size.coerceAtLeast(0) }
-        session.send(Message.of("batch_start", "batch" to id, "count" to items.size, "bytes" to total))
-        var sent = 0L
-        for (item in items) {
-            val fileId = UUID.randomUUID().toString()
-            session.send(Message.of("file_start", "id" to fileId, "batch" to id,
-                "name" to item.name, "size" to item.size, "mime" to item.mime))
-            val digest = MessageDigest.getInstance("SHA-256")
-            context.contentResolver.openInputStream(item.uri)?.use { input ->
-                val buffer = ByteArray(CHUNK_SIZE)
-                while (true) {
-                    val read = input.readFully(buffer)
-                    if (read <= 0) break
-                    val chunk = if (read == buffer.size) buffer.copyOf() else buffer.copyOf(read)
-                    digest.update(chunk)
-                    session.send(Message.of("file_chunk", "id" to fileId, body = chunk))
-                    sent += read
-                    onSent(sent)
+    ): Streamed {
+        val unreadable = mutableListOf<String>()
+        return try {
+            val acks = mutableListOf<kotlinx.coroutines.CompletableDeferred<Message>>()
+            val total = items.sumOf { it.size.coerceAtLeast(0) }
+            session.send(Message.of("batch_start", "batch" to id, "count" to items.size, "bytes" to total))
+            var sent = 0L
+            for (item in items) {
+                // Opened before file_start, so a file that can't be read is skipped, not half sent.
+                val input = runCatching { context.contentResolver.openInputStream(item.uri) }.getOrNull()
+                if (input == null) {
+                    unreadable += item.name
+                    continue
                 }
-            } ?: throw IOException("Couldn't read ${item.name}")
-            acks += session.expectAck(fileId)
-            session.send(Message.of("file_end", "id" to fileId, "sha256" to digest.digest().toHex()))
-        }
-        session.send(Message.of("batch_end", "batch" to id))
+                val fileId = UUID.randomUUID().toString()
+                session.send(Message.of("file_start", "id" to fileId, "batch" to id,
+                    "name" to item.name, "size" to item.size, "mime" to item.mime))
+                val digest = MessageDigest.getInstance("SHA-256")
+                var readFailed = false
+                input.use {
+                    val buffer = ByteArray(CHUNK_SIZE)
+                    while (true) {
+                        // A read error is this file's problem; a send error (below) is the connection's.
+                        val read = try { input.readFully(buffer) } catch (_: IOException) { readFailed = true; break }
+                        if (read <= 0) break
+                        val chunk = if (read == buffer.size) buffer.copyOf() else buffer.copyOf(read)
+                        digest.update(chunk)
+                        session.send(Message.of("file_chunk", "id" to fileId, body = chunk))
+                        sent += read
+                        onSent(sent)
+                    }
+                }
+                // A file that broke off mid-read ends with a checksum that can't match, so the Mac drops it.
+                if (readFailed) unreadable += item.name else acks += session.expectAck(fileId)
+                session.send(Message.of("file_end", "id" to fileId, "sha256" to if (readFailed) "" else digest.digest().toHex()))
+            }
+            session.send(Message.of("batch_end", "batch" to id))
 
-        val results = withTimeoutOrNull(60_000) { acks.map { it.await() } }
-        val failed = results?.count { it.header.optBoolean("ok", true).not() } ?: items.size
-        when {
-            results == null -> "Your Mac didn't confirm the transfer."
-            failed > 0 -> "$failed of ${items.size} didn't arrive."
-            else -> null
+            val results = withTimeoutOrNull(60_000) { acks.map { it.await() } }
+                ?: return Streamed(emptyList(), unreadable, Problems.MAC_STOPPED_ANSWERING)
+            Streamed(results.filterNot { it.header.optBoolean("ok", true) }.map { it.string("err") }, unreadable)
+        } catch (e: Exception) {
+            // Closing the session cancels the acks we're waiting on. That isn't our job being
+            // cancelled, so report it rather than leaving the transfer stuck on "Sending".
+            if (e is kotlinx.coroutines.CancellationException && !kotlinx.coroutines.currentCoroutineContext().isActive) throw e
+            Streamed(emptyList(), unreadable, Problems.connectionLost(LocalNetwork.joined(context)))
         }
-    } catch (e: Exception) {
-        // Closing the session cancels the acks we're waiting on. That isn't our job being
-        // cancelled, so report it rather than leaving the transfer stuck on "Sending".
-        if (e is kotlinx.coroutines.CancellationException && !kotlinx.coroutines.currentCoroutineContext().isActive) throw e
-        if (e is kotlinx.coroutines.CancellationException || session.closed) "Connection lost" else "The connection dropped. Try again."
     }
 
     /** Cancels a transfer ([id], or the one on show): stops it if it's sending, or takes it out of the queue. */
@@ -978,7 +1316,7 @@ class LinkManager private constructor(private val context: Context) {
             sendTextQueued(text)
             return true
         }
-        val uris = sources.remove(id)?.first ?: failed.items.map { it.uri }
+        val uris = sources.remove(id)?.uris ?: failed.items.map { it.uri }
         if (uris.isEmpty()) return false
         sendFiles(uris)
         return true
@@ -988,8 +1326,8 @@ class LinkManager private constructor(private val context: Context) {
         updateTransfers { list -> list.filter(TransferQueue::active) }
     }
 
-    private fun fail(id: String, message: String) {
-        updateOne(id) { it.copy(phase = TransferPhase.Failed, message = message) }
+    private fun fail(id: String, problem: Problem) {
+        updateOne(id) { it.copy(phase = TransferPhase.Failed, message = problem.title, problem = problem) }
     }
 
     private fun describe(uri: Uri): TransferItem? = runCatching {
@@ -1056,8 +1394,9 @@ class LinkManager private constructor(private val context: Context) {
         _activity.update { list -> list.filterNot { it.id in set } }
     }
 
+    /** Adds an entry at the top; one with the same id (a code that waited for the Mac) moves up, updated. */
     private fun record(entry: ActivityEntry) {
-        _activity.update { (listOf(entry) + it).take(30) }
+        _activity.update { list -> (listOf(entry) + list.filterNot { it.id == entry.id }).take(30) }
     }
 
     private val networkCallback = object : ConnectivityManager.NetworkCallback() {
@@ -1093,6 +1432,8 @@ class LinkManager private constructor(private val context: Context) {
         /** A session shorter than this counts as a failed attempt for the reconnect backoff. */
         private const val SHORT_SESSION_MS = 10_000L
         private const val CHUNK_SIZE = 256 * 1024
+        /** How long the Wi-Fi link may be down before Bluetooth takes over. */
+        private const val BLUETOOTH_GRACE_MS = 5_000L
 
         @Volatile private var instance: LinkManager? = null
 
@@ -1103,6 +1444,9 @@ class LinkManager private constructor(private val context: Context) {
         fun summary(items: List<TransferItem>): String = app.wallhop.core.Wording.count(items.map { it.mime })
     }
 }
+
+/** The Mac's pairing reply has no nonce: it's from before pairing v2. */
+private class MacTooOldException : IOException("This Mac needs an update to pair")
 
 /** Reads until the buffer is full or the stream ends. Returns the number of bytes read. */
 private fun java.io.InputStream.readFully(buffer: ByteArray): Int {

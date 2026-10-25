@@ -148,16 +148,21 @@ class MacActions(
     val stopRinging: () -> Unit,
     /** The Mac forgot this phone: drop the old pairing and pair again. */
     val pairAgain: () -> Unit,
-    /** Pokes the reconnect loop now. */
+    /** Tries to reach the Mac now, then says connected or why not. */
     val retryConnect: () -> Unit,
+    /** Does what a problem's button says (Wi‑Fi settings, Pair again, Try again…). */
+    val runFix: (app.wallhop.core.Fix) -> Unit = {},
+    /** A problem as a toast, with its button. */
+    val showProblem: (app.wallhop.core.Problem) -> Unit = {},
 )
 
 // The home screen's type: calm medium weights, like the reference (DESIGN.md §6.4).
 private fun style(size: Int, weight: Int, tracking: Float = 0f, line: Int = (size * 1.25f).toInt()) = TextStyle(
     fontFamily = Figtree, fontSize = size.sp, lineHeight = line.sp, fontWeight = FontWeight(weight), letterSpacing = tracking.sp,
 )
-private val Title = style(30, 500, -0.6f)
-private val Section = style(22, 500, -0.2f)
+// Titles and section titles in Galindo, the wordmark's face, like every page's big title.
+private val Title = app.wallhop.ui.design.Type.pageTitle
+private val Section = TextStyle(fontFamily = app.wallhop.ui.design.Galindo, fontSize = 22.sp, lineHeight = 28.sp)
 private val CardTitle = style(19, 600, -0.1f, 24)
 private val Overline = style(12, 600, 0.1f)
 private val Body = style(13, 500)
@@ -187,6 +192,8 @@ fun MacTab(
     actions: MacActions,
     card: MacCardData,
     ringing: Boolean = false,
+    /** Wi-Fi can't reach the Mac but the Bluetooth backup can: codes, calls and notifications still go. */
+    bluetooth: Boolean = false,
 ) {
     val connected = state is LinkState.Connected
     val forgotten = state is LinkState.Forgotten
@@ -201,24 +208,29 @@ fun MacTab(
     val window = with(density) { (LocalWindowInfo.current.containerSize.width - sidesPx).toDp() }
     // Tablets and landscape: one centred column, like the other pages.
     val screen = window.coerceAtMost(MaxContentWidth)
-    // Why sending is unavailable, for the toast and for TalkBack.
-    val reason = when {
-        forgotten -> "Pair again to send to your Mac"
-        !connected -> "Your Mac isn't connected"
-        else -> null
+    // Why Text and Clipboard can't go now, for the toast (with its button) and for TalkBack.
+    val problem = when {
+        forgotten -> app.wallhop.core.Problems.FORGOTTEN
+        connected -> null
+        bluetooth -> app.wallhop.core.Problems.TEXT_NEEDS_WIFI
+        else -> app.wallhop.core.Problems.away((state as? LinkState.Searching)?.reason ?: app.wallhop.core.Away.MacNotAnswering)
     }
+    val reason = problem?.title
     // Text and Clipboard need the Mac now; photos and files wait for it, like the share sheet.
     fun needsMac(action: () -> Unit): () -> Unit = {
-        if (reason == null) action() else overlays?.toast(reason, WIcons.Warning)
+        if (problem == null) action() else actions.showProblem(problem)
     }
     fun needsPairing(action: () -> Unit): () -> Unit = {
-        if (!forgotten) action() else overlays?.toast("Pair again to send to your Mac", WIcons.Warning)
+        if (!forgotten) action() else actions.showProblem(app.wallhop.core.Problems.FORGOTTEN)
     }
     val since by produceState<Long?>(null, card.connectedSince) {
         val start = card.connectedSince ?: run { value = null; return@produceState }
         while (true) {
-            value = System.currentTimeMillis() - start
-            delay(60_000)
+            val elapsed = System.currentTimeMillis() - start
+            value = elapsed
+            // Next update exactly when the next whole minute of connection is reached, so
+            // "just connected" never outlasts the first minute.
+            delay(60_000 - elapsed.mod(60_000L))
         }
     }
     val batteryContext = LocalContext.current
@@ -300,7 +312,8 @@ fun MacTab(
                         modifier = Modifier.itemMotion(this, 1).padding(top = 22.dp),
                     )
                 } else {
-                    AwayCard(macName, actions, Modifier.itemMotion(this, 1).padding(start = 20.dp, end = 20.dp, top = 22.dp))
+                    AwayCard(macName, bluetooth, (state as? LinkState.Searching)?.reason, actions,
+                        Modifier.itemMotion(this, 1).padding(start = 20.dp, end = 20.dp, top = 22.dp))
                 }
             }
             item(key = "cards") {
@@ -355,15 +368,35 @@ fun MacTab(
             }
             item(key = "send") {
                 val pairReason = if (forgotten) "Pair again to send to your Mac" else null
+                val chips = androidx.compose.foundation.lazy.rememberLazyListState()
                 LazyRow(
+                    state = chips,
                     contentPadding = PaddingValues(horizontal = 20.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    modifier = Modifier.itemMotion(this, 4).padding(top = 12.dp),
+                    // A soft fade at an edge that has more chips past it, so a cut-off chip reads as "scroll".
+                    modifier = Modifier.itemMotion(this, 4).padding(top = 12.dp).scrollEdgeFade(chips),
                 ) {
                     item { Chip(WIcons.Image, "Photos", pairReason, needsPairing(actions.sendPhotos)) }
                     item { Chip(WIcons.File, "Files", pairReason, needsPairing(actions.sendFiles)) }
                     item { Chip(WIcons.Text, "Text", reason, needsMac(actions.sendText)) }
                     item { Chip(WIcons.Clipboard, "Clipboard", reason, needsMac(actions.sendClipboard)) }
+                }
+            }
+            if (card.recent.isEmpty() && card.latest == null) {
+                item(key = "recent-empty") {
+                    Column(Modifier.itemMotion(this, 5).padding(top = 26.dp)) {
+                        SectionTitle("Recent", null, onClick = null)
+                        Text(
+                            "Codes, files and text that go between your phone and Mac show up here.",
+                            style = app.wallhop.ui.design.Type.subheadline, color = Color.White.copy(alpha = 0.7f),
+                            modifier = Modifier
+                                .padding(start = 20.dp, end = 20.dp, top = 12.dp)
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(20.dp))
+                                .background(home.card.copy(alpha = 0.6f))
+                                .padding(horizontal = 16.dp, vertical = 18.dp),
+                        )
+                    }
                 }
             }
             if (card.recent.isNotEmpty()) {
@@ -425,11 +458,11 @@ private fun Banner(
 }
 
 /**
- * The Mac is away: what to check, and Try again (which wakes the reconnect loop now instead of
- * waiting out its backoff).
+ * The Mac is away: why (once a round of attempts has failed), what to do, and the buttons that
+ * do it. Try again tries now instead of waiting out the backoff, and ends with a result.
  */
 @Composable
-private fun AwayCard(macName: String, actions: MacActions, modifier: Modifier = Modifier) {
+private fun AwayCard(macName: String, bluetooth: Boolean, reason: app.wallhop.core.Away?, actions: MacActions, modifier: Modifier = Modifier) {
     val home = Wallhop.home
     val source = remember { MutableInteractionSource() }
     Column(
@@ -443,21 +476,56 @@ private fun AwayCard(macName: String, actions: MacActions, modifier: Modifier = 
             Modifier.pressDim(source, 0.7f).tappable(source, onClick = actions.macDetails),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            StatusDot(false)
+            app.wallhop.ui.components.LinkCatch(false, Modifier.size(20.dp), shaded = false)
             Spacer(Modifier.width(6.dp))
-            Text("$macName isn't connected", style = Label, color = Color.White, modifier = Modifier.weight(1f, fill = false).semantics { heading() })
+            Text(if (bluetooth) "$macName is connected over Bluetooth" else "$macName isn't connected", style = Label, color = Color.White, modifier = Modifier.weight(1f, fill = false).semantics { heading() })
         }
         Spacer(Modifier.height(10.dp))
-        listOf("Mac awake and Lync open", "Same Wi‑Fi as this phone").forEach { check ->
-            Row(Modifier.padding(vertical = 3.dp), verticalAlignment = Alignment.CenterVertically) {
-                Icon(WIcons.CheckCircle, null, tint = Color.White.copy(alpha = 0.78f), modifier = Modifier.size(16.dp))
-                Spacer(Modifier.width(8.dp))
-                Text(check, style = Body, color = Color.White.copy(alpha = 0.78f))
+        val problem = if (bluetooth) null else reason?.let { app.wallhop.core.Problems.away(it) }
+        if (problem != null) {
+            // Why, in a few words, and what to do, in one line.
+            Column(Modifier.semantics(mergeDescendants = true) { liveRegion = LiveRegionMode.Polite }) {
+                Text(problem.title, style = Label, color = Color.White)
+                Text(problem.action, style = Body, color = Color.White.copy(alpha = 0.78f), modifier = Modifier.padding(top = 2.dp))
+            }
+        } else {
+            val checks = if (bluetooth) listOf("Codes, calls and notifications go across", "Files and text wait for the same Wi‑Fi")
+                else listOf("Mac awake and Lync open", "Same Wi‑Fi as this phone")
+            checks.forEach { check ->
+                Row(Modifier.padding(vertical = 3.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Icon(WIcons.CheckCircle, null, tint = Color.White.copy(alpha = 0.78f), modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text(check, style = Body, color = Color.White.copy(alpha = 0.78f))
+                }
             }
         }
         Spacer(Modifier.height(12.dp))
-        PillButton(WIcons.Retry, "Try again", home.pale, home.onPale, true, actions.retryConnect)
+        // The problem's buttons (Wi‑Fi settings, Pair again…); Try again always.
+        val fixes = (problem?.fixes.orEmpty() + if (bluetooth) listOf(app.wallhop.core.Fix.WifiSettings) else emptyList())
+            .let { if (app.wallhop.core.Fix.TryAgain in it || app.wallhop.core.Fix.PairAgain in it) it else it + app.wallhop.core.Fix.TryAgain }
+            .take(2)
+        // Side by side when they fit; the second wraps under at large text sizes.
+        androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            fixes.forEachIndexed { index, fix ->
+                val first = index == 0
+                PillButton(
+                    fixIcon(fix), fix.label,
+                    if (first) home.pale else Color.White.copy(alpha = 0.12f), if (first) home.onPale else Color.White, true,
+                    { if (fix == app.wallhop.core.Fix.TryAgain) actions.retryConnect() else actions.runFix(fix) },
+                )
+            }
+        }
     }
+}
+
+/** The icon on a problem's button. */
+private fun fixIcon(fix: app.wallhop.core.Fix): ImageVector? = when (fix) {
+    app.wallhop.core.Fix.TryAgain -> WIcons.Retry
+    app.wallhop.core.Fix.WifiSettings -> WIcons.Wifi
+    app.wallhop.core.Fix.PairAgain -> WIcons.Link
+    app.wallhop.core.Fix.ChooseAgain -> WIcons.Image
+    app.wallhop.core.Fix.TurnOnBluetooth -> WIcons.Bluetooth
+    else -> null
 }
 
 /**
@@ -477,7 +545,7 @@ private fun Modifier.itemMotion(scope: androidx.compose.foundation.lazy.LazyItem
 
 /**
  * "Your Mac ›" and how it's connected. The line under it slides up as the state changes, after
- * a small dot that pops green when the Mac connects. Response time lives in Mac details.
+ * Lync's link, which catches (with its click) when the Mac connects. Response time lives in Mac details.
  */
 @Composable
 private fun MacStatusTitle(connected: Boolean, locked: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
@@ -501,8 +569,8 @@ private fun MacStatusTitle(connected: Boolean, locked: Boolean, onClick: () -> U
             Icon(WIcons.ChevronRight, null, tint = Color.White, modifier = Modifier.size(16.dp))
         }
         Row(Modifier.padding(top = 2.dp), verticalAlignment = Alignment.CenterVertically) {
-            StatusDot(connected)
-            Spacer(Modifier.width(7.dp))
+            app.wallhop.ui.components.LinkCatch(connected, Modifier.size(20.dp), shaded = false)
+            Spacer(Modifier.width(6.dp))
             AnimatedContent(
                 targetState = status,
                 transitionSpec = {
@@ -525,50 +593,6 @@ private fun MacStatusTitle(connected: Boolean, locked: Boolean, onClick: () -> U
                 }
             }
         }
-    }
-}
-
-/**
- * The connection dot. While looking it breathes once every 1.6 s (only then, and only while
- * Home is on screen); when the Mac connects it turns green with a single pop.
- */
-@Composable
-private fun StatusDot(connected: Boolean) {
-    val reduceMotion = Wallhop.a11y.reduceMotion
-    val active = LocalScreenActive.current
-    val green = Wallhop.colors.green
-    val color by animateColorAsState(if (connected) green else Color.White.copy(alpha = 0.55f), Springs.smooth(), label = "dot")
-    val pulse = remember { Animatable(0f) }
-    val pop = remember { Animatable(1f) }
-    val wasConnected = remember { booleanArrayOf(connected) }
-    LaunchedEffect(connected, active, reduceMotion) {
-        val justConnected = connected && !wasConnected[0]
-        wasConnected[0] = connected
-        if (connected) {
-            pulse.snapTo(0f)
-            if (justConnected && !reduceMotion && active) {
-                pop.animateTo(1.4f, tween(120))
-                pop.animateTo(1f, Springs.bouncy())
-            }
-            return@LaunchedEffect
-        }
-        if (reduceMotion || !active) {
-            pulse.snapTo(0f)
-            return@LaunchedEffect
-        }
-        while (true) {
-            pulse.snapTo(0f)
-            pulse.animateTo(1f, tween(900, easing = androidx.compose.animation.core.LinearOutSlowInEasing))
-            kotlinx.coroutines.delay(700)
-        }
-    }
-    Canvas(Modifier.size(14.dp)) {
-        val r = 3.5.dp.toPx() * pop.value
-        val p = pulse.value
-        if (p > 0f && p < 1f) {
-            drawCircle(color.copy(alpha = 0.45f * (1f - p)), radius = 3.5.dp.toPx() * (1f + 1f * p))
-        }
-        drawCircle(color, radius = r)
     }
 }
 
@@ -630,7 +654,8 @@ private fun transferStatus(transfer: TransferState) = when (transfer.phase) {
     TransferPhase.Failed -> "Didn’t send"
 }
 
-private fun transferMessage(transfer: TransferState) = transfer.message ?: when (transfer.phase) {
+/** Why it failed and what to do ("Mac is out of space. Free up space…"), or how far it's got. */
+private fun transferMessage(transfer: TransferState) = transfer.problem?.sentence ?: transfer.message ?: when (transfer.phase) {
     TransferPhase.Done -> app.wallhop.core.Wording.READY
     else -> "${app.wallhop.ui.components.formatBytes(transfer.sentBytes)} of ${app.wallhop.ui.components.formatBytes(transfer.totalBytes)}"
 }
@@ -699,7 +724,6 @@ private fun MacHero(
             Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color.Transparent, home.card.copy(alpha = 0.55f)))))
             // Big and anchored to the top: only the top of the screen shows, like a Mac peeking up.
             LiveMac(connected, card, Modifier.fillMaxWidth().wrapContentHeight(Alignment.Top, unbounded = true).padding(top = 16.dp))
-            BridgeLink(connected, home, Modifier.matchParentSize())
         }
         Column(Modifier.weight(1f).padding(start = 16.dp, end = 16.dp, top = 14.dp, bottom = 16.dp)) {
             Text(kind(name, info.laptop), style = Overline, color = Color.White.copy(alpha = 0.78f))
@@ -809,7 +833,10 @@ private fun TransferCard(transfer: TransferState, home: HomeColors, actions: Mac
             }
             Spacer(Modifier.weight(1f))
             if (failed) {
-                PillButton(WIcons.Retry, "Try again", home.pale, home.onPale, true, { actions.retryTransfer(transfer) }, Modifier.fillMaxWidth())
+                // Files that couldn't be opened are picked again; anything else is sent again.
+                val choose = transfer.problem?.fix == app.wallhop.core.Fix.ChooseAgain
+                PillButton(if (choose) WIcons.Image else WIcons.Retry, if (choose) "Choose again" else "Try again",
+                    home.pale, home.onPale, true, { actions.retryTransfer(transfer) }, Modifier.fillMaxWidth())
                 Spacer(Modifier.height(8.dp))
                 PillButton(WIcons.XCircle, "Dismiss", Color.White.copy(alpha = 0.12f), Color.White, true,
                     actions.dismissTransfer, Modifier.fillMaxWidth())
@@ -866,8 +893,8 @@ private fun PillButton(
                 targetState = icon,
                 transitionSpec = {
                     if (reduceMotion) fadeIn(tween(Durations.Quick)) togetherWith fadeOut(tween(Durations.Quick))
-                    else (fadeIn(Fades.fadeIn()) + scaleIn(Springs.bouncy(), initialScale = 0.5f)) togetherWith
-                        (fadeOut(Fades.fadeOut()) + scaleOut(Springs.snappy(), targetScale = 0.5f))
+                    else (fadeIn(Fades.fadeIn()) + scaleIn(Springs.pop(), initialScale = 0.85f)) togetherWith
+                        (fadeOut(Fades.fadeOut()) + scaleOut(Springs.snappy(), targetScale = 0.85f))
                 },
                 label = "pillIcon",
             ) { shown -> Icon(shown, null, tint = content, modifier = Modifier.size(18.dp)) }
@@ -952,19 +979,42 @@ fun MacDetails(
     info: app.wallhop.link.MacInfo,
     latencyMs: Int?,
     connectedSince: Long?,
+    /** Not on Wi‑Fi, but the Bluetooth backup reaches the Mac. */
+    bluetooth: Boolean = false,
     onForget: () -> Unit,
 ) {
     val context = LocalContext.current
     val colors = Wallhop.colors
     val connected = state as? LinkState.Connected
+    val reduceMotionDetails = Wallhop.a11y.reduceMotion
     var expanded by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(false) }
     app.wallhop.ui.components.InsetSection(dividerInset = 57.dp) {
         row {
+            // Away: why, and what to do, under the row (the same words as Home's card).
+            val away = (state as? LinkState.Searching)?.reason?.takeIf { !bluetooth }?.let { app.wallhop.core.Problems.away(it) }
+            val overBluetooth = bluetooth && connected == null
             app.wallhop.ui.components.ListRow(
-                title = "Status",
-                leading = { app.wallhop.ui.components.IconTile(WIcons.Wifi, if (connected != null) colors.green else colors.gray) },
+                // Long enough to need the row's width: the reason is the title, what to do under it.
+                title = when {
+                    overBluetooth -> "Connected over Bluetooth"
+                    away != null -> away.title
+                    else -> "Status"
+                },
+                subtitle = when {
+                    overBluetooth -> "Codes, calls and notifications go across. Files and text wait for the same Wi‑Fi."
+                    away != null -> away.action
+                    else -> null
+                },
+                subtitleMaxLines = Int.MAX_VALUE,
+                leading = {
+                    app.wallhop.ui.components.IconTile(
+                        if (overBluetooth) WIcons.Bluetooth else WIcons.Wifi,
+                        if (connected != null || overBluetooth) colors.green else colors.gray,
+                    )
+                },
                 value = when {
                     state is LinkState.Forgotten -> "Needs pairing again"
+                    overBluetooth || away != null -> null
                     connected == null -> "Not connected"
                     info.locked -> "Connected, locked"
                     else -> "Connected"
@@ -991,25 +1041,38 @@ fun MacDetails(
             }
         }
         if (connected != null) {
+            // The details open under their row in one piece (the chevron turning with them),
+            // rather than two rows appearing in a single frame.
             row {
-                app.wallhop.ui.components.ListRow(
-                    title = "Connection details",
-                    leading = { app.wallhop.ui.components.IconTile(WIcons.Gauge, colors.indigo) },
-                    trailing = {
-                        Icon(WIcons.ChevronRight, null, tint = colors.labelTertiary,
-                            modifier = Modifier.size(16.dp).graphicsLayer { rotationZ = if (expanded) 90f else 0f })
-                    },
-                    onClick = { expanded = !expanded },
-                    modifier = Modifier.semantics { stateDescription = if (expanded) "Expanded" else "Collapsed" },
-                )
-            }
-            if (expanded) {
-                row {
-                    app.wallhop.ui.components.ListRow(title = "Address", value = connected.host)
-                }
-                if (latencyMs != null) {
-                    row {
-                        app.wallhop.ui.components.ListRow(title = "Response time", value = "$latencyMs ms", animateValue = true)
+                Column {
+                    val turn by androidx.compose.animation.core.animateFloatAsState(
+                        if (expanded) 90f else 0f, if (reduceMotionDetails) tween(0) else Springs.snappy(), label = "detailsChevron",
+                    )
+                    app.wallhop.ui.components.ListRow(
+                        title = "Connection details",
+                        leading = { app.wallhop.ui.components.IconTile(WIcons.Gauge, colors.indigo) },
+                        trailing = {
+                            Icon(WIcons.ChevronRight, null, tint = colors.labelTertiary,
+                                modifier = Modifier.size(16.dp).graphicsLayer { rotationZ = turn })
+                        },
+                        onClick = { expanded = !expanded },
+                        modifier = Modifier.semantics { stateDescription = if (expanded) "Expanded" else "Collapsed" },
+                    )
+                    androidx.compose.animation.AnimatedVisibility(
+                        expanded,
+                        enter = if (reduceMotionDetails) fadeIn(tween(Durations.Quick))
+                            else androidx.compose.animation.expandVertically(Springs.snappy()) + fadeIn(Fades.fadeIn()),
+                        exit = if (reduceMotionDetails) fadeOut(tween(Durations.Quick))
+                            else androidx.compose.animation.shrinkVertically(Springs.snappy()) + fadeOut(Fades.fadeOut()),
+                    ) {
+                        Column {
+                            DetailsDivider(colors.separator)
+                            app.wallhop.ui.components.ListRow(title = "Address", value = connected.host)
+                            if (latencyMs != null) {
+                                DetailsDivider(colors.separator)
+                                app.wallhop.ui.components.ListRow(title = "Response time", value = "$latencyMs ms", animateValue = true)
+                            }
+                        }
                     }
                 }
             }
@@ -1026,4 +1089,33 @@ fun MacDetails(
             )
         }
     }
+}
+
+/** Fades the row's left and right edges while there's more content past them. */
+private fun Modifier.scrollEdgeFade(state: androidx.compose.foundation.lazy.LazyListState): Modifier = this
+    .graphicsLayer { compositingStrategy = androidx.compose.ui.graphics.CompositingStrategy.Offscreen }
+    .drawWithContent {
+        drawContent()
+        val edge = 40.dp.toPx()
+        if (state.canScrollForward) {
+            drawRect(
+                Brush.horizontalGradient(listOf(Color.Black, Color.Transparent), startX = size.width - edge, endX = size.width),
+                topLeft = androidx.compose.ui.geometry.Offset(size.width - edge, 0f),
+                size = androidx.compose.ui.geometry.Size(edge, size.height),
+                blendMode = androidx.compose.ui.graphics.BlendMode.DstIn,
+            )
+        }
+        if (state.canScrollBackward) {
+            drawRect(
+                Brush.horizontalGradient(listOf(Color.Transparent, Color.Black), startX = 0f, endX = edge),
+                size = androidx.compose.ui.geometry.Size(edge, size.height),
+                blendMode = androidx.compose.ui.graphics.BlendMode.DstIn,
+            )
+        }
+    }
+
+/** The same hairline InsetSection puts between rows, for rows that open inside one. */
+@Composable
+private fun DetailsDivider(color: Color) {
+    Box(Modifier.padding(start = 57.dp).fillMaxWidth().height(0.5.dp).background(color))
 }

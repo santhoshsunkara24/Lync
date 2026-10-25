@@ -5,9 +5,18 @@ import Network
 /// Something that happened on the link, delivered to the app on the main thread.
 enum LinkEvent {
     case listening(port: UInt16?)
-    case stopped(reason: String)
+    /// The listener can't accept connections (it keeps trying by itself).
+    case stopped(ListenerProblem)
     case pairingRequested(PairingRequest)
     case pairingEnded(id: UUID)
+    /// A pairing request on screen ended without an answer: it expired, or the phone gave up.
+    case pairingAbandoned(expired: Bool)
+    /// A phone too old to pair was turned away (`pair_no` `version`).
+    case phoneTooOldToPair
+    /// A scanned QR didn't work (expired, used, replaced, or the wrong proof); a new one is due.
+    case qrRejected(mismatch: Bool)
+    /// What the connecting phone said about itself in `hello` (before `connected`).
+    case phoneVersion(app: String?, protocolVersion: Int?)
     /// The phone's Material You colours (ARGB), so the Mac matches it.
     case theme(seed: UInt32, accent: UInt32?)
     /// A phone paired by scanning this Mac's QR code; no confirmation needed.
@@ -21,7 +30,10 @@ enum LinkEvent {
     case media(NowPlaying?, art: Data?)
     case batchProgress(id: String, bytes: Int64)
     case fileSaved(batch: String, url: URL)
-    case fileFailed(batch: String, name: String)
+    /// `reason`: the file-ack code the Mac sent back (`storage_full`, `checksum`, …).
+    case fileFailed(batch: String, name: String, reason: String)
+    /// Files from the phone turned away before any were written (not enough space).
+    case incomingRefused(reason: String)
     case batchFinished(id: String)
     /// The connection dropped before the batch finished.
     case batchInterrupted(id: String)
@@ -31,11 +43,48 @@ enum LinkEvent {
     case linkOpened(URL)
     case notificationRemoved(key: String)
     case outgoingProgress(id: String, sent: Int64, total: Int64)
-    case outgoingFinished(id: String, ok: Bool)
+    case outgoingFinished(id: String, result: OutgoingResult)
     /// The phone unpaired this Mac (`forget`); it's already removed from the paired phones.
     case forgotten(PairedPhone)
     /// The phone stopped ringing by itself (`ring` with `action` `stopped`).
     case ringStopped
+    /// Codes, calls and notifications from this phone now come over Bluetooth (nil: not any more).
+    case bluetooth(PairedPhone?)
+    /// Bluetooth on this Mac is off, not allowed, or missing (or fine again).
+    case bluetoothRadio(BluetoothRadio)
+    /// The paired phones couldn't be written to disk.
+    case storageFailed
+}
+
+/// Why the listener isn't accepting connections.
+enum ListenerProblem: Equatable {
+    /// Local Network access is off for Lync (Privacy & Security).
+    case localNetworkDenied
+    /// This Mac has no network.
+    case offline
+    case failed
+}
+
+/// How a message that needed the phone's `ack` went.
+enum AckResult: Equatable {
+    case ok
+    /// The phone said no; `err` when it gave a code.
+    case refused(String?)
+    /// No answer in time (old phones don't answer some messages: callers decide what that means).
+    case timedOut
+    /// It couldn't be sent, or the connection dropped before the answer.
+    case disconnected
+
+    var ok: Bool { self == .ok }
+}
+
+/// The answer to `LinkServer.request`.
+enum RequestResult {
+    case reply(Message)
+    /// No phone connected; `bluetoothOnly` when one is reachable over Bluetooth only.
+    case notConnected(bluetoothOnly: Bool)
+    case timedOut
+    case disconnected
 }
 
 /// A notification mirrored from the phone.
@@ -125,17 +174,58 @@ final class LinkServer {
     private var pendingPairing: UUID?
     private var pairAttempts: [String: [Date]] = [:]
     /// Replies we're waiting for, with the connection they were sent on.
-    private var pendingAcks: [String: (connection: UUID, callback: (Bool) -> Void)] = [:]
-    private var pendingResults: [String: (connection: UUID, callback: (Message?) -> Void)] = [:]
+    private var pendingAcks: [String: (connection: UUID, callback: (AckResult) -> Void)] = [:]
+    private var pendingResults: [String: (connection: UUID, callback: (RequestResult) -> Void)] = [:]
     private var senders: [String: FileSender] = [:]
+    /// The fallback when no phone reaches this Mac over Wi-Fi.
+    private let bluetooth: BluetoothLink
+    /// Stands for the Bluetooth link in `pendingAcks`, so its acks fail when it drops.
+    private let bluetoothConnectionId = UUID()
+    /// A paired phone reaches this Mac over Bluetooth only.
+    private var bluetoothUp = false
 
     init(identity: Identity, paired: PairedPhones) {
         self.identity = identity
         self.paired = paired
+        bluetooth = BluetoothLink(identity: identity, paired: paired, queue: queue)
+        bluetooth.onMessage = { [weak self] message, phone in self?.handleBluetooth(message, from: phone) }
+        bluetooth.onState = { [weak self] phone in self?.bluetoothChanged(phone) }
+        bluetooth.onRadio = { [weak self] radio in self?.emit(.bluetoothRadio(radio)) }
+        paired.onSaveFailed = { [weak self] in self?.emit(.storageFailed) }
     }
 
     func start() {
-        queue.async { self.startListener(port: Self.preferredPort) }
+        queue.async {
+            self.startListener(port: Self.preferredPort)
+            self.bluetooth.setWanted(true)
+        }
+    }
+
+    /// Path selection (on the queue). The phone decides: it advertises only while its Wi-Fi link
+    /// is down, so the Mac listens for it all the time (it may not have noticed the TCP connection
+    /// die yet; keepalive takes most of a minute). A Wi-Fi connection from a phone ends its
+    /// Bluetooth link at once.
+    private func wifiReady(_ phone: PairedPhone) {
+        bluetooth.setWanted(true) // A newly paired phone.
+        bluetooth.disconnect(publicKey: phone.publicKey)
+    }
+
+    /// The Bluetooth link to `phone` came up (or went down: nil). Its Wi-Fi connection, if the Mac
+    /// still has one, is stale: the phone only advertises once it lost it. Close it now.
+    private func bluetoothChanged(_ phone: PairedPhone?) {
+        bluetoothUp = phone != nil
+        if phone == nil {
+            for (id, pending) in pendingAcks where pending.connection == bluetoothConnectionId {
+                pendingAcks[id] = nil
+                pending.callback(.disconnected)
+            }
+        }
+        if let phone {
+            for connection in connections.values where connection.phone?.publicKey == phone.publicKey {
+                connection.close()
+            }
+        }
+        emit(.bluetooth(phone))
     }
 
     // MARK: - Listener
@@ -163,7 +253,7 @@ final class LinkServer {
                 startListener(port: nil)
             } else {
                 NSLog("Lync: can't listen: \(error.localizedDescription)")
-                emit(.stopped(reason: error.localizedDescription))
+                emit(.stopped((error as? NWError).map(Self.problem) ?? .failed))
             }
             return
         }
@@ -181,9 +271,13 @@ final class LinkServer {
                     self.startListener(port: nil)
                 } else {
                     NSLog("Lync: listener failed: \(error.localizedDescription)")
-                    self.emit(.stopped(reason: error.localizedDescription))
+                    self.emit(.stopped(Self.problem(error)))
                     self.queue.asyncAfter(deadline: .now() + 3) { self.startListener(port: port) }
                 }
+            case .waiting(let error):
+                // Not dead yet: it goes on by itself once the cause is fixed (it reports ready then).
+                NSLog("Lync: listener waiting: \(error.localizedDescription)")
+                self.emit(.stopped(Self.problem(error)))
             default:
                 break
             }
@@ -196,6 +290,16 @@ final class LinkServer {
         }
         listener.start(queue: queue)
         self.listener = listener
+    }
+
+    /// What a listener error means for the user. Local Network denied shows up as the DNS-SD
+    /// PolicyDenied error (-65570) when the Bonjour service can't be registered.
+    private static func problem(_ error: NWError) -> ListenerProblem {
+        switch error {
+        case .dns(let code) where code == -65570: return .localNetworkDenied
+        case .posix(.ENETDOWN), .posix(.ENETUNREACH), .posix(.EADDRNOTAVAIL): return .offline
+        default: return .failed
+        }
     }
 
     /// Starts listening again, e.g. after the user taps Try again.
@@ -246,19 +350,36 @@ final class LinkServer {
     }
 
     /// Stops the QR on screen from working, e.g. when the panel closes.
-    func cancelInvite() {
-        queue.async { self.invite = nil }
+    /// Stops `url`'s invite working, if it's still the current one: a QR leaving the screen must
+    /// not cancel the newer QR that just replaced it.
+    func cancelInvite(_ url: URL?) {
+        guard let token = url.flatMap({ URLComponents(url: $0, resolvingAgainstBaseURL: false) })?
+            .queryItems?.first(where: { $0.name == "t" })?.value else { return }
+        queue.async { if self.invite?.token.base64URL == token { self.invite = nil } }
     }
 
     // MARK: - Called by PhoneConnection (on queue)
 
-    /// Checks a phone's QR proof and uses up the secret if it matches.
-    func redeemInvite(proof: Data, phonePub: Data) -> Bool {
-        guard let current = invite, current.expires > Date() else { return false }
+    /// Checks a phone's QR proof and uses up the secret if it matches. Otherwise the `pair_no`
+    /// code: `expired` (expired, used or replaced) or `mismatch` (the proof is wrong); the app
+    /// shows a fresh QR either way.
+    func redeemInvite(proof: Data, phonePub: Data) -> String? {
+        guard let current = invite, current.expires > Date() else {
+            emit(.qrRejected(mismatch: false))
+            return PhoneError.expired
+        }
         let expected = Handshake.qrProof(token: current.token, phonePub: phonePub, macPub: identity.publicKey)
-        guard Handshake.constantTimeEqual(expected, proof) else { return false }
+        guard Handshake.constantTimeEqual(expected, proof) else {
+            emit(.qrRejected(mismatch: true))
+            return PhoneError.mismatch
+        }
         invite = nil
-        return true
+        return nil
+    }
+
+    /// A phone too old to pair was turned away.
+    func refusedOldPhone() {
+        emit(.phoneTooOldToPair)
     }
 
     /// At most `pairAttemptsPerMinute` pairing attempts per address per minute.
@@ -311,21 +432,36 @@ final class LinkServer {
                 active = connection
                 retire(old)
                 old.close()
-                emit(.connected(phone, host: connection.remoteHost))
+                emitConnected(connection, phone)
+                wifiReady(phone)
                 return
             }
             old.close()
         }
         // Another phone that's still connected keeps the app; this one waits its turn.
-        if let current = active, current !== connection { return }
+        if let current = active, current !== connection {
+            wifiReady(phone)
+            return
+        }
         active = connection
+        emitConnected(connection, phone)
+        wifiReady(phone)
+    }
+
+    /// `connected`, after what the phone said about its version.
+    private func emitConnected(_ connection: PhoneConnection, _ phone: PairedPhone) {
+        emit(.phoneVersion(app: connection.phoneApp, protocolVersion: connection.phoneProtocol))
         emit(.connected(phone, host: connection.remoteHost))
     }
 
     func connectionClosed(_ connection: PhoneConnection) {
         connections[connection.id] = nil
         endPairing(connection)
-        if let id = connection.pairingId { emit(.pairingEnded(id: id)) }
+        if let id = connection.pairingId {
+            // Still waiting for the user: it ran out of time, or the phone gave up.
+            emit(.pairingEnded(id: id))
+            emit(.pairingAbandoned(expired: connection.pairingTimedOut))
+        }
         if let key = connection.phone?.publicKey, readyByKey[key] === connection { readyByKey[key] = nil }
         retire(connection)
         guard active === connection else { return }
@@ -334,7 +470,7 @@ final class LinkServer {
         // Hand over to another paired phone that's still connected.
         if let next = readyByKey.values.first(where: { $0.state == .ready }), let phone = next.phone {
             active = next
-            emit(.connected(phone, host: next.remoteHost))
+            emitConnected(next, phone)
         }
     }
 
@@ -343,11 +479,11 @@ final class LinkServer {
         for batch in connection.files.cancelAll() { emit(.batchInterrupted(id: batch)) }
         for (id, pending) in pendingAcks where pending.connection == connection.id {
             pendingAcks[id] = nil
-            pending.callback(false)
+            pending.callback(.disconnected)
         }
         for (id, pending) in pendingResults where pending.connection == connection.id {
             pendingResults[id] = nil
-            pending.callback(nil)
+            pending.callback(.disconnected)
         }
     }
 
@@ -364,7 +500,7 @@ final class LinkServer {
             let previous = self.active?.phone
             self.active = next
             if let previous { self.emit(.disconnected(previous)) }
-            self.emit(.connected(phone, host: next.remoteHost))
+            self.emitConnected(next, phone)
         }
     }
 
@@ -374,6 +510,7 @@ final class LinkServer {
             for connection in self.connections.values where connection.phone?.publicKey == publicKey {
                 connection.close()
             }
+            self.bluetooth.disconnect(publicKey: publicKey)
         }
     }
 
@@ -407,9 +544,15 @@ final class LinkServer {
 
         case "batch_start":
             if let batch = message.string("batch") {
+                let bytes = Int64(message.int("bytes") ?? 0)
+                // Not enough room: every file of it is refused (`storage_full`) and nothing is written.
+                if !ReceivedFiles.hasRoom(for: bytes) {
+                    files.refuseBatch(batch, reason: PhoneError.storageFull)
+                    emit(.incomingRefused(reason: PhoneError.storageFull))
+                    break
+                }
                 files.startBatch(batch)
-                emit(.batchStarted(id: batch, count: message.int("count") ?? 1,
-                                   bytes: Int64(message.int("bytes") ?? 0)))
+                emit(.batchStarted(id: batch, count: message.int("count") ?? 1, bytes: bytes))
             }
 
         case "file_start":
@@ -427,29 +570,22 @@ final class LinkServer {
                 emit(.fileSaved(batch: batch, url: url))
                 connection.send(Message("ack", ["id": message.string("id") ?? "", "ok": true]))
             case .failed(let batch, let name, let reason):
-                emit(.fileFailed(batch: batch, name: name))
+                emit(.fileFailed(batch: batch, name: name, reason: reason))
+                connection.send(Message("ack", ["id": message.string("id") ?? "", "ok": false, "err": reason]))
+            case .refused(let reason):
                 connection.send(Message("ack", ["id": message.string("id") ?? "", "ok": false, "err": reason]))
             }
 
         case "batch_end":
             if let batch = message.string("batch") {
-                files.endBatch(batch)
-                emit(.batchFinished(id: batch))
+                // A refused batch already said so when it started.
+                if files.endBatch(batch) { emit(.batchFinished(id: batch)) }
             }
 
         case "notif":
-            guard let key = message.string("key"), let pkg = message.string("pkg") else { break }
-            let time = (message.header["time"] as? NSNumber).map { Date(timeIntervalSince1970: $0.doubleValue / 1000) } ?? Date()
-            let actions = (message.header["actions"] as? [[String: Any]] ?? []).compactMap { item -> NotificationAction? in
-                guard let index = (item["i"] as? NSNumber)?.intValue, let title = item["title"] as? String else { return nil }
-                return NotificationAction(index: index, title: title, isReply: (item["reply"] as? NSNumber)?.boolValue ?? false)
+            if let notification = Self.notification(from: message) {
+                emit(.notification(notification, icon: message.body.isEmpty ? nil : message.body))
             }
-            let notification = PhoneNotification(
-                key: key, packageName: pkg, appName: message.string("app") ?? pkg,
-                title: message.string("title") ?? "", text: message.string("text") ?? "",
-                time: time, canReply: message.bool("reply") ?? false, actions: actions
-            )
-            emit(.notification(notification, icon: message.body.isEmpty ? nil : message.body))
 
         case "media":
             if message.bool("active") == true {
@@ -461,14 +597,11 @@ final class LinkServer {
             }
 
         case "call":
-            if let id = message.string("id"), let state = PhoneCall.State(rawValue: message.string("state") ?? "") {
-                emit(.call(PhoneCall(id: id, state: state, number: message.string("number"),
-                                     name: message.string("name"), sim: message.string("sim"))))
-            }
+            if let call = Self.call(from: message) { emit(.call(call)) }
 
         case "sms_result":
             if let id = message.string("id"), let pending = pendingResults.removeValue(forKey: id) {
-                pending.callback(message)
+                pending.callback(.reply(message))
             }
 
         case "open_url":
@@ -494,7 +627,7 @@ final class LinkServer {
 
         case "ack":
             if let id = message.string("id"), let pending = pendingAcks.removeValue(forKey: id) {
-                pending.callback(message.bool("ok") ?? true)
+                pending.callback(Self.ackResult(message))
             }
 
         case "forget":
@@ -512,6 +645,57 @@ final class LinkServer {
         }
     }
 
+    private static func notification(from message: Message) -> PhoneNotification? {
+        guard let key = message.string("key"), let pkg = message.string("pkg") else { return nil }
+        let time = (message.header["time"] as? NSNumber).map { Date(timeIntervalSince1970: $0.doubleValue / 1000) } ?? Date()
+        let actions = (message.header["actions"] as? [[String: Any]] ?? []).compactMap { item -> NotificationAction? in
+            guard let index = (item["i"] as? NSNumber)?.intValue, let title = item["title"] as? String else { return nil }
+            return NotificationAction(index: index, title: title, isReply: (item["reply"] as? NSNumber)?.boolValue ?? false)
+        }
+        return PhoneNotification(
+            key: key, packageName: pkg, appName: message.string("app") ?? pkg,
+            title: message.string("title") ?? "", text: message.string("text") ?? "",
+            time: time, canReply: message.bool("reply") ?? false, actions: actions
+        )
+    }
+
+    private static func call(from message: Message) -> PhoneCall? {
+        guard let id = message.string("id"), let state = PhoneCall.State(rawValue: message.string("state") ?? "") else { return nil }
+        return PhoneCall(id: id, state: state, number: message.string("number"), name: message.string("name"), sim: message.string("sim"))
+    }
+
+    /// A message over the Bluetooth fallback (on the queue). Only the small things it carries;
+    /// anything else is ignored, so Bluetooth can't do more than codes, calls and notifications.
+    private func handleBluetooth(_ message: Message, from phone: PairedPhone) {
+        if Self.debugLog { NSLog("Lync: ← (Bluetooth) \(message.type)") }
+        switch message.type {
+        case "otp":
+            if let code = message.string("code"), !code.isEmpty {
+                emit(.otp(code: code, sender: message.string("sender") ?? "", app: message.string("app") ?? ""))
+            }
+            if let id = message.string("id") { bluetooth.send(Message("ack", ["id": id, "ok": true])) }
+        case "call":
+            if let call = Self.call(from: message) { emit(.call(call)) }
+        case "notif":
+            // No icon over Bluetooth; the Mac uses one it already has.
+            if let notification = Self.notification(from: message) { emit(.notification(notification, icon: nil)) }
+        case "notif_removed":
+            if let key = message.string("key") { emit(.notificationRemoved(key: key)) }
+        case "ack":
+            // Call buttons answered over Bluetooth.
+            if let id = message.string("id"), let pending = pendingAcks.removeValue(forKey: id) {
+                pending.callback(Self.ackResult(message))
+            }
+        default:
+            break
+        }
+    }
+
+    /// An `ack`: `ok` (true when missing, as before), with the phone's `err` code when it said no.
+    private static func ackResult(_ message: Message) -> AckResult {
+        (message.bool("ok") ?? true) ? .ok : .refused(message.string("err"))
+    }
+
     // MARK: - Sending to the phone
 
     var isConnected: Bool {
@@ -519,96 +703,96 @@ final class LinkServer {
     }
 
     /// Sends text to the connected phone. `completion` runs on the main thread.
-    func sendText(_ text: String, completion: @escaping (Bool) -> Void) {
-        queue.async {
-            guard let active = self.active else {
-                DispatchQueue.main.async { completion(false) }
-                return
-            }
-            self.expectAck(on: active, message: Message("text", body: Data(text.utf8)), timeout: 10) { ok in
-                DispatchQueue.main.async { completion(ok) }
-            }
-        }
+    func sendText(_ text: String, completion: @escaping (AckResult) -> Void) {
+        sendAcked(Message("text", body: Data(text.utf8)), timeout: 10, completion: completion)
     }
 
     /// Replies through the notification's own quick-reply action on the phone.
-    func replyToNotification(key: String, text: String, completion: @escaping (Bool) -> Void) {
-        queue.async {
-            guard let active = self.active else {
-                DispatchQueue.main.async { completion(false) }
-                return
-            }
-            self.expectAck(on: active, message: Message("notif_reply", ["key": key], body: Data(text.utf8)), timeout: 10) { ok in
-                DispatchQueue.main.async { completion(ok) }
-            }
-        }
+    func replyToNotification(key: String, text: String, completion: @escaping (AckResult) -> Void) {
+        sendAcked(Message("notif_reply", ["key": key], body: Data(text.utf8)), timeout: 10, completion: completion)
     }
 
-    /// Taps a notification's action button on the phone.
-    func performNotificationAction(key: String, index: Int) {
-        queue.async { self.active?.send(Message("notif_action", ["key": key, "i": index])) }
+    /// Taps a notification's action button on the phone. Phones before the `notif_action` ack
+    /// don't answer: `timedOut` then means "sent, outcome unknown".
+    func performNotificationAction(key: String, index: Int, completion: @escaping (AckResult) -> Void) {
+        sendAcked(Message("notif_action", ["key": key, "i": index]), timeout: 5, completion: completion)
     }
 
-    /// Asks the phone something and waits for its `sms_result` reply. `completion` runs on the main thread
-    /// with nil if the phone isn't connected or doesn't answer in time.
+    /// Asks the phone something and waits for its `sms_result` reply. `completion` runs on the main thread.
     func request(_ type: String, _ fields: [String: Any] = [:], timeout: TimeInterval = 15,
-                 completion: @escaping (Message?) -> Void) {
+                 completion: @escaping (RequestResult) -> Void) {
         queue.async {
             guard let active = self.active else {
-                DispatchQueue.main.async { completion(nil) }
+                let bluetoothOnly = self.bluetoothUp
+                DispatchQueue.main.async { completion(.notConnected(bluetoothOnly: bluetoothOnly)) }
                 return
             }
             let id = UUID().uuidString
             var header = fields
             header["id"] = id
-            self.pendingResults[id] = (active.id, { message in DispatchQueue.main.async { completion(message) } })
+            self.pendingResults[id] = (active.id, { result in DispatchQueue.main.async { completion(result) } })
             active.send(Message(type, header)) { sent in
-                if !sent, let pending = self.pendingResults.removeValue(forKey: id) { pending.callback(nil) }
+                if !sent, let pending = self.pendingResults.removeValue(forKey: id) { pending.callback(.disconnected) }
             }
             self.queue.asyncAfter(deadline: .now() + timeout) {
-                if let pending = self.pendingResults.removeValue(forKey: id) { pending.callback(nil) }
+                if let pending = self.pendingResults.removeValue(forKey: id) { pending.callback(.timedOut) }
             }
         }
     }
 
-    /// Sends a text from the phone. `completion` runs on the main thread with an error, or nil on success.
-    func sendSMS(to address: String, text: String, sim: Int?, completion: @escaping (String?) -> Void) {
-        queue.async {
-            guard let active = self.active else {
-                DispatchQueue.main.async { completion("Your phone isn't connected") }
-                return
-            }
-            var header: [String: Any] = ["address": address]
-            if let sim { header["sim"] = sim }
-            self.expectAck(on: active, message: Message("sms_send", header, body: Data(text.utf8)), timeout: 20) { ok in
-                DispatchQueue.main.async { completion(ok ? nil : "Your phone couldn't send it") }
-            }
-        }
+    /// Sends a text from the phone. `completion` runs on the main thread with the phone's ack.
+    func sendSMS(to address: String, text: String, sim: Int?, completion: @escaping (AckResult) -> Void) {
+        var header: [String: Any] = ["address": address]
+        if let sim { header["sim"] = sim }
+        sendAcked(Message("sms_send", header, body: Data(text.utf8)), timeout: 20, completion: completion)
     }
 
-    /// Offers a link on the phone (it shows as a notification to tap).
-    func openOnPhone(_ url: URL) {
-        queue.async { self.active?.send(Message("open_url", ["url": url.absoluteString])) }
+    /// Offers a link on the phone (it shows as a notification to tap). Phones that don't ack
+    /// `open_url` time out: the link was sent, the outcome is unknown.
+    func openOnPhone(_ url: URL, completion: @escaping (AckResult) -> Void) {
+        sendAcked(Message("open_url", ["url": url.absoluteString]), timeout: 3, completion: completion)
     }
 
-    /// Starts or stops the phone ringing so it can be found.
-    func ringPhone(_ start: Bool) {
-        queue.async { self.active?.send(Message("ring", ["action": start ? "start" : "stop"])) }
+    /// Starts or stops the phone ringing so it can be found. `completion` (main thread): whether it was sent.
+    func ringPhone(_ start: Bool, completion: @escaping (Bool) -> Void) {
+        send(Message("ring", ["action": start ? "start" : "stop"]), completion: completion)
     }
 
-    /// Play, pause, skip or change volume on the phone.
     /// Sends a message that needs no reply. Dropped when no phone is connected.
     func send(_ message: Message) {
         queue.async { self.active?.send(message) }
     }
 
+    /// Sends a message that needs no reply; `completion` (main thread) says whether it went out.
+    private func send(_ message: Message, completion: @escaping (Bool) -> Void) {
+        queue.async {
+            guard let active = self.active else {
+                DispatchQueue.main.async { completion(false) }
+                return
+            }
+            active.send(message) { sent in DispatchQueue.main.async { completion(sent) } }
+        }
+    }
+
+    /// Play, pause, skip or change volume on the phone.
     func sendMediaCommand(_ action: String) {
         queue.async { self.active?.send(Message("media_cmd", ["action": action])) }
     }
 
-    /// Answers or declines the ringing call on the phone.
-    func sendCallCommand(_ action: String) {
-        queue.async { self.active?.send(Message("call_cmd", ["action": action])) }
+    /// Answers, declines or ends the call on the phone; over Bluetooth if that's how the call came.
+    /// Newer phones ack within 3 s; older ones never do, so `timedOut` means "sent, outcome
+    /// unknown", not failed. `completion` runs on the main thread.
+    func sendCallCommand(_ action: String, completion: @escaping (AckResult) -> Void) {
+        queue.async {
+            let done: (AckResult) -> Void = { result in DispatchQueue.main.async { completion(result) } }
+            if let active = self.active {
+                self.expectAck(on: active.id, message: Message("call_cmd", ["action": action]), timeout: 3,
+                               send: { message, sent in active.send(message, completion: sent) }, completion: done)
+            } else {
+                self.expectAck(on: self.bluetoothConnectionId, message: Message("call_cmd", ["action": action]), timeout: 3,
+                               send: { message, sent in sent(self.bluetooth.send(message)) }, completion: done)
+            }
+        }
     }
 
     /// Re-announces this Mac on the network, for example after waking, so the phone reconnects fast.
@@ -620,28 +804,29 @@ final class LinkServer {
         }
     }
 
-    /// Clears a notification on the phone.
-    func dismissNotification(key: String) {
-        queue.async { self.active?.send(Message("notif_dismiss", ["key": key])) }
+    /// Clears a notification on the phone. `completion` (main thread): whether it was sent.
+    func dismissNotification(key: String, completion: @escaping (Bool) -> Void = { _ in }) {
+        send(Message("notif_dismiss", ["key": key]), completion: completion)
     }
 
-    /// Streams files to the connected phone.
+    /// Streams files to the connected phone. Check they can be read first (`FileAccess`): the
+    /// result reports any that can't. Nil when nothing was given.
     func sendFiles(_ urls: [URL]) -> String? {
+        guard !urls.isEmpty else { return nil }
         let batch = UUID().uuidString
-        let readable = urls.filter { FileManager.default.isReadableFile(atPath: $0.path) }
-        guard !readable.isEmpty else { return nil }
         queue.async {
             guard let active = self.active else {
-                self.emit(.outgoingFinished(id: batch, ok: false))
+                let failure: Problem.SendFailure = .disconnected
+                self.emit(.outgoingFinished(id: batch, result: OutgoingResult(total: urls.count, failed: urls.map { ($0, failure) })))
                 return
             }
-            let sender = FileSender(batch: batch, urls: readable, connection: active, queue: self.queue) { event in
+            let sender = FileSender(batch: batch, urls: urls, connection: active, queue: self.queue) { event in
                 // The sender is released here, which also breaks the server ↔ sender reference.
                 switch event {
                 case .progress(let sent, let total): self.emit(.outgoingProgress(id: batch, sent: sent, total: total))
-                case .finished(let ok):
+                case .finished(let result):
                     self.senders[batch] = nil
-                    self.emit(.outgoingFinished(id: batch, ok: ok))
+                    self.emit(.outgoingFinished(id: batch, result: result))
                 }
             } registerAck: { id, callback in
                 self.pendingAcks[id] = (active.id, callback)
@@ -654,19 +839,37 @@ final class LinkServer {
 
     // MARK: - Helpers
 
-    /// Sends a message with a fresh `id` and calls back (on the queue) with the phone's ack, or
-    /// false if it can't be sent, the connection drops, or no ack comes in time.
-    private func expectAck(on connection: PhoneConnection, message: Message, timeout: TimeInterval,
-                           completion: @escaping (Bool) -> Void) {
+    /// Sends a message with a fresh `id` to the active phone and waits for its ack.
+    /// `completion` runs on the main thread.
+    private func sendAcked(_ message: Message, timeout: TimeInterval, completion: @escaping (AckResult) -> Void) {
+        queue.async {
+            guard let active = self.active else {
+                DispatchQueue.main.async { completion(.disconnected) }
+                return
+            }
+            self.expectAck(on: active.id, message: message, timeout: timeout,
+                           send: { message, sent in active.send(message, completion: sent) }) { result in
+                DispatchQueue.main.async { completion(result) }
+            }
+        }
+    }
+
+    /// Sends a message with a fresh `id` and calls back (on the queue) with the phone's ack:
+    /// `disconnected` if it can't be sent or the connection drops, `timedOut` if no ack comes in time.
+    private func expectAck(on connection: UUID, message: Message, timeout: TimeInterval,
+                           send: (Message, @escaping (Bool) -> Void) -> Void,
+                           completion: @escaping (AckResult) -> Void) {
         let id = UUID().uuidString
         var message = message
         message.header["id"] = id
-        pendingAcks[id] = (connection.id, completion)
-        connection.send(message) { sent in
-            if !sent, let pending = self.pendingAcks.removeValue(forKey: id) { pending.callback(false) }
+        pendingAcks[id] = (connection, completion)
+        send(message) { sent in
+            self.queue.async {
+                if !sent, let pending = self.pendingAcks.removeValue(forKey: id) { pending.callback(.disconnected) }
+            }
         }
         queue.asyncAfter(deadline: .now() + timeout) {
-            if let pending = self.pendingAcks.removeValue(forKey: id) { pending.callback(false) }
+            if let pending = self.pendingAcks.removeValue(forKey: id) { pending.callback(.timedOut) }
         }
     }
 
