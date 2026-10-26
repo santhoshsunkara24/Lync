@@ -357,9 +357,6 @@ private final class PanelDropView: NSView {
 final class NotchSensor {
     private let window: NSPanel
     private let view: SensorView
-    /// The notch swelling a touch under the pointer: drawn in its own window that takes no clicks,
-    /// so the menu bar around the notch stays exactly as clickable as before.
-    private let lip = NotchLip()
 
     init(onHover: @escaping () -> Void, onClick: @escaping () -> Void, drop: FileDropHandler, menu: @escaping () -> NSMenu) {
         window = NSPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)
@@ -371,7 +368,6 @@ final class NotchSensor {
         window.ignoresMouseEvents = false
         view = SensorView(onHover: onHover, onClick: onClick, drop: drop, menu: menu)
         window.contentView = view
-        view.onPointer = { [lip] inside in lip.swell(inside) }
     }
 
     /// Covers the notch on the built-in display; hidden when there's no notch or in menu bar mode.
@@ -380,7 +376,6 @@ final class NotchSensor {
         guard active, let screen = NSScreen.screens.first(where: { $0.safeAreaInsets.top > 0 }),
               let left = screen.auxiliaryTopLeftArea, let right = screen.auxiliaryTopRightArea else {
             window.orderOut(nil)
-            lip.hide()
             if ProcessInfo.processInfo.environment["WALLHOP_CAPTURE"] == "1" { NSLog("Lync: sensor visible=\(window.isVisible)") }
             return
         }
@@ -391,77 +386,6 @@ final class NotchSensor {
         view.frame = NSRect(origin: .zero, size: window.frame.size)
         view.resetTracking()
         window.orderFrontRegardless()
-        lip.place(notch: window.frame)
-    }
-}
-
-/// A black notch-shaped layer exactly over the notch, invisible at rest (black on black). Under
-/// the pointer it springs 6 pt wider and 3 pt deeper, and back when the pointer leaves: the notch
-/// answers before the click. Nothing moves with Reduce Motion.
-private final class NotchLip {
-    private let window: NSPanel
-    private let shape = CAShapeLayer()
-    private var notch = NSRect.zero
-    private static let grow = CGSize(width: 6, height: 3)
-
-    init() {
-        window = NSPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)
-        window.isOpaque = false
-        window.backgroundColor = .clear
-        window.hasShadow = false
-        window.ignoresMouseEvents = true
-        window.level = NSWindow.Level(rawValue: NSWindow.Level.statusBar.rawValue + 1)
-        window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
-        let view = NSView()
-        view.wantsLayer = true
-        shape.fillColor = NSColor.black.cgColor
-        view.layer?.addSublayer(shape)
-        window.contentView = view
-        CapturePrivacy.apply(window)
-    }
-
-    func place(notch: NSRect) {
-        self.notch = notch
-        let frame = NSRect(x: notch.minX - Self.grow.width, y: notch.minY - Self.grow.height,
-                           width: notch.width + Self.grow.width * 2, height: notch.height + Self.grow.height)
-        window.setFrame(frame, display: true)
-        shape.frame = CGRect(origin: .zero, size: frame.size)
-        shape.path = path(swollen: false)
-        window.orderFrontRegardless()
-    }
-
-    func hide() { window.orderOut(nil) }
-
-    func swell(_ inside: Bool) {
-        guard notch.width > 0, !WMotion.reduceMotion else { return }
-        let to = path(swollen: inside)
-        let spring = CASpringAnimation(keyPath: "path")
-        spring.fromValue = shape.presentation()?.path ?? shape.path
-        spring.toValue = to
-        // Apple's numbers for a small, quick, no-bounce response.
-        spring.mass = 1; spring.stiffness = 420; spring.damping = 2 * sqrt(420) * (inside ? 0.85 : 1)
-        spring.duration = spring.settlingDuration
-        shape.path = to
-        shape.add(spring, forKey: "swell")
-    }
-
-    /// The notch's shape in the window: flat top, rounded bottom corners, grown or not.
-    private func path(swollen: Bool) -> CGPath {
-        let w = notch.width + (swollen ? Self.grow.width * 2 : 0)
-        let h = notch.height + (swollen ? Self.grow.height : 0)
-        let x = (shape.bounds.width - w) / 2
-        let top = shape.bounds.height
-        let rect = CGRect(x: x, y: top - h, width: w, height: h)
-        let r: CGFloat = swollen ? 11 : 9
-        let p = CGMutablePath()
-        p.move(to: CGPoint(x: rect.minX, y: rect.maxY))
-        p.addLine(to: CGPoint(x: rect.minX, y: rect.minY + r))
-        p.addQuadCurve(to: CGPoint(x: rect.minX + r, y: rect.minY), control: CGPoint(x: rect.minX, y: rect.minY))
-        p.addLine(to: CGPoint(x: rect.maxX - r, y: rect.minY))
-        p.addQuadCurve(to: CGPoint(x: rect.maxX, y: rect.minY + r), control: CGPoint(x: rect.maxX, y: rect.minY))
-        p.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY))
-        p.closeSubpath()
-        return p
     }
 }
 
@@ -498,17 +422,6 @@ private final class SensorView: NSView {
 
     // The notch opens on a click only: hovering it does nothing, so moving the pointer to the top
     // of the screen (menus, tabs, fullscreen toolbars) never pops the panel open by accident.
-    /// The pointer arriving on or leaving the notch: it swells to say it's clickable (it still
-    /// opens only on a click).
-    var onPointer: (Bool) -> Void = { _ in }
-
-    override func mouseEntered(with event: NSEvent) {
-        guard NSEvent.pressedMouseButtons == 0 else { return }
-        onPointer(true)
-    }
-
-    override func mouseExited(with event: NSEvent) { onPointer(false) }
-
     override func mouseDown(with event: NSEvent) {
         if event.modifierFlags.contains(.control) {
             rightMouseDown(with: event)

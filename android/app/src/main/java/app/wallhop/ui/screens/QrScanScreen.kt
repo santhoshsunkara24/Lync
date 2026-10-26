@@ -75,7 +75,7 @@ import java.util.concurrent.Executors
  * screen is open, and frames never leave the phone.
  */
 @Composable
-fun QrScanScreen(onScanned: (QrInvite) -> Unit, onClose: () -> Unit, onEnterAddress: () -> Unit = onClose) {
+fun QrScanScreen(onScanned: (QrInvite) -> Unit, onClose: () -> Unit) {
     val context = LocalContext.current
     val activity = LocalActivity.current
     val haptics = rememberHaptics()
@@ -148,7 +148,7 @@ fun QrScanScreen(onScanned: (QrInvite) -> Unit, onClose: () -> Unit, onEnterAddr
                     Text(problem.title, style = Type.title3, color = Color.White, textAlign = TextAlign.Center)
                     Text(problem.action, style = Type.subheadline, color = Color.White.copy(alpha = 0.75f), textAlign = TextAlign.Center)
                     Spacer(Modifier.height(8.dp))
-                    WButton(app.wallhop.core.Fix.EnterAddress.label, onEnterAddress, style = ButtonStyle.Filled)
+                    WButton("Go back", onClose, style = ButtonStyle.Filled)
                 }
                 allowed && newer -> {
                     val problem = app.wallhop.core.Problems.QR_NEWER
@@ -219,7 +219,19 @@ private fun CameraPreview(onCode: (String) -> Boolean, onFailure: () -> Unit) {
                     return@addListener
                 }
                 val preview = Preview.Builder().build().also { it.surfaceProvider = view.surfaceProvider }
+                // 1080p, not CameraX's 640×480 default: the Mac's QR is a few centimetres wide, and
+                // from an arm's length it needs the detail to have about 3 pixels per module.
                 val analysis = ImageAnalysis.Builder()
+                    .setResolutionSelector(
+                        androidx.camera.core.resolutionselector.ResolutionSelector.Builder()
+                            .setResolutionStrategy(
+                                androidx.camera.core.resolutionselector.ResolutionStrategy(
+                                    android.util.Size(1920, 1080),
+                                    androidx.camera.core.resolutionselector.ResolutionStrategy.FALLBACK_RULE_CLOSEST_HIGHER_THEN_LOWER,
+                                ),
+                            )
+                            .build(),
+                    )
                     .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                     .build()
                 analysis.setAnalyzer(executor) { image ->

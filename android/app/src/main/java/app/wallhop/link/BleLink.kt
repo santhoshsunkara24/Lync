@@ -196,7 +196,8 @@ class BleLink(
 
     @Synchronized
     private fun stopAdvertising() {
-        if (!advertising) return
+        // Always ask Android, even when we think it already stopped: on some phones a set can
+        // stay on after a central connects, and skipping this leaves it advertising a stale tag.
         advertising = false
         runCatching { adapter?.bluetoothLeAdvertiser?.stopAdvertising(advertiseCallback) }
     }

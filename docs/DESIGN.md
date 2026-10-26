@@ -257,7 +257,7 @@ All components live in `ui/components/` and take colours/typography from tokens 
 | `prominent` | `glass.tinted` capsule, white `headline` label, 50 dp tall | One primary action per screen (Pair, Send) |
 | `glass` | `glass.regular` capsule, `label` text, 50 dp | Secondary actions on floating layers |
 | `filled` | `tint @ 15%` fill, `tint` label, 50 dp | Secondary actions inside content |
-| `plain` | Text only in `tint`, `body` | Inline actions, "Enter address instead" |
+| `plain` | Text only in `tint`, `body` | Inline actions, "Get Lync for Mac" |
 | `destructive` | Any of the above with `red` | Forget Mac, Decline |
 | `circle` | 44 dp circle, glass, 20 dp icon | Top bar actions, close |
 
@@ -387,7 +387,7 @@ All components live in `ui/components/` and take colours/typography from tokens 
 ```
 Not paired:   Welcome → Connect (find Mac) → Pairing code → Done (sheet) → Mac tab
 Paired:       Tab bar: Mac | Activity | Settings
-Sheets:       Send text · Enter address · App notifications (from Settings, pushed) · Forget Mac
+Sheets:       Send text · App notifications (from Settings, pushed) · Forget Mac
 External:     Share sheet target "Send to Mac" (glass sheet, §6.8) · Quick Settings tile
 ```
 
@@ -398,7 +398,8 @@ External:     Share sheet target "Send to Mac" (glass sheet, §6.8) · Quick Set
   HopDots, restyled: 6 dp dots, `label` colour, travel on `spring.smooth`).
 - Section "Macs on this Wi-Fi": inset grouped list; each Mac row = gray laptop tile + name +
   IP subtitle + chevron. While searching: activity indicator in the section header.
-- Footer link: `plain` "Enter the Mac's address instead" → Enter address sheet (medium).
+- Footer link: `plain` "Get Lync for Mac". No typed addresses: pair by QR, or tap a Mac found
+  on the Wi‑Fi and compare the code.
 - Errors appear as an inline row with red icon, not a separate card.
 
 ### 6.3 Pairing code
@@ -551,8 +552,8 @@ EmptyState, CodeDisplay, Thumbnail/AppIcon.
 1. Navigation: tab host (Mac / Activity / Settings) + pushed App notifications screen +
    sheets. Keep `MainActivity` single-activity.
 2. Rebuild: Connect, Pairing, Mac tab, Activity tab (with filters, swipe, context menu),
-   Settings tab (permissions become rows), App notifications, Send text sheet, Enter address
-   sheet, Forget confirmation.
+   Settings tab (permissions become rows), App notifications, Send text sheet, Forget
+   confirmation.
 3. Rebuild the share sheet (`ShareActivity`) on GlassSheet.
 4. Replace snackbars with ToastBanner; remove Material ripples and circular progress.
 **Done when:** every screen matches §6 on the real phone, screenshots reviewed in both themes.

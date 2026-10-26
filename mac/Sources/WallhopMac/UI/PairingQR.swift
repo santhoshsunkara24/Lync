@@ -20,10 +20,10 @@ struct PairingQR: View {
     @State private var generation = 0
     /// The invite this QR shows, so leaving cancels only that one.
     @State private var inviteURL: URL?
-    /// What to type on the phone instead, when its camera can't be used.
-    @State private var address: String?
 
-    private var side: CGFloat { bare ? 196 : 180 }
+    /// Big enough for the phone to read from an arm's length: each module is over 1 mm on a
+    /// Retina screen, where it was under 1 mm at 196 pt.
+    private var side: CGFloat { 260 }
 
     var body: some View {
         VStack(spacing: 10) {
@@ -74,13 +74,6 @@ struct PairingQR: View {
                     .font(.wh(11, .medium))
                     .foregroundStyle(WTheme.secondary)
                     .multilineTextAlignment(.center)
-                if !failed, let address {
-                    // The phone's "Enter address" when its camera can't be used.
-                    Text("Or type \(address) on your phone")
-                        .font(.wh(11, .medium))
-                        .foregroundStyle(WTheme.secondary)
-                        .textSelection(.enabled)
-                }
                 HStack(spacing: 8) {
                     if failed, let title = problem.actionTitle, let action = problem.action {
                         Button(title, action: action).buttonStyle(WPill(compact: true))
@@ -145,7 +138,6 @@ struct PairingQR: View {
         }
         failed = false
         inviteURL = url
-        address = model.server.manualAddress()
         image = Self.qr(url.absoluteString)
         generation += 1
     }
@@ -166,7 +158,8 @@ struct PairingQR: View {
     static func qr(_ text: String) -> NSImage? {
         let filter = CIFilter.qrCodeGenerator()
         filter.message = Data(text.utf8)
-        filter.correctionLevel = "M"
+        // Low: a screen doesn't get scratched or creased, and fewer modules read from further away.
+        filter.correctionLevel = "L"
         guard let output = filter.outputImage else { return nil }
         let rep = NSCIImageRep(ciImage: output)
         let image = NSImage(size: rep.size)

@@ -1771,6 +1771,11 @@ final class AppModel: ObservableObject {
         server.disconnect(publicKey: phone.publicKey)
         pairedPhones = server.paired.all
         feedback("Forgot \(phone.name)", symbol: "iphone.slash")
+        // No phone left: go straight to the QR, so pairing again is one step, not a hunt for it.
+        if pairedPhones.isEmpty {
+            onboardingStep = .scan
+            panelPage = .home
+        }
     }
 
     /// The standard About window, with the version. The panel closes so it doesn't cover it.

@@ -24,7 +24,6 @@ enum class Fix(val label: String) {
     /** The releases page, for a newer Lync. */
     Update("Get update"),
     OpenLync("Open Lync"),
-    EnterAddress("Enter address"),
 }
 
 /** Why the paired Mac isn't connected. */
@@ -280,7 +279,7 @@ object Problems {
     val CANT_STAY_RUNNING = Problem("Lync can't stay running", "Allow Unrestricted battery for Lync.", listOf(Fix.BatterySettings))
     const val BACKGROUND_DECLINED = "Background stays off until you allow it."
     val QR_NEWER = Problem("Code is from a newer Lync", "Update Lync on this phone.", listOf(Fix.Update))
-    val CAMERA_FAILED = Problem("Couldn't start the camera", "Another app may be using it. Try again, or enter the Mac's address instead.", listOf(Fix.EnterAddress))
+    val CAMERA_FAILED = Problem("Couldn't start the camera", "Another app may be using it. Close it, then scan again, or go back and pick your Mac from the list.")
     val CLIPBOARD_NOT_TEXT = Problem("Only text from the clipboard", "Share photos with Send to Mac.")
     val CLIPBOARD_EMPTY = Problem("Clipboard is empty", "Copy some text first.")
     const val FILE_GONE = "File was moved or deleted"

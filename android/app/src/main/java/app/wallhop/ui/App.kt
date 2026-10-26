@@ -164,8 +164,6 @@ fun WallhopRoot(link: LinkManager, demo: Boolean = false) {
     var showApps by rememberSaveable { mutableStateOf(false) }
     var showLicences by rememberSaveable { mutableStateOf(false) }
     var scanning by rememberSaveable { mutableStateOf(false) }
-    // The scanner's "Enter address": the connect screen opens its address sheet.
-    var askAddress by remember { mutableStateOf(false) }
     val introPrefs = remember { context.getSharedPreferences("setup", Context.MODE_PRIVATE) }
     // A phone that has paired before never sees the tour again (forgetting the Mac, reinstalling over it).
     var introDone by remember { mutableStateOf(demo || introPrefs.getBoolean("intro_done", false) || link.pairedMac != null) }
@@ -283,7 +281,6 @@ fun WallhopRoot(link: LinkManager, demo: Boolean = false) {
                                 link.pair(invite)
                             },
                             onClose = { scanning = false },
-                            onEnterAddress = { scanning = false; askAddress = true },
                         )
                     } else {
                         ConnectScreen(
@@ -297,8 +294,6 @@ fun WallhopRoot(link: LinkManager, demo: Boolean = false) {
                             onDismissProblem = { link.dismissPairingProblem() },
                             onScan = { scanning = true },
                             onRetry = retryPair,
-                            askAddress = askAddress,
-                            onAddressAsked = { askAddress = false },
                         )
                     }
                     1 -> {

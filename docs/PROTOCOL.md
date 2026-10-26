@@ -195,7 +195,11 @@ it). So, once ready, each side sends `ping` every 15 s and closes the link after
 receiving anything. The Mac also pings as soon as it wakes and closes the link if nothing comes back
 within 6 s. When an `otp` gets no `ack` within 10 s, the phone closes the link, keeps the code, and
 advertises again at once; the code goes across on the next link. A Mac may subscribe over a radio link
-that never went down: the phone takes that as a new connection.
+that never went down: the phone takes that as a new connection. On such a link the Mac unsubscribes and
+subscribes again before its `hello` (macOS may still count it as subscribed and never confirm), and
+closes the link if the phone's services change. While it has no link, every 10 s the Mac restarts its
+scan and also tries a phone already connected at the system level, whose advertisements macOS may not
+report; that phone is identified by the key in its `hello_ok`.
 
 **Test vector.** Private keys: phone static = 32 × `0x11`, phone ephemeral = 32 × `0x22`,
 Mac static = 32 × `0x33`, Mac ephemeral = 32 × `0x44` (X25519, clamped as usual).
