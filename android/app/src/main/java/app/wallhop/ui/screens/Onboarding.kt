@@ -279,7 +279,7 @@ private fun Dots(position: Float, count: Int) {
  * The tour before pairing: who Lync is, then codes, files and calls. Skip goes straight to pairing.
  */
 @Composable
-fun IntroTour(onDone: () -> Unit) {
+fun IntroTour(onDone: () -> Unit, onPair: () -> Unit = onDone) {
     val pager = rememberPagerState { 4 }
     val scope = rememberCoroutineScope()
     val page = pager.currentPage
@@ -328,7 +328,7 @@ fun IntroTour(onDone: () -> Unit) {
                     Dots(position - 1f, 3)
                     Spacer(Modifier.weight(1f))
                     OnboardingPill(if (page == 3) "Pair my Mac" else "Next", {
-                        if (page == 3) onDone() else scope.launch { pager.animateScrollToPage(page + 1) }
+                        if (page == 3) onPair() else scope.launch { pager.animateScrollToPage(page + 1) }
                     })
                 }
             }

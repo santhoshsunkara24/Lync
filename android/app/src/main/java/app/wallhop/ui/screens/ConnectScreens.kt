@@ -171,7 +171,20 @@ fun ConnectScreen(
 }
 
 @Composable
-fun PairingScreen(state: LinkState.Pairing, onCancel: () -> Unit, success: Boolean = false) {
+fun PairingScreen(
+    state: LinkState.Pairing,
+    onCancel: () -> Unit,
+    success: Boolean = false,
+    /** The QR code just scanned, when this pairing came from one: the link forms out of it. */
+    qrText: String? = null,
+    /** Where that code was on screen (window pixels): it comes forward from there. */
+    qrFrom: androidx.compose.ui.geometry.Rect? = null,
+    onLinked: () -> Unit = {},
+) {
+    if (qrText != null && state.code == null) {
+        app.wallhop.ui.components.QrLinking(qrText, state.macName, success, onCancel = onCancel, onFinished = onLinked, from = qrFrom)
+        return
+    }
     // Back stops the pairing rather than leaving it running behind the home screen.
     BackHandler(enabled = !success, onBack = onCancel)
     androidx.compose.animation.AnimatedContent(
@@ -237,7 +250,7 @@ internal fun rowExit(reduceMotion: Boolean) =
     if (reduceMotion) fadeOut(Fades.fadeOut()) else shrinkVertically(androidx.compose.animation.core.spring(1f, 500f)) + fadeOut(Fades.fadeOut())
 
 /** Shares the Mac app's download link, so it can be opened on the Mac. */
-private fun shareMacLink(context: android.content.Context) {
+internal fun shareMacLink(context: android.content.Context) {
     val send = android.content.Intent(android.content.Intent.ACTION_SEND)
         .setType("text/plain")
         .putExtra(android.content.Intent.EXTRA_SUBJECT, "Lync for Mac")

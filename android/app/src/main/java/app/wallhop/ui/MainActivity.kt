@@ -1,5 +1,7 @@
 package app.wallhop.ui
 
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.core.net.toUri
 
 import android.os.Bundle
@@ -28,7 +30,7 @@ class MainActivity : ComponentActivity() {
         // The preview build (to share for a look) always shows sample data.
         val demo = app.wallhop.BuildConfig.PREVIEW ||
             (app.wallhop.BuildConfig.DEBUG || app.wallhop.BuildConfig.STRESS_HOOKS) && intent.getBooleanExtra("demo", false)
-        // With sample data, `--es demo_screen intro|connect|pairing|paired|linked|allow|sending` opens one screen on
+        // With sample data, `--es demo_screen intro|connect|pairing|paired|linked|qrlink|allow|sending` opens one screen on
         // its own (sending files, the pairing code, pairing done, finding a Mac), for screenshots.
         val demoScreen = if (demo) intent.getStringExtra("demo_screen") else null
         handleIntent(intent)
@@ -114,6 +116,8 @@ internal object AppNav {
     val pick = kotlinx.coroutines.flow.MutableStateFlow(false)
     /** A feature to open the ask sheet for (Features.Key.pref), from the Mac. */
     val ask = kotlinx.coroutines.flow.MutableStateFlow<String?>(null)
+    /** Pair a Mac now, from inside the app while looking around without one. */
+    val pair = kotlinx.coroutines.flow.MutableStateFlow(false)
 }
 
 /** One screen with sample data, for screenshots (test builds and the preview build only). */
@@ -132,6 +136,17 @@ private fun DemoScreen(which: String) {
         "intro" -> app.wallhop.ui.screens.IntroTour(onDone = {})
         "allow" -> app.wallhop.ui.screens.AllowCodesScreen(onAllow = {}, onLater = {})
         "linked" -> app.wallhop.ui.screens.LinkedMoment(mac)
+        // The link forming out of a scanned code; the Mac "says yes" a second in.
+        "qrlink" -> {
+            var yes by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
+            androidx.compose.runtime.LaunchedEffect(Unit) { kotlinx.coroutines.delay(1_000); yes = true }
+            app.wallhop.ui.components.QrLinking(
+                "wallhop://pair?v=1&n=MacBook%20Air&h=192.168.0.4&p=47474&k=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&t=BBBBBBBBBBBBBBBBBBBBBB",
+                mac, yes, onCancel = {}, onFinished = {},
+                // As if scanned from arm's length, a little off centre.
+                from = androidx.compose.ui.geometry.Rect(760f, 1560f, 980f, 1780f),
+            )
+        }
         "pairing", "paired" -> app.wallhop.ui.screens.PairingScreen(
             app.wallhop.link.LinkState.Pairing(mac, "305718"), onCancel = {}, success = which == "paired",
         )

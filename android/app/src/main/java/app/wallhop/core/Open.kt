@@ -31,7 +31,7 @@ object LocalNetwork {
 
 /**
  * Opens the place a [Fix] points to in Android's settings (or the releases page). Fixes that
- * need the app (Try again, Pair again, Choose again) return false: the caller does
+ * need the app (Try again, Pair again, Pair your Mac, Choose again) return false: the caller does
  * those. When nothing can be opened, an Android toast says where to go instead.
  */
 object Open {

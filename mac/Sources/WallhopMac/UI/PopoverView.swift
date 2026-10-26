@@ -95,7 +95,7 @@ struct PanelView: View {
     }
 
     /// Not paired yet: the onboarding steps on plain black, no colour wash.
-    private var onboarding: Bool { page == .home && !model.isPaired && model.pairingRequest == nil }
+    private var onboarding: Bool { (page == .home && !model.isPaired && model.pairingRequest == nil) || model.qrLinking != nil }
 
     @ViewBuilder private var background: some View {
         let t = theme.theme
@@ -139,6 +139,17 @@ struct PanelView: View {
     }
 
     @ViewBuilder private var content: some View {
+        if let moment = model.qrLinking {
+            QrLinkingView(qrText: moment.text, phoneName: moment.name) { withMotion(WMotion.smooth) { model.finishQrLinking() } }
+                // Closed before it finished: nothing left to watch.
+                .onChange(of: model.panelOpen) { _, open in if !open { model.finishQrLinking() } }
+                .transition(.opacity)
+        } else {
+            pageContent
+        }
+    }
+
+    @ViewBuilder private var pageContent: some View {
         switch page {
         case .settings: SettingsPage(model: model).revealSection(0)
         case .addPhone: AddPhonePage(model: model).revealSection(0)

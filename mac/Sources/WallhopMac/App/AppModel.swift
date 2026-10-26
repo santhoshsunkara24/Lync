@@ -175,6 +175,10 @@ final class AppModel: ObservableObject {
     @Published var showingPairingQR = false {
         didSet { if showingPairingQR { panelPage = .addPhone } }
     }
+    /// The phone just scanned the panel's QR: the link forms out of that code before home shows.
+    @Published private(set) var qrLinking: QrLinkingMoment?
+    /// The invite the panel's QR shows right now (set by PairingQR), for the link to form out of.
+    var shownQR: String?
     /// The panel (notch or menu bar) and which page it shows.
     @Published var panelOpen = false
     @Published var panelPage: PanelPage = .home
@@ -563,10 +567,17 @@ final class AppModel: ObservableObject {
             NSSound(named: "Glass")?.play()
 
         case .pairedWithQR(let name):
+            // Scanned while the panel shows the code: it turns into the link right there.
+            let onQR = panelOpen && (panelPage == .addPhone || (!isPaired && pairingRequest == nil && onboardingStep == .scan))
             reloadPaired()
             showingPairingQR = false
-            if panelPage == .addPhone { panelPage = .home }
-            celebrateLink(name)
+            if onQR, let text = shownQR {
+                linkedAt = Date()
+                qrLinking = QrLinkingMoment(text: text, name: name)
+            } else {
+                if panelPage == .addPhone { panelPage = .home }
+                celebrateLink(name)
+            }
 
         case .pairingEnded(let id):
             if pairingRequest?.id == id { pairingRequest = nil }
@@ -1154,6 +1165,13 @@ final class AppModel: ObservableObject {
         pairingRequest = nil
         hideLive()
         if accept, let name { celebrateLink(name) }
+    }
+
+    /// The link has formed and said "You're linked.": on to home.
+    func finishQrLinking() {
+        guard qrLinking != nil else { return }
+        qrLinking = nil
+        panelPage = .home
     }
 
     /// A phone was just paired, on the card or with the QR: the link catches under the notch,
@@ -1892,4 +1910,9 @@ extension URL {
     var isImage: Bool {
         (try? resourceValues(forKeys: [.contentTypeKey]).contentType?.conforms(to: .image)) ?? false
     }
+}
+
+struct QrLinkingMoment: Equatable {
+    let text: String
+    let name: String
 }

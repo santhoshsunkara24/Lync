@@ -32,6 +32,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
@@ -909,25 +911,20 @@ class LinkManager private constructor(private val context: Context) {
 
     fun forgetMac() {
         // Tell the Mac first (PROTOCOL.md, forget), so it drops this phone too; then close.
-        // Over Wi-Fi or, when that's down, the Bluetooth link: without it the Mac never hears,
-        // keeps the pairing and goes on showing this phone as away.
+        // Over Wi-Fi and the Bluetooth link both at once, whichever are up: without it the Mac
+        // never hears, keeps the pairing and goes on showing this phone as away.
         val open = session?.takeIf { !it.closed }
-        val ble = blePath?.takeIf { !it.closed }
+        val paths = listOfNotNull<MacPath>(open, blePath?.takeIf { !it.closed })
         session = null
-        if (open != null) {
-            scope.launch {
-                withTimeoutOrNull(1_500) { runCatching { open.send(Message.of("forget")) } }
-                open.close()
-            }
-        }
         store.forget()
-        if (open == null && ble != null) {
-            // Bluetooth stops once forgotten, so let the message go out first.
-            scope.launch {
-                withTimeoutOrNull(1_500) { runCatching { ble.send(Message.of("forget")) } }
-                updateBluetooth()
-            }
-        } else {
+        scope.launch {
+            paths.map { path ->
+                async { withTimeoutOrNull(1_500) { runCatching { path.send(Message.of("forget")) } } }
+            }.awaitAll()
+            open?.close()
+            // Then Bluetooth off for good: no advertising, and the Mac's link to this phone
+            // dropped, rather than waiting on the job that decides whether it should run.
+            ble.stop()
             updateBluetooth()
         }
         macInfoStore.clear()

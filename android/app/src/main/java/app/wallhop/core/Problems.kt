@@ -16,6 +16,8 @@ enum class Fix(val label: String) {
     WifiSettings("Wi‑Fi settings"),
     TryAgain("Try again"),
     PairAgain("Pair again"),
+    /** No Mac paired yet (looking around first): the connect screen. */
+    PairMac("Pair your Mac"),
     ChooseAgain("Choose again"),
     StorageSettings("Storage settings"),
     NotificationSettings("Notification settings"),
@@ -112,6 +114,8 @@ object Problems {
         Away.VersionMismatch -> Problem("Lync versions don't match", "Update Lync on this phone and on your Mac.", listOf(Fix.Update))
     }
 
+    /** Looking around without a Mac: sending needs one paired first. */
+    val NO_MAC_YET = Problem("No Mac yet", "Pair your Mac to send to it.", listOf(Fix.PairMac))
     /** The Mac said it no longer knows this phone (state Forgotten). */
     val FORGOTTEN = Problem("Your Mac forgot this phone", "Pair again to send to your Mac.", listOf(Fix.PairAgain))
     /** A queued send that can't go because the Mac forgot this phone. */

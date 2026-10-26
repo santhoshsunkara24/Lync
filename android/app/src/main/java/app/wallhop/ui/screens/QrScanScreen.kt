@@ -75,7 +75,7 @@ import java.util.concurrent.Executors
  * screen is open, and frames never leave the phone.
  */
 @Composable
-fun QrScanScreen(onScanned: (QrInvite) -> Unit, onClose: () -> Unit) {
+fun QrScanScreen(onScanned: (QrInvite, androidx.compose.ui.geometry.Rect?) -> Unit, onClose: () -> Unit) {
     val context = LocalContext.current
     val activity = LocalActivity.current
     val haptics = rememberHaptics()
@@ -103,13 +103,17 @@ fun QrScanScreen(onScanned: (QrInvite) -> Unit, onClose: () -> Unit) {
     var cameraFailed by remember { mutableStateOf(false) }
     // A good code: the frame closes in on it and turns mint for a beat, then pairing goes on.
     var found by remember { mutableStateOf<app.wallhop.link.QrInvite?>(null) }
+    // Where the code was on screen, for the link to form out of it from there.
+    var foundAt by remember { mutableStateOf<androidx.compose.ui.geometry.Rect?>(null) }
     val lock = remember { androidx.compose.animation.core.Animatable(0f) }
+    var handedOver by remember { mutableStateOf(false) }
+    fun onScannedOnce(invite: QrInvite) { if (!handedOver) { handedOver = true; onScanned(invite, foundAt) } }
     LaunchedEffect(found) {
         val invite = found ?: return@LaunchedEffect
         haptics.perform(Haptic.Success)
-        lock.animateTo(1f, androidx.compose.animation.core.spring(1f, 600f))
-        delay(120)
-        onScanned(invite)
+        // Hands over as the frame settles, not after a pause: the code carries straight on forward.
+        lock.animateTo(1f, androidx.compose.animation.core.spring(1f, 600f), block = { if (value > 0.9f) onScannedOnce(invite) })
+        onScannedOnce(invite)
     }
     // A code that isn't Lync's buzzes once, not on every frame it stays in view.
     var lastWrong by remember { mutableStateOf<String?>(null) }
@@ -118,9 +122,10 @@ fun QrScanScreen(onScanned: (QrInvite) -> Unit, onClose: () -> Unit) {
         if (allowed && !cameraFailed) {
             CameraPreview(
                 onFailure = { cameraFailed = true },
-                onCode = { text ->
+                onCode = { text, at ->
                     val invite = QrInvite.parse(text)
                     if (invite != null) {
+                        foundAt = at
                         found = invite
                         true
                     } else {
@@ -189,7 +194,7 @@ fun QrScanScreen(onScanned: (QrInvite) -> Unit, onClose: () -> Unit) {
  * [onFailure] when the camera can't be started.
  */
 @Composable
-private fun CameraPreview(onCode: (String) -> Boolean, onFailure: () -> Unit) {
+private fun CameraPreview(onCode: (String, androidx.compose.ui.geometry.Rect?) -> Boolean, onFailure: () -> Unit) {
     val context = LocalContext.current
     val lifecycle = LocalLifecycleOwner.current
     val executor = remember { Executors.newSingleThreadExecutor() }
@@ -235,13 +240,17 @@ private fun CameraPreview(onCode: (String) -> Boolean, onFailure: () -> Unit) {
                     .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                     .build()
                 analysis.setAnalyzer(executor) { image ->
-                    val text = decode(reader, image)
+                    val result = decode(reader, image)
+                    val text = result?.text
+                    val rotation = image.imageInfo.rotationDegrees
+                    val imageW = image.width; val imageH = image.height
                     image.close()
                     // The same unusable code is reported once, not on every frame.
                     if (text != null && !done && text != lastText) {
                         main.execute {
                             lastText = text
-                            if (!done && !disposed.get() && onCode(text)) {
+                            val at = result?.let { codeOnScreen(it.resultPoints, rotation, imageW, imageH, view) }
+                            if (!done && !disposed.get() && onCode(text, at)) {
                                 done = true
                                 provider.unbindAll()
                             }
@@ -267,15 +276,43 @@ private fun CameraPreview(onCode: (String) -> Boolean, onFailure: () -> Unit) {
     )
 }
 
+/**
+ * Where a found code sits on screen, in window pixels: a square round its centre (the middle of
+ * the two finder patterns furthest apart), from the camera frame as the preview fills the view.
+ */
+private fun codeOnScreen(points: Array<com.google.zxing.ResultPoint>?, rotation: Int, w: Int, h: Int, view: android.view.View): androidx.compose.ui.geometry.Rect? {
+    val finders = points?.take(3)?.takeIf { it.size == 3 } ?: return null
+    // The frame turned upright, as the preview shows it.
+    val (rw, rh) = if (rotation % 180 == 0) w to h else h to w
+    val upright = finders.map { p ->
+        when (rotation) {
+            90 -> Offset(h - p.y, p.x)
+            180 -> Offset(w - p.x, h - p.y)
+            270 -> Offset(p.y, w - p.x)
+            else -> Offset(p.x, p.y)
+        }
+    }
+    val far = listOf(0 to 1, 0 to 2, 1 to 2).maxBy { (a, b) -> (upright[a] - upright[b]).getDistance() }
+    val center = (upright[far.first] + upright[far.second]) / 2f
+    // Finder centres sit 3.5 modules in from the edges; a Lync code is about 33 modules wide.
+    val side = (upright[far.first] - upright[far.second]).getDistance() / kotlin.math.sqrt(2f) * 33f / 26f
+    val scale = maxOf(view.width.toFloat() / rw, view.height.toFloat() / rh)
+    val loc = IntArray(2).also { view.getLocationInWindow(it) }
+    val cx = loc[0] + (view.width - rw * scale) / 2 + center.x * scale
+    val cy = loc[1] + (view.height - rh * scale) / 2 + center.y * scale
+    val half = side * scale / 2
+    return androidx.compose.ui.geometry.Rect(cx - half, cy - half, cx + half, cy + half)
+}
+
 /** Reads a QR from the brightness (Y) plane, which is all ZXing needs. */
-private fun decode(reader: MultiFormatReader, image: ImageProxy): String? {
+private fun decode(reader: MultiFormatReader, image: ImageProxy): com.google.zxing.Result? {
     val plane = image.planes.firstOrNull() ?: return null
     val buffer = plane.buffer
     val bytes = ByteArray(buffer.remaining()).also { buffer.get(it) }
     val stride = plane.rowStride
     val source = PlanarYUVLuminanceSource(bytes, stride, image.height, 0, 0, image.width, image.height, false)
     return try {
-        reader.decodeWithState(BinaryBitmap(HybridBinarizer(source))).text
+        reader.decodeWithState(BinaryBitmap(HybridBinarizer(source)))
     } catch (_: Exception) {
         null
     } finally {

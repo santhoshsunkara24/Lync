@@ -154,10 +154,12 @@ final class BluetoothLink: NSObject {
         }
     }
 
-    /// Drops the link if it's to this phone (it was just forgotten).
+    /// Drops the link if it's to this phone (it was just forgotten). With no phone left, stops
+    /// looking for one too, until the next pairing.
     func disconnect(publicKey: Data) {
         tagKeys[publicKey] = nil
         if let link, link.phone?.publicKey == publicKey { drop(link) }
+        if paired.all.isEmpty { setWanted(false) }
     }
 
     /// Sends a message to the phone over Bluetooth. False if there's no open link.

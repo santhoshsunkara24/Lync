@@ -41,6 +41,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.focus.FocusRequester
 import androidx.core.app.ActivityCompat
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import androidx.compose.runtime.CompositionLocalProvider
@@ -167,29 +168,51 @@ fun WallhopRoot(link: LinkManager, demo: Boolean = false) {
     val introPrefs = remember { context.getSharedPreferences("setup", Context.MODE_PRIVATE) }
     // A phone that has paired before never sees the tour again (forgetting the Mac, reinstalling over it).
     var introDone by remember { mutableStateOf(demo || introPrefs.getBoolean("intro_done", false) || link.pairedMac != null) }
+    // Without a Mac the app opens on Home, which offers pairing; the scanner shows only once the
+    // user asks for it (Home's button, or the tour's last page), and closing it goes back Home.
+    var pairing by rememberSaveable { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        AppNav.pair.collect { wanted ->
+            if (wanted) { AppNav.pair.value = false; pairing = true; scanning = true }
+        }
+    }
+    LaunchedEffect(state is LinkState.Connected) { if (state is LinkState.Connected) pairing = false }
     // The last pairing attempt, for "Try again" when it fails.
     var retryPair by remember { mutableStateOf<(() -> Unit)?>(null) }
     // Pairing just succeeded (the Mac said yes): the pairing screen stays a moment to show it.
     // Cancelling also leaves Pairing (for Searching, if a Mac was already paired): not a success.
     var lastPairing by remember { mutableStateOf<LinkState.Pairing?>(null) }
     var pairingCancelled by remember { mutableStateOf(false) }
+    // The QR code behind this pairing, for the link to form out of; and whether that moment has played.
+    var scannedQr by remember { mutableStateOf<String?>(null) }
+    // Where that code was on screen when it was scanned (window pixels).
+    var scannedAt by remember { mutableStateOf<androidx.compose.ui.geometry.Rect?>(null) }
+    var linkedShown by remember { mutableStateOf(false) }
     val pairedNow = lastPairing != null && !pairingCancelled && (state is LinkState.Searching || state is LinkState.Connected)
     LaunchedEffect(state) {
         when {
             state is LinkState.Pairing -> lastPairing = state
             pairedNow -> {
-                // Long enough for the link to snap and its ring of light to run round once.
+                // Long enough for the link to snap and its ring of light to run round once; after a
+                // scan, until the link has formed out of the code and clasped (6.6 s at most).
                 delay(2_200)
+                if (scannedQr != null) kotlinx.coroutines.withTimeoutOrNull(4_400) {
+                    androidx.compose.runtime.snapshotFlow { linkedShown }.first { shown -> shown }
+                }
                 lastPairing = null
+                scannedQr = null
             }
             else -> {
                 lastPairing = null
                 pairingCancelled = false
+                scannedQr = null
             }
         }
     }
     val screen = when {
-        state is LinkState.NotPaired || state is LinkState.PairingFailed -> 0
+        state is LinkState.NotPaired && (!introDone || pairing) -> 0
+        state is LinkState.NotPaired -> 2
+        state is LinkState.PairingFailed -> 0
         state is LinkState.Pairing || pairedNow -> 1
         else -> 2
     }
@@ -269,18 +292,29 @@ fun WallhopRoot(link: LinkManager, demo: Boolean = false) {
                         // Counted as seen the moment it shows, so leaving it any other way (Back,
                         // closing the app) doesn't bring it back on the next open.
                         LaunchedEffect(Unit) { introPrefs.edit { putBoolean("intro_done", true) } }
-                        app.wallhop.ui.screens.IntroTour(onDone = {
-                            introDone = true
-                            introPrefs.edit { putBoolean("intro_done", true) }
-                        })
+                        app.wallhop.ui.screens.IntroTour(
+                            onDone = {
+                                introDone = true
+                                introPrefs.edit { putBoolean("intro_done", true) }
+                            },
+                            // "Pair my Mac" on the last page: straight to the scanner.
+                            onPair = {
+                                introDone = true
+                                introPrefs.edit { putBoolean("intro_done", true) }
+                                pairing = true; scanning = true
+                            },
+                        )
                     } else if (scanning) {
                         app.wallhop.ui.screens.QrScanScreen(
-                            onScanned = { invite ->
+                            onScanned = { invite, at ->
+                                scannedAt = at
                                 scanning = false
                                 retryPair = { scanning = true } // A QR code is used once: scan the new one.
+                                scannedQr = invite.text.takeIf { it.isNotEmpty() }
+                                linkedShown = false
                                 link.pair(invite)
                             },
-                            onClose = { scanning = false },
+                            onClose = { scanning = false; pairing = false },
                         )
                     } else {
                         ConnectScreen(
@@ -291,7 +325,7 @@ fun WallhopRoot(link: LinkManager, demo: Boolean = false) {
                                 retryPair = { link.pair(host, port, name, typed = typed) }
                                 link.pair(host, port, name, typed = typed)
                             },
-                            onDismissProblem = { link.dismissPairingProblem() },
+                            onDismissProblem = { link.dismissPairingProblem(); pairing = false },
                             onScan = { scanning = true },
                             onRetry = retryPair,
                         )
@@ -300,7 +334,12 @@ fun WallhopRoot(link: LinkManager, demo: Boolean = false) {
                         // Held while this screen fades out, so it doesn't blank mid-transition.
                         val held = remember { arrayOfNulls<LinkState.Pairing>(1) }
                         ((state as? LinkState.Pairing) ?: lastPairing)?.let { held[0] = it }
-                        held[0]?.let { PairingScreen(it, onCancel = { pairingCancelled = true; link.cancelPairing() }, success = state !is LinkState.Pairing) }
+                        held[0]?.let {
+                            PairingScreen(
+                                it, onCancel = { pairingCancelled = true; scannedQr = null; link.cancelPairing() }, success = state !is LinkState.Pairing,
+                                qrText = scannedQr, qrFrom = scannedAt, onLinked = { linkedShown = true },
+                            )
+                        }
                     }
                     else -> CompositionLocalProvider(app.wallhop.ui.components.LocalScreenActive provides !homeCovered) { Tabs(
                         scrollToTop = scrollToTop,
@@ -368,6 +407,7 @@ fun WallhopRoot(link: LinkManager, demo: Boolean = false) {
                                 } else scope.launch { link.retryNow() }
                                 app.wallhop.core.Fix.ChooseAgain -> { hiddenSend = t.id; link.clearFinishedTransfer(); AppNav.pick.value = true }
                                 app.wallhop.core.Fix.PairAgain -> { hiddenSend = t.id; link.pairAgain() }
+                                app.wallhop.core.Fix.PairMac -> { hiddenSend = t.id; AppNav.pair.value = true }
                                 else -> app.wallhop.core.Open.run(context, fix)
                             }
                         },
@@ -545,6 +585,7 @@ private fun Tabs(
         when (fix) {
             app.wallhop.core.Fix.TryAgain -> tryAgain()
             app.wallhop.core.Fix.PairAgain -> link.pairAgain()
+            app.wallhop.core.Fix.PairMac -> AppNav.pair.value = true
             app.wallhop.core.Fix.ChooseAgain -> { link.clearFinishedTransfer(); launchPicker(lastPicker) }
             else -> app.wallhop.core.Open.run(context, fix)
         }
@@ -840,6 +881,8 @@ private fun Tabs(
             dismissSuggestion = { key -> suggested(key) },
             stopRinging = { app.wallhop.extras.PhoneFinder.stop(context) },
             pairAgain = { link.pairAgain() },
+            pairMac = { AppNav.pair.value = true },
+            pairWith = { mac -> link.pair(mac.host, mac.port, mac.name, typed = false) },
             retryConnect = { retryConnect() },
             runFix = { fix -> runFix(fix) { retryConnect() } },
             showProblem = { problem -> overlays.problem(problem) { runFix(it) { retryConnect() } } },
@@ -1093,7 +1136,9 @@ private fun HomeSlot(
     }
     val ringing by app.wallhop.extras.PhoneFinder.ringing.collectAsStateWithLifecycle()
     val bluetooth by link.bluetooth.collectAsStateWithLifecycle()
-    MacTab(state, macName, transfer, suggestion, actions = actions, card = card, ringing = ringing, bluetooth = bluetooth && !demo)
+    // No Mac yet: the ones Lync can see on this Wi-Fi, to pair with in one tap.
+    val found by link.discovered.collectAsStateWithLifecycle()
+    MacTab(state, macName, transfer, suggestion, actions = actions, card = card, ringing = ringing, bluetooth = bluetooth && !demo, found = found)
 }
 
 /** Haptics when a transfer ends; a finished one clears itself after a moment. */

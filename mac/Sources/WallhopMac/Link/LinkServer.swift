@@ -644,6 +644,8 @@ final class LinkServer {
             paired.remove(id: phone.id)
             emit(.forgotten(phone))
             connection.close()
+            // And its Bluetooth link, if that was up as well.
+            bluetooth.disconnect(publicKey: phone.publicKey)
 
         case "ring":
             if message.string("action") == "stopped" { emit(.ringStopped) }

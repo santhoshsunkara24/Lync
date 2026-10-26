@@ -103,6 +103,7 @@ struct PairingQR: View {
         visible = false
         model.server.cancelInvite(inviteURL)
         inviteURL = nil
+        model.shownQR = nil
     }
 
     /// Why there's no code: Local Network off, this Mac offline, or the listener failing.
@@ -139,6 +140,7 @@ struct PairingQR: View {
         failed = false
         inviteURL = url
         image = Self.qr(url.absoluteString)
+        model.shownQR = url.absoluteString
         generation += 1
     }
 

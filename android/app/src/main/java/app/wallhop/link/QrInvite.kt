@@ -7,7 +7,11 @@ import android.util.Base64
  * What a Mac's pairing QR holds: `wallhop://pair?v=1&n=<name>&h=<ip,ip,…>&p=<port>&k=<mac key>&t=<secret>`
  * (PROTOCOL.md, QR pairing). Keys and secret are URL-safe base64 without padding.
  */
-class QrInvite(val name: String, val hosts: List<String>, val port: Int, val macPub: ByteArray, val token: ByteArray) {
+class QrInvite(
+    val name: String, val hosts: List<String>, val port: Int, val macPub: ByteArray, val token: ByteArray,
+    /** The code exactly as scanned, so the pairing screen can draw the same pattern. */
+    val text: String = "",
+) {
     val host: String get() = hosts.first()
 
     companion object {
@@ -30,6 +34,7 @@ class QrInvite(val name: String, val hosts: List<String>, val port: Int, val mac
                 port = uri.getQueryParameter("p")?.toIntOrNull()?.takeIf { it in 1..65535 } ?: return null,
                 macPub = Base64.decode(uri.getQueryParameter("k") ?: return null, flags).takeIf { it.size == 32 } ?: return null,
                 token = Base64.decode(uri.getQueryParameter("t") ?: return null, flags).takeIf { it.size >= 16 } ?: return null,
+                text = text.trim(),
             )
         }.getOrNull()
     }

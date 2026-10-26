@@ -147,6 +147,10 @@ class MacActions(
     val stopRinging: () -> Unit,
     /** The Mac forgot this phone: drop the old pairing and pair again. */
     val pairAgain: () -> Unit,
+    /** No Mac yet: the scanner, to pair one. */
+    val pairMac: () -> Unit = {},
+    /** No Mac yet: pair with one found on this Wi-Fi (both show the same code). */
+    val pairWith: (app.wallhop.link.DiscoveredMac) -> Unit = {},
     /** Tries to reach the Mac now, then says connected or why not. */
     val retryConnect: () -> Unit,
     /** Does what a problem's button says (Wi‑Fi settings, Pair again, Try again…). */
@@ -194,9 +198,13 @@ fun MacTab(
     ringing: Boolean = false,
     /** Wi-Fi can't reach the Mac but the Bluetooth backup can: codes, calls and notifications still go. */
     bluetooth: Boolean = false,
+    /** Macs seen on this Wi-Fi, offered when none is paired. */
+    found: List<app.wallhop.link.DiscoveredMac> = emptyList(),
 ) {
     val connected = state is LinkState.Connected
     val forgotten = state is LinkState.Forgotten
+    // No Mac paired: Home invites pairing instead of showing a Mac.
+    val unpaired = state is LinkState.NotPaired
     val home = Wallhop.home
     val overlays = LocalOverlays.current
     val density = LocalDensity.current
@@ -210,6 +218,7 @@ fun MacTab(
     val screen = window.coerceAtMost(MaxContentWidth)
     // Why Text and Clipboard can't go now, for the toast (with its button) and for TalkBack.
     val problem = when {
+        unpaired -> app.wallhop.core.Problems.NO_MAC_YET
         forgotten -> app.wallhop.core.Problems.FORGOTTEN
         connected -> null
         bluetooth -> app.wallhop.core.Problems.TEXT_NEEDS_WIFI
@@ -221,7 +230,11 @@ fun MacTab(
         if (problem == null) action() else actions.showProblem(problem)
     }
     fun needsPairing(action: () -> Unit): () -> Unit = {
-        if (!forgotten) action() else actions.showProblem(app.wallhop.core.Problems.FORGOTTEN)
+        when {
+            unpaired -> actions.showProblem(app.wallhop.core.Problems.NO_MAC_YET)
+            forgotten -> actions.showProblem(app.wallhop.core.Problems.FORGOTTEN)
+            else -> action()
+        }
     }
     val since by produceState<Long?>(null, card.connectedSince) {
         val start = card.connectedSince ?: run { value = null; return@produceState }
@@ -286,8 +299,11 @@ fun MacTab(
                                 autoSize = androidx.compose.foundation.text.TextAutoSize.StepBased(minFontSize = 20.sp, maxFontSize = Title.fontSize),
                             )
                         }
-                        Spacer(Modifier.width(12.dp))
-                        RoundButton(WIcons.More, "More", Color.White.copy(alpha = 0.16f), onClick = actions.more)
+                        // Mac details and Forget only mean something once a Mac is paired.
+                        if (!unpaired) {
+                            Spacer(Modifier.width(12.dp))
+                            RoundButton(WIcons.More, "More", Color.White.copy(alpha = 0.16f), onClick = actions.more)
+                        }
                     }
                     AnimatedVisibility(
                         visible = connected && card.info.locked,
@@ -339,13 +355,17 @@ fun MacTab(
                 }
             }
             // Connected, the title says it all; forgotten, the banner above does. Otherwise, why it's away.
-            if (!connected && !forgotten) {
+            if (unpaired) {
+                item(key = "mac-title") {
+                    ConnectCard(actions, found, Modifier.itemMotion(this, 1).padding(start = 20.dp, end = 20.dp, top = 22.dp))
+                }
+            } else if (!connected && !forgotten) {
                 item(key = "mac-title") {
                     AwayCard(macName, bluetooth, (state as? LinkState.Searching)?.reason, actions,
                         Modifier.itemMotion(this, 1).padding(start = 20.dp, end = 20.dp, top = 22.dp))
                 }
             }
-            item(key = "cards") {
+            if (!unpaired) item(key = "cards") {
                 // The Mac card fills the width. When there's more (a transfer, the latest item),
                 // it narrows so the next card peeks in from the right and the row snaps card by card.
                 val others = (if (transfer != null) 1 else 0) + (if (card.latest != null) 1 else 0)
@@ -387,6 +407,7 @@ fun MacTab(
                 SectionTitle(
                     "Send to Mac",
                     when {
+                        unpaired -> "Pair your Mac to send photos, files and text."
                         forgotten -> "Pair again to send to your Mac."
                         connected -> null
                         else -> "Photos and files go across once your Mac is back."
@@ -396,7 +417,11 @@ fun MacTab(
                 )
             }
             item(key = "send") {
-                val pairReason = if (forgotten) "Pair again to send to your Mac" else null
+                val pairReason = when {
+                    unpaired -> "Pair your Mac to send"
+                    forgotten -> "Pair again to send to your Mac"
+                    else -> null
+                }
                 val chips = androidx.compose.foundation.lazy.rememberLazyListState()
                 LazyRow(
                     state = chips,
@@ -481,7 +506,7 @@ fun MacTab(
                         }
                         .padding(horizontal = 16.dp, vertical = 12.dp),
                 )
-                Box(Modifier.align(Alignment.TopEnd).padding(top = statusBar + 4.dp, end = 20.dp)) {
+                if (!unpaired) Box(Modifier.align(Alignment.TopEnd).padding(top = statusBar + 4.dp, end = 20.dp)) {
                     RoundButton(WIcons.More, "More", Color.White.copy(alpha = 0.16f), onClick = actions.more)
                 }
             }
@@ -533,6 +558,40 @@ private fun Banner(
  * The Mac is away: why (once a round of attempts has failed), what to do, and the buttons that
  * do it. Try again tries now instead of waiting out the backoff, and ends with a result.
  */
+/** No Mac yet: what pairing gives, and the way to it. Everything else in the app works meanwhile. */
+@Composable
+private fun ConnectCard(actions: MacActions, found: List<app.wallhop.link.DiscoveredMac>, modifier: Modifier = Modifier) {
+    val home = Wallhop.home
+    val context = androidx.compose.ui.platform.LocalContext.current
+    Column(
+        modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(24.dp))
+            .background(home.card)
+            .padding(16.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            app.wallhop.ui.components.LinkCatch(false, Modifier.size(20.dp), shaded = false)
+            Spacer(Modifier.width(6.dp))
+            Text("Connect your Mac", style = Label, color = Color.White, modifier = Modifier.semantics { heading() })
+        }
+        Text(
+            "Codes, calls and files from this phone show up on your Mac. Open Lync on the Mac and scan its code.",
+            style = Body, color = Color.White.copy(alpha = 0.78f), modifier = Modifier.padding(top = 8.dp),
+        )
+        Spacer(Modifier.height(12.dp))
+        androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            // A Mac already seen on this Wi-Fi is one tap away; otherwise, scan its code.
+            found.take(2).forEach { mac ->
+                PillButton(WIcons.Laptop, "Pair with ${mac.name}", home.pale, home.onPale, { actions.pairWith(mac) })
+            }
+            PillButton(WIcons.QrCode, "Scan Mac's code",
+                if (found.isEmpty()) home.pale else Color.White.copy(alpha = 0.12f), if (found.isEmpty()) home.onPale else Color.White, actions.pairMac)
+            if (found.isEmpty()) PillButton(WIcons.Laptop, "Get Lync for Mac", Color.White.copy(alpha = 0.12f), Color.White, { shareMacLink(context) })
+        }
+    }
+}
+
 @Composable
 private fun AwayCard(macName: String, bluetooth: Boolean, reason: app.wallhop.core.Away?, actions: MacActions, modifier: Modifier = Modifier) {
     val home = Wallhop.home
@@ -595,6 +654,7 @@ private fun fixIcon(fix: app.wallhop.core.Fix): ImageVector? = when (fix) {
     app.wallhop.core.Fix.TryAgain -> WIcons.Retry
     app.wallhop.core.Fix.WifiSettings -> WIcons.Wifi
     app.wallhop.core.Fix.PairAgain -> WIcons.Link
+    app.wallhop.core.Fix.PairMac -> WIcons.QrCode
     app.wallhop.core.Fix.ChooseAgain -> WIcons.Image
     app.wallhop.core.Fix.TurnOnBluetooth -> WIcons.Bluetooth
     else -> null
@@ -636,8 +696,8 @@ private fun cardRowHeight(name: String, meta: String, heroWidth: Dp, transfer: T
     }
     val inner = heroWidth - 32.dp
     // Picture, padding, gaps and the button row, plus the text.
-    val hero = HeroPictureHeight + 30.dp + 12.dp +
-        text(kind(name, true), Overline, inner) + text(name, CardTitle, inner, 2) + text(meta, Meta, inner, 2)
+    val hero = HeroPictureHeight + 30.dp + 6.dp +
+        text(kind(name, true), CardTitle, inner, 1) + text(meta, Meta, inner, 2)
     val small = SmallCardWidth - 32.dp
     val transferCard = transfer?.let {
         val failed = it.phase == TransferPhase.Failed
@@ -745,9 +805,9 @@ private fun MacHero(
             LiveMac(connected, card, Modifier.fillMaxWidth().wrapContentHeight(Alignment.Top, unbounded = true).padding(top = 16.dp))
         }
         Column(Modifier.weight(1f).padding(start = 16.dp, end = 16.dp, top = 14.dp, bottom = 16.dp)) {
-            Text(kind(name, info.laptop), style = Overline, color = Color.White.copy(alpha = 0.78f))
-            Text(name, style = CardTitle, color = Color.White, maxLines = 2, overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.padding(top = 6.dp))
+            // The kind, not the name: the name is the page title when connected, the away card's
+            // when not, so it isn't said twice.
+            Text(kind(name, info.laptop), style = CardTitle, color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
             // Battery and "on for …" roll when they change.
             AnimatedChangeText(meta, style = Meta, color = Color.White.copy(alpha = 0.78f), maxLines = 2, overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.padding(top = 6.dp))

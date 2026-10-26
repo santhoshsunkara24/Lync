@@ -52,6 +52,14 @@ CTFontManagerRegisterFontsForURL(URL(fileURLWithPath: "Resources/Galindo.ttf") a
     for name in ["recent.json", "paired-phones.json"] {
         try? FileManager.default.removeItem(atPath: NSTemporaryDirectory() + "wallhop-snapshots/" + name)
     }
+    if CommandLine.arguments.contains("--qrlink") {
+        let text = "wallhop://pair?v=1&n=MacBook%20Air&h=192.168.0.4&p=47474&k=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&t=BBBBBBBBBBBBBBBBBBBBBB"
+        for t in [0.0, 0.4, 0.7, 1.0, 1.4, 1.8, 2.2, 2.42, 2.55, 2.75, 3.3, 4.2] {
+            render(String(format: "qrlink_%.2f", t), QrLinkingView(qrText: text, phoneName: "Pixel 9", frozenAt: t)
+                .frame(width: 400).background(Color.black).foregroundStyle(.white))
+        }
+        exit(0)
+    }
     if CommandLine.arguments.contains("--copy") {
         let store = ThemeStore()
         let row = HStack(spacing: 12) {
