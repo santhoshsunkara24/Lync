@@ -144,7 +144,7 @@ private fun DemoScreen(which: String) {
                 "wallhop://pair?v=1&n=MacBook%20Air&h=192.168.0.4&p=47474&k=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&t=BBBBBBBBBBBBBBBBBBBBBB",
                 mac, yes, onCancel = {}, onFinished = {},
                 // As if scanned from arm's length, a little off centre.
-                from = androidx.compose.ui.geometry.Rect(760f, 1560f, 980f, 1780f),
+                from = androidx.compose.ui.geometry.Rect(780f, 1580f, 960f, 1760f),
             )
         }
         "pairing", "paired" -> app.wallhop.ui.screens.PairingScreen(

@@ -13,6 +13,8 @@ struct QrLinkingView: View {
     let phoneName: String
     /// Snapshots: one still frame, this many seconds in.
     var frozenAt: Double? = nil
+    /// Whether this moment is still on screen: the tap, sound and finish skip once it's gone.
+    var showing: () -> Bool = { true }
     var onFinished: () -> Void = {}
 
     @State private var start = Date()
@@ -59,15 +61,17 @@ struct QrLinkingView: View {
             start = Date()
             guard frozenAt == nil else { return }
             let c = Self.clasp
+            let showing = showing
             if reduce {
                 Self.feel(.levelChange)
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) { finish() }
+                NSSound(named: "Glass")?.play()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) { if showing() { finish() } }
                 return
             }
             // A tap as the hooks meet; Glass as they light up.
-            DispatchQueue.main.asyncAfter(deadline: .now() + c + Self.contact) { Self.feel(.levelChange) }
-            DispatchQueue.main.asyncAfter(deadline: .now() + c + Self.lit) { NSSound(named: "Glass")?.play() }
-            DispatchQueue.main.asyncAfter(deadline: .now() + c + Self.done) { finish() }
+            DispatchQueue.main.asyncAfter(deadline: .now() + c + Self.contact) { if showing() { Self.feel(.levelChange) } }
+            DispatchQueue.main.asyncAfter(deadline: .now() + c + Self.lit) { if showing() { NSSound(named: "Glass")?.play() } }
+            DispatchQueue.main.asyncAfter(deadline: .now() + c + Self.done) { if showing() { finish() } }
         }
     }
 

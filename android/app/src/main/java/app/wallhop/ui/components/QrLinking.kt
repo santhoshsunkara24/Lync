@@ -81,7 +81,7 @@ import kotlin.math.sqrt
  * says yes they clasp (the same spring as [LinkCatch]), light up, a glint runs along one and a
  * ring of light goes round; then "You're linked." The pattern is the real one: [qrText] encoded
  * again, so the dots start from the squares the camera just saw. Given [from] (where the code
- * was on screen, in window pixels), the code first comes forward from there to the middle,
+ * was on screen, in window pixels, finder centre to finder centre), the code first comes forward from there to the middle,
  * turning mint on the way, before it breaks into dots.
  */
 @Composable
@@ -302,7 +302,11 @@ private fun DrawScope.drawLinking(geo: LinkingGeometry, t: Float, clasp: Float?,
             // The scanned code in link units, from this canvas's pixels.
             val start = from?.let {
                 val ox = size.width / 2 - 128f * k; val oy = size.height / 2 - 128f * k
-                androidx.compose.ui.geometry.Rect((it.left - ox) / k, (it.top - oy) / k, (it.right - ox) / k, (it.bottom - oy) / k)
+                // Out to the code's edges: finder centres sit 3.5 modules in from each side.
+                val n = LinkingGeometry.QrSide / geo.cell
+                val half = it.width / 2 * n / (n - 7f) / k
+                val c = Offset((it.center.x - ox) / k, (it.center.y - oy) / k)
+                androidx.compose.ui.geometry.Rect(c.x - half, c.y - half, c.x + half, c.y + half)
             }
             when {
                 reduceMotion || t >= Arrive -> drawLinks(geo, t, clasp, reduceMotion)

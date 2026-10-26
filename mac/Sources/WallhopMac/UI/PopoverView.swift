@@ -140,9 +140,12 @@ struct PanelView: View {
 
     @ViewBuilder private var content: some View {
         if let moment = model.qrLinking {
-            QrLinkingView(qrText: moment.text, phoneName: moment.name) { withMotion(WMotion.smooth) { model.finishQrLinking() } }
-                // Closed before it finished: nothing left to watch.
-                .onChange(of: model.panelOpen) { _, open in if !open { model.finishQrLinking() } }
+            QrLinkingView(qrText: moment.text, phoneName: moment.name, showing: { [weak model] in model?.qrLinking == moment }) {
+                withMotion(WMotion.smooth) { model.finishQrLinking(moment) }
+            }
+                .id(moment.id)
+                // Closed before it finished: nothing left to watch; the note says it instead.
+                .onChange(of: model.panelOpen) { _, open in if !open { model.finishQrLinking(moment, early: true) } }
                 .transition(.opacity)
         } else {
             pageContent

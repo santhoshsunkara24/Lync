@@ -1167,11 +1167,13 @@ final class AppModel: ObservableObject {
         if accept, let name { celebrateLink(name) }
     }
 
-    /// The link has formed and said "You're linked.": on to home.
-    func finishQrLinking() {
-        guard qrLinking != nil else { return }
+    /// The link has formed and said "You're linked.": on to home. Closed before that, the
+    /// "Linked with …" note says it instead. Only for that moment: a later pairing has its own.
+    func finishQrLinking(_ moment: QrLinkingMoment, early: Bool = false) {
+        guard qrLinking == moment else { return }
         qrLinking = nil
         panelPage = .home
+        if early { celebrateLink(moment.name) }
     }
 
     /// A phone was just paired, on the card or with the QR: the link catches under the notch,
@@ -1913,6 +1915,7 @@ extension URL {
 }
 
 struct QrLinkingMoment: Equatable {
+    let id = UUID()
     let text: String
     let name: String
 }

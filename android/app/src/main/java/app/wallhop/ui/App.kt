@@ -176,7 +176,9 @@ fun WallhopRoot(link: LinkManager, demo: Boolean = false) {
             if (wanted) { AppNav.pair.value = false; pairing = true; scanning = true }
         }
     }
-    LaunchedEffect(state is LinkState.Connected) { if (state is LinkState.Connected) pairing = false }
+    // Paired (connected or not): the pairing flow is over, so forgetting later lands on Home.
+    val inPairing = state is LinkState.NotPaired || state is LinkState.Pairing || state is LinkState.PairingFailed
+    LaunchedEffect(inPairing) { if (!inPairing) pairing = false }
     // The last pairing attempt, for "Try again" when it fails.
     var retryPair by remember { mutableStateOf<(() -> Unit)?>(null) }
     // Pairing just succeeded (the Mac said yes): the pairing screen stays a moment to show it.

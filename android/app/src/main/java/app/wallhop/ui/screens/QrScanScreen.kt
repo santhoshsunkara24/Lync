@@ -278,7 +278,8 @@ private fun CameraPreview(onCode: (String, androidx.compose.ui.geometry.Rect?) -
 
 /**
  * Where a found code sits on screen, in window pixels: a square round its centre (the middle of
- * the two finder patterns furthest apart), from the camera frame as the preview fills the view.
+ * the two finder patterns furthest apart) as wide as from one finder's centre to the next, from
+ * the camera frame as the preview fills the view.
  */
 private fun codeOnScreen(points: Array<com.google.zxing.ResultPoint>?, rotation: Int, w: Int, h: Int, view: android.view.View): androidx.compose.ui.geometry.Rect? {
     val finders = points?.take(3)?.takeIf { it.size == 3 } ?: return null
@@ -294,8 +295,8 @@ private fun codeOnScreen(points: Array<com.google.zxing.ResultPoint>?, rotation:
     }
     val far = listOf(0 to 1, 0 to 2, 1 to 2).maxBy { (a, b) -> (upright[a] - upright[b]).getDistance() }
     val center = (upright[far.first] + upright[far.second]) / 2f
-    // Finder centres sit 3.5 modules in from the edges; a Lync code is about 33 modules wide.
-    val side = (upright[far.first] - upright[far.second]).getDistance() / kotlin.math.sqrt(2f) * 33f / 26f
+    // Finder centre to finder centre: the code's width less 7 modules (QrLinking adds them back).
+    val side = (upright[far.first] - upright[far.second]).getDistance() / kotlin.math.sqrt(2f)
     val scale = maxOf(view.width.toFloat() / rw, view.height.toFloat() / rh)
     val loc = IntArray(2).also { view.getLocationInWindow(it) }
     val cx = loc[0] + (view.width - rw * scale) / 2 + center.x * scale
