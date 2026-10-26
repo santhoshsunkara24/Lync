@@ -96,12 +96,12 @@ import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.SizeTransform
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
-import androidx.compose.animation.slideInVertically
-import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
@@ -262,9 +262,40 @@ fun MacTab(
             contentPadding = PaddingValues(top = statusBar + 18.dp, bottom = navBar + 112.dp),
         ) {
             item(key = "header") {
-                Row(Modifier.itemMotion(this, 0).fillMaxWidth().padding(horizontal = 20.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text("Home", style = Title, color = Color.White, modifier = Modifier.weight(1f).semantics { heading() })
-                    RoundButton(WIcons.More, "More", Color.White.copy(alpha = 0.16f), onClick = actions.more)
+                // Connected, the page is the Mac: its name is the title, the link clasped in front,
+                // and ⋯ is that Mac's menu. Otherwise it's Home, with the away card below.
+                Column(Modifier.itemMotion(this, 0).fillMaxWidth().padding(horizontal = 20.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        val source = remember { MutableInteractionSource() }
+                        Row(
+                            Modifier
+                                .weight(1f)
+                                .then(if (connected) Modifier.pressDim(source, 0.7f).tappable(source, onClick = actions.macDetails) else Modifier)
+                                .semantics(mergeDescendants = true) { heading() },
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            if (connected) {
+                                app.wallhop.ui.components.LinkCatch(true, Modifier.size(26.dp), shaded = false)
+                                Spacer(Modifier.width(10.dp))
+                            }
+                            // A long name shrinks to fit one line rather than wrapping or cutting off.
+                            androidx.compose.foundation.text.BasicText(
+                                if (connected) macName else "Home",
+                                style = Title.copy(color = Color.White),
+                                maxLines = 1,
+                                autoSize = androidx.compose.foundation.text.TextAutoSize.StepBased(minFontSize = 20.sp, maxFontSize = Title.fontSize),
+                            )
+                        }
+                        Spacer(Modifier.width(12.dp))
+                        RoundButton(WIcons.More, "More", Color.White.copy(alpha = 0.16f), onClick = actions.more)
+                    }
+                    AnimatedVisibility(
+                        visible = connected && card.info.locked,
+                        enter = fadeIn(Fades.fadeIn()) + expandVertically(Springs.snappy()),
+                        exit = fadeOut(Fades.fadeOut()) + shrinkVertically(Springs.snappy()),
+                    ) {
+                        Text("Mac is locked", style = Body, color = Color.White.copy(alpha = 0.78f), modifier = Modifier.padding(start = 36.dp, top = 2.dp))
+                    }
                 }
             }
             // Ringing comes first: it's loud, and Stop should be one tap away.
@@ -307,15 +338,9 @@ fun MacTab(
                     )
                 }
             }
-            item(key = "mac-title") {
-                if (connected || forgotten) {
-                    MacStatusTitle(
-                        connected = connected,
-                        locked = card.info.locked,
-                        onClick = actions.macDetails,
-                        modifier = Modifier.itemMotion(this, 1).padding(top = 22.dp),
-                    )
-                } else {
+            // Connected, the title says it all; forgotten, the banner above does. Otherwise, why it's away.
+            if (!connected && !forgotten) {
+                item(key = "mac-title") {
                     AwayCard(macName, bluetooth, (state as? LinkState.Searching)?.reason, actions,
                         Modifier.itemMotion(this, 1).padding(start = 20.dp, end = 20.dp, top = 22.dp))
                 }
@@ -448,7 +473,8 @@ fun MacTab(
                     .background(Brush.verticalGradient(0f to home.top, solid / (solid + 24.dp) to home.top, 1f to home.top.copy(alpha = 0f))),
             ) {
                 Text(
-                    "Home", style = app.wallhop.ui.design.Type.headline, color = Color.White,
+                    if (connected) macName else "Home", style = app.wallhop.ui.design.Type.headline, color = Color.White,
+                    maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                     modifier = Modifier.align(Alignment.TopCenter).padding(top = statusBar + 6.dp)
                         .clickable(interactionSource = null, indication = null, onClickLabel = "Scroll to top") {
                             scope.launch { list.animateScrollToItem(0) }
@@ -589,63 +615,10 @@ private fun Modifier.itemMotion(scope: androidx.compose.foundation.lazy.LazyItem
     return if (index < 0) placed else placed.staggerIn(index)
 }
 
-/**
- * "Your Mac ›" and how it's connected. The line under it slides up as the state changes, after
- * Lync's link, which catches (with its click) when the Mac connects. Response time lives in Mac details.
- */
-@Composable
-private fun MacStatusTitle(connected: Boolean, locked: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
-    val source = remember { MutableInteractionSource() }
-    val reduceMotion = Wallhop.a11y.reduceMotion
-    val rise = with(LocalDensity.current) { 6.dp.roundToPx() }
-    val status = when {
-        !connected -> 0
-        locked -> 1
-        else -> 2
-    }
-    Column(
-        modifier
-            .fillMaxWidth()
-            .pressDim(source, 0.7f)
-            .tappable(source, onClick = onClick)
-            .padding(horizontal = 20.dp),
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text("Your Mac", style = Section, color = Color.White, modifier = Modifier.semantics { heading() })
-            Icon(WIcons.ChevronRight, null, tint = Color.White, modifier = Modifier.size(16.dp))
-        }
-        Row(Modifier.padding(top = 2.dp), verticalAlignment = Alignment.CenterVertically) {
-            app.wallhop.ui.components.LinkCatch(connected, Modifier.size(20.dp), shaded = false)
-            Spacer(Modifier.width(6.dp))
-            AnimatedContent(
-                targetState = status,
-                transitionSpec = {
-                    if (reduceMotion) {
-                        fadeIn(tween(Durations.Quick)) togetherWith fadeOut(tween(Durations.Quick))
-                    } else {
-                        (slideInVertically(Springs.snappy()) { rise } + fadeIn(Fades.fadeIn())) togetherWith
-                            (slideOutVertically(Springs.snappy()) { -rise } + fadeOut(Fades.fadeOut())) using
-                            SizeTransform(clip = false)
-                    }
-                },
-                contentAlignment = Alignment.CenterStart,
-                label = "macStatus",
-            ) { shown ->
-                val color = Color.White.copy(alpha = 0.78f)
-                when (shown) {
-                    0 -> Text("Not connected", style = Body, color = color)
-                    1 -> Text("Connected · Mac is locked", style = Body, color = color)
-                    else -> Text("Connected", style = Body, color = color)
-                }
-            }
-        }
-    }
-}
-
 /** The cards' height at the default font with a one-line Mac name; they grow from here. */
-private val CardHeight = 240.dp
+private val CardHeight = 280.dp
 /** The little Mac's stage on the hero card. The Mac is drawn big and the card's details cut it off. */
-private val HeroPictureHeight = 132.dp
+private val HeroPictureHeight = 172.dp
 private val SmallCardWidth = 204.dp
 
 /**
