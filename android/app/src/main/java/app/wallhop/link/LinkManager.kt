@@ -909,7 +909,10 @@ class LinkManager private constructor(private val context: Context) {
 
     fun forgetMac() {
         // Tell the Mac first (PROTOCOL.md, forget), so it drops this phone too; then close.
+        // Over Wi-Fi or, when that's down, the Bluetooth link: without it the Mac never hears,
+        // keeps the pairing and goes on showing this phone as away.
         val open = session?.takeIf { !it.closed }
+        val ble = blePath?.takeIf { !it.closed }
         session = null
         if (open != null) {
             scope.launch {
@@ -918,7 +921,15 @@ class LinkManager private constructor(private val context: Context) {
             }
         }
         store.forget()
-        updateBluetooth()
+        if (open == null && ble != null) {
+            // Bluetooth stops once forgotten, so let the message go out first.
+            scope.launch {
+                withTimeoutOrNull(1_500) { runCatching { ble.send(Message.of("forget")) } }
+                updateBluetooth()
+            }
+        } else {
+            updateBluetooth()
+        }
         macInfoStore.clear()
         _macInfo.value = MacInfo()
         _state.value = LinkState.NotPaired

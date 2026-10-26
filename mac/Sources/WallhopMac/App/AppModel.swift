@@ -590,6 +590,11 @@ final class AppModel: ObservableObject {
             if confirmingForget == phone.id { confirmingForget = nil }
             pairedPhones = server.paired.all
             report(Problem.unpairedThisMac(phone.name).with("Show code") { [weak self] in self?.openPanel(.addPhone) })
+            // No phone left: the panel's home is the QR, ready to pair again.
+            if pairedPhones.isEmpty {
+                onboardingStep = .scan
+                panelPage = .home
+            }
 
         case .bluetooth(let phone):
             let was = bluetoothPhone

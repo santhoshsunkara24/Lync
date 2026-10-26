@@ -187,7 +187,7 @@ link is closed:
    frame that fails to decrypt closes the link.
 
 **Messages over Bluetooth.** Phone → Mac: `otp` (answered with `ack`), `call`, `notif` (never with an
-icon body), `notif_removed`, `ping` (answered with `pong`). Mac → phone: `ack`, `ping`, `pong`,
+icon body), `notif_removed`, `forget`, `ping` (answered with `pong`). Mac → phone: `ack`, `ping`, `pong`,
 `call_cmd`. Both sides ignore every other type on this path.
 
 **Keeping the link honest.** A link can stay up on the radio and carry nothing (the Mac slept holding

@@ -689,6 +689,11 @@ final class LinkServer {
             if let notification = Self.notification(from: message) { emit(.notification(notification, icon: nil)) }
         case "notif_removed":
             if let key = message.string("key") { emit(.notificationRemoved(key: key)) }
+        case "forget":
+            // Forget on the phone while only Bluetooth reached us: drop the pairing, as over Wi-Fi.
+            paired.remove(id: phone.id)
+            bluetooth.disconnect(publicKey: phone.publicKey)
+            emit(.forgotten(phone))
         case "ack":
             // Call buttons answered over Bluetooth.
             if let id = message.string("id"), let pending = pendingAcks.removeValue(forKey: id) {
