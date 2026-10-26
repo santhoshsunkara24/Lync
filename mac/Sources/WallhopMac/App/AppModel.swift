@@ -35,6 +35,8 @@ struct FileBatch: Equatable, Codable {
     var saved = false
     /// The connection dropped before the phone finished sending.
     var interrupted = false
+    /// The phone cancelled the send part-way.
+    var cancelled: Bool?
     /// Why the last file that failed did (the file-ack code: `storage_full`, `checksum`, …).
     var failure: String?
     /// Never saved, and cleaned out of the inbox after a day: Copy, Save and Show are gone.
@@ -187,6 +189,9 @@ final class AppModel: ObservableObject {
     @Published private(set) var outgoingFiles: [URL] = []
     /// The send that just landed: its card plays Liftoff's finale before it goes.
     @Published private(set) var outgoingLanded: String?
+    /// A send to the phone that just failed: its card plays the link coming undone before the
+    /// problem replaces it.
+    @Published private(set) var outgoingFailed: String?
     @Published private(set) var notifications: [PhoneNotification] = []
     @Published private(set) var call: PhoneCall?
     @Published private(set) var nowPlaying: NowPlaying?
@@ -690,8 +695,31 @@ final class AppModel: ObservableObject {
         case .batchInterrupted(let id):
             updateBatch(id) { $0.finished = true; $0.interrupted = true }
             let saved = storeReceived(id)
-            // Another card is up (a code, a text): this one waits its turn rather than being lost.
-            showOrQueue(saved ? .saved(batchId: id) : .added(batchId: id), for: 8, replacing: .receiving(batchId: id))
+            // The receiving card first shows the link coming undone, then gives way.
+            let wait = live == .receiving(batchId: id) && !WMotion.reduceMotion ? 0.7 : 0
+            DispatchQueue.main.asyncAfter(deadline: .now() + wait) { [weak self] in
+                // Another card is up (a code, a text): this one waits its turn rather than being lost.
+                self?.showOrQueue(saved ? .saved(batchId: id) : .added(batchId: id), for: 8, replacing: .receiving(batchId: id))
+            }
+
+        case .batchCancelled(let id):
+            if let batch = batch(id), !batch.files.isEmpty {
+                // Some files had already arrived whole: keep those, like any stopped transfer.
+                updateBatch(id) { $0.finished = true; $0.interrupted = true }
+                _ = storeReceived(id)
+                showOrQueue(.added(batchId: id), for: 6, replacing: .receiving(batchId: id))
+            } else {
+                // Nothing arrived: the card shows the link powering down, then goes, with a quiet
+                // word saying why.
+                updateBatch(id) { $0.cancelled = true }
+                let wait = live == .receiving(batchId: id) && !WMotion.reduceMotion ? 0.55 : 0
+                DispatchQueue.main.asyncAfter(deadline: .now() + wait) { [weak self] in
+                    guard let self else { return }
+                    if let item = self.activity.first(where: { $0.id == id }) { self.remove(item) }
+                    if self.live == .receiving(batchId: id) { self.hideLive() }
+                    self.show(.quiet(symbol: "xmark.circle", text: "Cancelled on your phone"), for: 1.6)
+                }
+            }
 
         case .batchFinished(let id):
             updateBatch(id) { $0.finished = true; $0.receivedBytes = $0.totalBytes }
@@ -767,6 +795,15 @@ final class AppModel: ObservableObject {
                 if result.ok {
                     if live == .sending(id: id) { hideLive() }
                     feedback("Sent to your phone")
+                } else if live == .sending(id: id), !panelOpen, !WMotion.reduceMotion {
+                    // The card shows the link coming undone, then the problem replaces it.
+                    outgoingFailed = id
+                    let problem = sendProblem(result)
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) { [weak self] in
+                        guard let self else { return }
+                        if self.outgoingFailed == id { self.outgoingFailed = nil }
+                        self.report(problem)
+                    }
                 } else {
                     // Replaces the sending card when the panel is closed.
                     if panelOpen, live == .sending(id: id) { hideLive() }

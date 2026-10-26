@@ -1,3 +1,4 @@
+import AppKit
 import CoreBluetooth
 import CryptoKit
 import Foundation
@@ -36,11 +37,50 @@ final class BluetoothLink: NSObject {
     private static let characteristicUUID = CBUUID(string: BleWire.characteristic)
     /// From finding the phone to `ready`.
     private static let handshakeTimeout: TimeInterval = 15
+    /// Same rhythm as the Wi-Fi session: a ping every 15 s; 45 s without a word is a dead link.
+    private static let pingEvery: TimeInterval = 15
+    private static let deadAfter: TimeInterval = 45
+    /// After waking, the phone gets this long to answer before the link is treated as stale.
+    private static let wakeCheck: TimeInterval = 6
 
     init(identity: Identity, paired: PairedPhones, queue: DispatchQueue) {
         self.identity = identity
         self.paired = paired
         self.queue = queue
+        super.init()
+        // A link the Mac slept with can stay up on the radio and carry nothing. Check it on wake.
+        NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification,
+                                                          object: nil, queue: nil) { [weak self] _ in
+            self?.queue.async { self?.checkAfterWake() }
+        }
+    }
+
+    private func checkAfterWake() {
+        guard let link, link.stage == .open else { return }
+        let woke = DispatchTime.now()
+        send(Message("ping"))
+        queue.asyncAfter(deadline: .now() + Self.wakeCheck) { [weak self, weak link] in
+            guard let self, let link, self.link === link, link.lastHeard < woke else { return }
+            if LinkServer.debugLog { NSLog("Lync: Bluetooth link silent after wake, dropping") }
+            self.drop(link)
+        }
+    }
+
+    private func startHeartbeat(on link: Link) {
+        let timer = DispatchSource.makeTimerSource(queue: queue)
+        timer.schedule(deadline: .now() + Self.pingEvery, repeating: Self.pingEvery)
+        timer.setEventHandler { [weak self, weak link] in
+            guard let self, let link, self.link === link else { return }
+            let silent = Double(DispatchTime.now().uptimeNanoseconds - link.lastHeard.uptimeNanoseconds) / 1e9
+            if silent > Self.deadAfter {
+                if LinkServer.debugLog { NSLog("Lync: Bluetooth link silent for \(Int(silent)) s, dropping") }
+                self.drop(link)
+            } else {
+                self.send(Message("ping"))
+            }
+        }
+        link.heartbeat = timer
+        timer.resume()
     }
 
     /// One connection to a phone, from connecting to ready.
@@ -55,6 +95,9 @@ final class BluetoothLink: NSObject {
         var ephemeral: Curve25519.KeyAgreement.PrivateKey?
         var channel: SecureChannel?
         var timeout: DispatchWorkItem?
+        var heartbeat: DispatchSourceTimer?
+        /// When the phone last sent anything.
+        var lastHeard = DispatchTime.now()
 
         init(peripheral: CBPeripheral, phone: PairedPhone) {
             self.peripheral = peripheral
@@ -108,6 +151,8 @@ final class BluetoothLink: NSObject {
         guard self.link === link else { return }
         self.link = nil
         link.timeout?.cancel()
+        link.heartbeat?.cancel()
+        link.heartbeat = nil
         let wasOpen = link.stage == .open
         central?.cancelPeripheralConnection(link.peripheral)
         if wasOpen { onState?(nil) }
@@ -184,6 +229,7 @@ final class BluetoothLink: NSObject {
             }
             link.stage = .open
             link.timeout?.cancel()
+            startHeartbeat(on: link)
             if LinkServer.debugLog { NSLog("Lync: Bluetooth link to \(link.phone.name) is up") }
             onState?(link.phone)
         case .open:
@@ -191,6 +237,8 @@ final class BluetoothLink: NSObject {
             let message = try Message.decode(channel.open(frame))
             if message.type == "ping" {
                 send(Message("pong"))
+            } else if message.type == "pong" {
+                // Only for lastHeard.
             } else {
                 onMessage?(message, link.phone)
             }
@@ -271,6 +319,7 @@ extension BluetoothLink: CBPeripheralDelegate {
 
     func peripheral(_ peripheral: CBPeripheral, didUpdateValueFor characteristic: CBCharacteristic, error: Error?) {
         guard let link, link.peripheral === peripheral, let value = characteristic.value else { return }
+        link.lastHeard = .now()
         do {
             if let frame = try link.reassembler.add(value) { try handle(frame, on: link) }
         } catch {

@@ -104,6 +104,7 @@ struct LiveCardView: View {
         let files = model.outgoingFiles
         return transferCard(
             liftoffDone: model.outgoingLanded == id,
+            failed: model.outgoingFailed == id,
             urls: files,
             title: model.outgoingLanded == id ? "On your phone" : "Sending to \(model.connectedPhone?.name ?? "your phone")",
             name: Self.describe(files),
@@ -116,7 +117,9 @@ struct LiveCardView: View {
         let batch = model.batch(id)
         let size = ByteCountFormatter.string(fromByteCount: batch?.totalBytes ?? 0, countStyle: .file)
         return transferCard(
-            liftoffDone: batch?.finished == true,
+            liftoffDone: batch?.finished == true && batch?.interrupted != true,
+            failed: batch?.interrupted == true && (batch?.files.isEmpty ?? true),
+            cancelled: batch?.cancelled == true,
             urls: batch?.files ?? [],
             title: batch?.finished == true ? "Copied · ⌘V to paste" : "From \(model.connectedPhone?.name ?? "your phone")",
             name: (batch?.files.isEmpty ?? true) ? "\(batch?.summary ?? "Files") · \(size)" : "\(Self.describe(batch?.files ?? [])) · \(size)",
@@ -124,9 +127,10 @@ struct LiveCardView: View {
         )
     }
 
-    private func transferCard(liftoffDone: Bool, urls: [URL], title: String, name: String, progress: Double) -> some View {
+    private func transferCard(liftoffDone: Bool, failed: Bool = false, cancelled: Bool = false,
+                              urls: [URL], title: String, name: String, progress: Double) -> some View {
         HStack(spacing: 12) {
-            LiftoffView(sending: true, done: liftoffDone)
+            LiftoffView(sending: !failed && !cancelled, done: liftoffDone, failed: failed, cancelled: cancelled)
                 .frame(width: 84, height: 60)
                 .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Color(red: 0.047, green: 0.067, blue: 0.059)))
             TransferThumb(urls: urls, size: 34)

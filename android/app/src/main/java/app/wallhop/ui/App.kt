@@ -109,11 +109,6 @@ import app.wallhop.ui.design.Wallhop
 import app.wallhop.ui.design.rememberHaptics
 import app.wallhop.ui.screens.ActivityTab
 import app.wallhop.ui.screens.AskSheet
-import app.wallhop.ui.components.rememberSwipeDismiss
-import androidx.compose.foundation.gestures.draggable
-import androidx.compose.foundation.layout.offset
-import androidx.compose.ui.layout.onSizeChanged
-import kotlin.math.roundToInt
 import app.wallhop.ui.screens.BlockedSheet
 import app.wallhop.ui.screens.AppsScreen
 import app.wallhop.ui.screens.ConnectScreen
@@ -242,9 +237,6 @@ fun WallhopRoot(link: LinkManager, demo: Boolean = false) {
         visibilityThreshold = 0.001f,
         label = "sendOpen",
     )
-    // Pull the sending screen down to hide it: it follows the finger, and Home rises back with it.
-    val sendDrag = rememberSwipeDismiss(lastSending?.id) { lastSending?.let { hiddenSend = it.id } }
-    LaunchedEffect(sendingShown != null) { if (sendingShown != null) sendDrag.reset() }
     // One counter per tab, bumped when its button is tapped again (LocalScrollToTop).
     val scrollToTop = remember { mutableStateListOf(0, 0, 0) }
     // Home under the sending screen is out of sight: it stops updating until it's uncovered.
@@ -265,7 +257,7 @@ fun WallhopRoot(link: LinkManager, demo: Boolean = false) {
                     // Home sinks back a little while the sending screen is over it.
                     .graphicsLayer {
                         if (reduceMotionApp) return@graphicsLayer
-                        val p = sendOpenState.value * (1f - sendDrag.progress)
+                        val p = sendOpenState.value
                         scaleX = 1f - 0.06f * p; scaleY = 1f - 0.06f * p
                         translationY = 10.dp.toPx() * p
                     }
@@ -356,26 +348,15 @@ fun WallhopRoot(link: LinkManager, demo: Boolean = false) {
             }
             // Dims Home as the screen comes up. Drawn only, so it costs no layout while it fades.
             Box(Modifier.fillMaxSize().drawBehind {
-                val p = sendOpenState.value * (1f - sendDrag.progress)
+                val p = sendOpenState.value
                 if (p > 0.001f) drawRect(androidx.compose.ui.graphics.Color.Black.copy(alpha = 0.55f * p))
             })
             androidx.compose.animation.AnimatedVisibility(
                 visible = sendingShown != null,
                 enter = if (reduceMotionApp) fadeIn(tween(Durations.Quick)) else slideInVertically(Springs.sheetIn()) { it },
-                // Pulled away, it has already left at the finger's speed.
-                exit = if (sendDrag.gone) androidx.compose.animation.ExitTransition.None
-                    else if (reduceMotionApp) fadeOut(tween(Durations.Quick)) else slideOutVertically(Springs.sheetOut()) { it },
-                modifier = Modifier
-                    .offset { androidx.compose.ui.unit.IntOffset(0, sendDrag.offset.value.roundToInt()) }
-                    .onSizeChanged { sendDrag.extent = it.height.toFloat() }
-                    .draggable(
-                        androidx.compose.foundation.gestures.rememberDraggableState { delta -> sendDrag.drag(delta) },
-                        androidx.compose.foundation.gestures.Orientation.Vertical,
-                        enabled = !reduceMotionApp,
-                        onDragStarted = { sendDrag.grab() },
-                        // Hidden past a third of the screen, or with a flick; it keeps sending either way.
-                        onDragStopped = { velocity -> sendDrag.release(velocity, { lastSending?.let { hiddenSend = it.id } }, commitAt = 0.35f) },
-                    ),
+                // Stays put while it sends: it doesn't move under the finger or show Home behind it.
+                // ⌄ (or Back) hides it.
+                exit = if (reduceMotionApp) fadeOut(tween(Durations.Quick)) else slideOutVertically(Springs.sheetOut()) { it },
             ) {
                 lastSending?.let { t ->
                     app.wallhop.ui.screens.SendingScreen(

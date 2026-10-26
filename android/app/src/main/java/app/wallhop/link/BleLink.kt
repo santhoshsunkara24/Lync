@@ -250,7 +250,9 @@ class BleLink(
             device: BluetoothDevice, requestId: Int, descriptor: BluetoothGattDescriptor,
             preparedWrite: Boolean, responseNeeded: Boolean, offset: Int, value: ByteArray?,
         ) {
-            val conn = connectionFor(device)
+            // Subscribing is the Mac's first step on every new link. It can come over a radio link
+            // that never went down (the Mac slept with it open), so no "connected" callback came.
+            val conn = connectionFor(device) ?: adopt(device)
             val ok = conn != null && descriptor.uuid == BleWire.CCCD && !preparedWrite && offset == 0
             if (ok) conn.subscribed = value?.firstOrNull()?.toInt()?.and(1) == 1
             if (responseNeeded) respond(device, requestId, ok)
@@ -281,6 +283,13 @@ class BleLink(
     @Synchronized
     private fun connectionFor(device: BluetoothDevice): Connection? = connection?.takeIf { it.device.address == device.address }
 
+    /** A central we have no connection for starts a handshake: take it on if the slot is free. */
+    @Synchronized
+    private fun adopt(device: BluetoothDevice): Connection? {
+        if (!wanted || connection != null) return null
+        return Connection(device).also { connection = it; it.startTimeout() }
+    }
+
     @Synchronized
     private fun closeConnection(conn: Connection) {
         if (connection !== conn) return
@@ -289,6 +298,12 @@ class BleLink(
         conn.close()
         runCatching { server?.cancelConnection(conn.device) }
         if (wasReady) onPath(null)
+        // Advertise again straight away: the radio link may stay up (the Mac holds it), so no
+        // "disconnected" callback is coming to do it, and without it the Mac can't find us.
+        if (wanted) {
+            stopAdvertising()
+            startAdvertising()
+        }
     }
 
     /** One connected central: the handshake, then sealed messages. */
@@ -304,6 +319,9 @@ class BleLink(
         private val sendLock = Mutex()
         private val pending = ConcurrentHashMap<String, CompletableDeferred<Message>>()
         private var timeout: Job? = null
+        private var heartbeat: Job? = null
+        /** When the Mac last sent anything (elapsedRealtime). */
+        @Volatile private var lastHeard = android.os.SystemClock.elapsedRealtime()
 
         fun startTimeout() {
             // Connecting isn't enough: the handshake has to finish, or the slot is freed.
@@ -315,6 +333,7 @@ class BleLink(
 
         /** A write from the Mac, on a binder thread. Order matters, so frames are handled here. */
         fun received(value: ByteArray) {
+            lastHeard = android.os.SystemClock.elapsedRealtime()
             val frame = try {
                 synchronized(reassembler) { reassembler.add(value) } ?: return
             } catch (_: IOException) {
@@ -360,6 +379,7 @@ class BleLink(
                     ready = true
                     timeout?.cancel()
                     stopAdvertising()
+                    startHeartbeat()
                     onPath(this@Connection)
                 }
                 return
@@ -367,7 +387,26 @@ class BleLink(
             when (message.type) {
                 "ack" -> message.string("id")?.let { pending.remove(it)?.complete(message) }
                 "ping" -> scope.launch { runCatching { send(Message.of("pong")) } }
+                "pong" -> Unit // Only for lastHeard.
                 else -> onMessage(message)
+            }
+        }
+
+        /**
+         * A link can look open and carry nothing (the Mac went to sleep holding it), and the radio
+         * won't say so. Ping like the Wi-Fi session does; silence for [DEAD_AFTER_MS] ends it.
+         */
+        private fun startHeartbeat() {
+            heartbeat = scope.launch {
+                while (isActive && !closed) {
+                    delay(PING_EVERY_MS)
+                    if (android.os.SystemClock.elapsedRealtime() - lastHeard > DEAD_AFTER_MS) {
+                        if (BuildConfig.STRESS_HOOKS) Log.d(TAG, "silent link, closing")
+                        closeConnection(this@Connection)
+                        return@launch
+                    }
+                    runCatching { send(Message.of("ping")) }.onFailure { closeConnection(this@Connection); return@launch }
+                }
             }
         }
 
@@ -402,18 +441,29 @@ class BleLink(
         override suspend fun request(message: Message, timeoutMs: Long): Message? {
             val id = requireNotNull(message.string("id"))
             val ack = CompletableDeferred<Message>().also { pending[id] = it }
-            return try {
+            val reply = try {
                 send(message)
                 withTimeoutOrNull(timeoutMs) { ack.await() }
+            } catch (e: IOException) {
+                closeConnection(this)
+                throw e
             } finally {
                 pending.remove(id)
             }
+            // The Mac always acks; no answer means this link is dead. Close it so the next try
+            // gets a fresh one instead of going down the same hole.
+            if (reply == null && !closed) {
+                if (BuildConfig.STRESS_HOOKS) Log.d(TAG, "no ack, closing")
+                closeConnection(this)
+            }
+            return reply
         }
 
         fun close() {
             closed = true
             ready = false
             timeout?.cancel()
+            heartbeat?.cancel()
             notified?.complete(false)
             pending.values.forEach { it.cancel() }
             pending.clear()
@@ -449,6 +499,9 @@ class BleLink(
         private const val TAG = "WallhopBle"
         private const val HANDSHAKE_TIMEOUT_MS = 10_000L
         private const val NOTIFY_TIMEOUT_MS = 3_000L
+        /** Same rhythm as the Wi-Fi session: a ping every 15 s, and 45 s of silence is a dead link. */
+        private const val PING_EVERY_MS = 15_000L
+        private const val DEAD_AFTER_MS = 45_000L
 
         /** Android 12+ asks for "Nearby devices"; before that the Bluetooth permissions are granted at install. */
         val required: Array<String> =

@@ -1328,7 +1328,14 @@ class LinkManager private constructor(private val context: Context) {
         } catch (e: Exception) {
             // Closing the session cancels the acks we're waiting on. That isn't our job being
             // cancelled, so report it rather than leaving the transfer stuck on "Sending".
-            if (e is kotlinx.coroutines.CancellationException && !kotlinx.coroutines.currentCoroutineContext().isActive) throw e
+            if (e is kotlinx.coroutines.CancellationException && !kotlinx.coroutines.currentCoroutineContext().isActive) {
+                // Cancelled here (Cancel): tell the Mac, so it drops the half-received file now
+                // instead of keeping it until the connection closes.
+                kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) {
+                    runCatching { session.send(Message.of("batch_cancel", "batch" to id)) }
+                }
+                throw e
+            }
             Streamed(emptyList(), unreadable, Problems.connectionLost(LocalNetwork.joined(context)))
         }
     }

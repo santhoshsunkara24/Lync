@@ -309,7 +309,7 @@ private fun BoxScope.SheetLayer(overlays: Overlays) {
                 .navigationBarsPadding()
                 .imePadding()
                 .padding(bottom = if (spec.large) 0.dp else 8.dp)
-                .offset { IntOffset(0, drag.offset.value.roundToInt()) }
+                .offset { IntOffset(0, drag.offset.roundToInt()) }
                 .onSizeChanged { drag.extent = it.height.toFloat() }
                 // Always a solid surface: the slide is the entrance.
                 .clip(shape)
@@ -649,7 +649,7 @@ private fun BoxScope.ToastLayer(overlays: Overlays, bottom: androidx.compose.ui.
                 .padding(horizontal = 16.dp)
                 .widthIn(max = 360.dp)
                 // Swipe it down to put it away; it follows the finger and resists going up.
-                .offset { IntOffset(0, drag.offset.value.roundToInt()) }
+                .offset { IntOffset(0, drag.offset.roundToInt()) }
                 .onSizeChanged { drag.extent = it.height.toFloat() }
                 .pointerInput(Unit) {
                     awaitEachGesture {

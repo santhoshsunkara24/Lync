@@ -260,7 +260,7 @@ private fun ShareSheet(
                     .fillMaxWidth()
                     .navigationBarsPadding()
                     .padding(8.dp)
-                    .offset { androidx.compose.ui.unit.IntOffset(0, drag.offset.value.toInt()) }
+                    .offset { androidx.compose.ui.unit.IntOffset(0, drag.offset.toInt()) }
                     .onSizeChanged { drag.extent = it.height.toFloat() }
                     .draggable(
                         rememberDraggableState { delta -> drag.drag(delta) },

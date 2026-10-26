@@ -104,7 +104,7 @@ fun BoxScope.ReceivedPopup(batch: ReceivedBatch?, onDismiss: () -> Unit, bottom:
                 .padding(start = 12.dp, end = 12.dp, bottom = bottom)
                 .widthIn(max = 520.dp)
                 .fillMaxWidth()
-                .offset { IntOffset(0, drag.offset.value.roundToInt()) }
+                .offset { IntOffset(0, drag.offset.roundToInt()) }
                 .onSizeChanged { drag.extent = it.height.toFloat() }
                 .pointerInput(Unit) {
                     awaitEachGesture {

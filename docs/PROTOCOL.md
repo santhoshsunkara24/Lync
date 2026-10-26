@@ -187,8 +187,15 @@ link is closed:
    frame that fails to decrypt closes the link.
 
 **Messages over Bluetooth.** Phone → Mac: `otp` (answered with `ack`), `call`, `notif` (never with an
-icon body), `notif_removed`, `ping` (answered with `pong`). Mac → phone: `ack`, `pong`, `call_cmd`. Both
-sides ignore every other type on this path.
+icon body), `notif_removed`, `ping` (answered with `pong`). Mac → phone: `ack`, `ping`, `pong`,
+`call_cmd`. Both sides ignore every other type on this path.
+
+**Keeping the link honest.** A link can stay up on the radio and carry nothing (the Mac slept holding
+it). So, once ready, each side sends `ping` every 15 s and closes the link after 45 s without
+receiving anything. The Mac also pings as soon as it wakes and closes the link if nothing comes back
+within 6 s. When an `otp` gets no `ack` within 10 s, the phone closes the link, keeps the code, and
+advertises again at once; the code goes across on the next link. A Mac may subscribe over a radio link
+that never went down: the phone takes that as a new connection.
 
 **Test vector.** Private keys: phone static = 32 × `0x11`, phone ephemeral = 32 × `0x22`,
 Mac static = 32 × `0x33`, Mac ephemeral = 32 × `0x44` (X25519, clamped as usual).
@@ -215,6 +222,7 @@ Mac static = 32 × `0x33`, Mac ephemeral = 32 × `0x44` (X25519, clamped as usua
 | `file_chunk` | both | `id` | up to 256 KiB | |
 | `file_end` | both | `id`, `sha256` (hex) | | `ack` (`ok`, `err`) |
 | `batch_end` | both | `batch` | | |
+| `batch_cancel` | phone → Mac | `batch` | | The phone cancelled the send part-way: the Mac drops the batch's unfinished file at once and keeps any files that already arrived whole |
 | `ack` | both | `id`, `ok` (bool), `err` (optional) | | |
 | `notif` | phone → Mac | `key`, `pkg`, `app`, `title`, `text`, `time` (ms), `reply` (bool), `actions` (array of `{"i": index, "title": …, "reply": bool}`) | app icon PNG, only the first time per connection | |
 | `notif_removed` | phone → Mac | `key` | | |

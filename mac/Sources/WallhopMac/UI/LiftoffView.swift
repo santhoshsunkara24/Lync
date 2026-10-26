@@ -4,16 +4,19 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 /// Liftoff: Lync's link taking off while files go across, the same as on the phone.
-/// Waiting it rests. When a send starts it crouches and lifts off with speed lines streaming back
-/// past it; after a moment they thin out and it holds still, so a long transfer draws nothing at
-/// all. When the send lands it blasts off along its own axis and drops back in, with a glint
-/// running along the tube. Geometry is the app icon's, in a 256 box, turned 45°,
+/// When a send starts it crouches, then flies on its thrust with speed lines streaming back past
+/// it for as long as the send lasts. When the send lands it blasts off along its own axis and
+/// drops back in, with a glint running along the tube; then, at rest, it stops drawing. Geometry is the app icon's, in a 256 box, turned 45°,
 /// so "forward" is up and to the right.
 struct LiftoffView: View {
     /// A send is under way.
     var sending: Bool
     /// The send has landed: the finale plays once.
     var done: Bool
+    /// It failed: the link jolts and comes undone.
+    var failed = false
+    /// It was cancelled: the link powers down and fades.
+    var cancelled = false
 
     @State private var engine = LiftoffEngine()
     /// Nothing is moving: the timeline stops until the send's state changes.
@@ -22,32 +25,28 @@ struct LiftoffView: View {
     var body: some View {
         TimelineView(.animation(minimumInterval: 1 / 60, paused: WMotion.reduceMotion || still)) { context in
             Canvas { ctx, size in
-                engine.step(now: context.date, sending: sending, done: done)
+                engine.step(now: context.date, sending: sending, done: done, failed: failed, cancelled: cancelled)
                 engine.draw(ctx, size: size)
                 if engine.isStill && !still { DispatchQueue.main.async { still = true } }
             }
         }
         .onChange(of: sending) { _, _ in still = false }
         .onChange(of: done) { _, _ in still = false }
+        .onChange(of: failed) { _, _ in still = false }
+        .onChange(of: cancelled) { _, _ in still = false }
         .accessibilityHidden(true)
     }
 }
 
 /// The animation's state between frames: which stage it's in and the speed lines on screen.
 final class LiftoffEngine {
-    private enum Stage { case idle, launch, send, done }
+    private enum Stage { case idle, launch, send, done, fail, cancel }
     private struct Streak { var off: CGFloat; var d: CGFloat; let len: CGFloat; let w: CGFloat; let v: CGFloat; var life: CGFloat }
 
     private static let launchMs: Double = 260, doneMs: Double = 1150
-    /// How long the speed lines stream once a send is under way, then how long they take to thin out.
-    private static let streamMs: Double = 2400, settleMs: Double = 600
-
-    /// How much of the send's motion is left: 1 while it streams, easing to 0 as it settles.
-    private func thrust() -> Double { 1 - Self.clamp((tp - Self.streamMs) / Self.settleMs) }
-
-    /// The link is at rest with no speed lines left: there's nothing to draw until something changes.
+    /// Landed and at rest with no speed lines left: nothing to draw until the next send.
     var isStill: Bool {
-        lines.isEmpty && (stage == .idle || (stage == .send && tp >= Self.streamMs + Self.settleMs))
+        lines.isEmpty && (stage == .idle || (stage == .fail && tp > 900) || (stage == .cancel && tp > 600))
     }
     private static let pathA: Path = {
         var p = Path(); p.move(to: CGPoint(x: 120.22, y: 91.94)); p.addLine(to: CGPoint(x: 62.24, y: 149.92))
@@ -94,10 +93,13 @@ final class LiftoffEngine {
     private var acc: CGFloat = 0
     private var lines: [Streak] = []
 
-    func step(now: Date, sending: Bool, done: Bool) {
+    func step(now: Date, sending: Bool, done: Bool, failed: Bool = false, cancelled: Bool = false) {
         let d = last.map { min(50, now.timeIntervalSince($0) * 1000) } ?? 16
         last = now; dt = d; tp += d; vt += d
+        if cancelled { if stage != .cancel { stage = .cancel; tp = 0 }; return }
+        if failed { if stage != .fail { stage = .fail; tp = 0 }; return }
         switch stage {
+        case .fail, .cancel: stage = .idle; tp = 0
         case .launch where done, .send where done: stage = .done; tp = 0
         case .idle where sending && !done:
             stage = .launch; tp = 0
@@ -124,16 +126,30 @@ final class LiftoffEngine {
         if WMotion.reduceMotion { drawLink(ctx, x: cx, y: cy, s: linkSize); return }
         var back: CGFloat = 0, stretch: CGFloat = 1, alpha: CGFloat = 1, glint: Double = -1, hover: CGFloat = 0
         var rate: CGFloat = 0, speed = unit * 2.4
+        // How far the two hooks have come apart along the link, in points.
+        var apart: CGFloat = 0
+        var bright = stage == .send
         switch stage {
         case .idle: break
         case .launch:
             let t = tp / Self.launchMs
             back = -10 * CGFloat(Self.easeOut(t)); stretch = 1 - 0.07 * CGFloat(Self.easeOut(t))
         case .send:
-            let k = CGFloat(thrust())
-            back = (-10 + 16 * CGFloat(Self.easeOut(tp / 220))) * CGFloat(Self.easeOut(Double(k))); stretch = 1 + 0.03 * k
-            hover = CGFloat(sin(vt / 70)) * 0.9 * k
-            rate = 26 * k; speed = unit * (2.2 + 1.2 * CGFloat(0.5 + 0.5 * sin(vt / 900)))
+            back = -10 + 16 * CGFloat(Self.easeOut(tp / 220)); stretch = 1.03
+            hover = CGFloat(sin(vt / 70)) * 0.9
+            rate = 26; speed = unit * (2.2 + 1.2 * CGFloat(0.5 + 0.5 * sin(vt / 900)))
+        case .fail:
+            // A jolt, as if it hit something, then the hooks part and the light goes down.
+            hover = CGFloat(sin(tp / 26) * 7 * exp(-tp / 160)) * (unit < 120 ? 0.5 : 1)
+            back = CGFloat(-8 * Self.easeOut(tp / 90) * exp(-tp / 260))
+            apart = linkSize * 0.07 * CGFloat(Self.easeOut((tp - 90) / 420))
+            alpha = CGFloat(1 - 0.35 * Self.clamp(tp / 400))
+            bright = false
+        case .cancel:
+            // The thrust cuts out: it sinks back the way it came, loosening as it fades.
+            back = -unit * 0.16 * CGFloat(Self.easeIn(tp / 420))
+            apart = linkSize * 0.05 * CGFloat(Self.easeOut(tp / 300))
+            alpha = CGFloat(1 - Self.clamp((tp - 120) / 320))
         case .done:
             if tp < 420 {
                 let k = CGFloat(Self.easeIn(tp / 420)); back = 6 + k * unit * 1.2; stretch = 1 + 0.4 * k; rate = 40; speed = unit * 4
@@ -168,11 +184,11 @@ final class LiftoffEngine {
             c.opacity = 0.85 * min(1, l.life * 1.6)
             c.stroke(line, with: .color(Self.streakColor), style: StrokeStyle(lineWidth: l.w, lineCap: .round))
         }
-        drawLink(ctx, x: bx, y: by, s: linkSize, stretch: stretch, alpha: alpha, glint: glint, sending: stage == .send && thrust() > 0.5)
+        drawLink(ctx, x: bx, y: by, s: linkSize, stretch: stretch, alpha: alpha, glint: glint, sending: bright, apart: apart)
     }
 
     /// The link as a lit mint tube, like the app icon, centred at (x, y) and `s` points tall.
-    private func drawLink(_ ctx: GraphicsContext, x: CGFloat, y: CGFloat, s: CGFloat, stretch: CGFloat = 1, alpha: CGFloat = 1, glint: Double = -1, sending: Bool = false) {
+    private func drawLink(_ ctx: GraphicsContext, x: CGFloat, y: CGFloat, s: CGFloat, stretch: CGFloat = 1, alpha: CGFloat = 1, glint: Double = -1, sending: Bool = false, apart: CGFloat = 0) {
         guard alpha > 0.002 else { return }
         var c = ctx
         c.opacity = alpha
@@ -188,8 +204,12 @@ final class LiftoffEngine {
         }
         c.scaleBy(x: k, y: k)
         c.translateBy(x: -128, y: -128)
-        hook(c, Self.pathA, style: Self.styleA, glint: glint)
-        hook(c, Self.pathB, style: Self.styleB, glint: glint)
+        // The lower hook falls back, the upper one forward: the link opening along its length.
+        let shift = apart / k
+        var a = c; a.translateBy(x: -Self.u.x * shift, y: -Self.u.y * shift)
+        var b = c; b.translateBy(x: Self.u.x * shift, y: Self.u.y * shift)
+        hook(a, Self.pathA, style: Self.styleA, glint: glint)
+        hook(b, Self.pathB, style: Self.styleB, glint: glint)
     }
 
     private func hook(_ ctx: GraphicsContext, _ path: Path, style: HookStyle, glint: Double) {

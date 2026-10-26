@@ -148,6 +148,18 @@ final class FileReceiver {
         openBatches.insert(batch)
     }
 
+    /// The phone cancelled the send: its half-written file goes at once, nothing is left behind.
+    /// Files of the batch that already arrived whole are kept.
+    func cancelBatch(_ batch: String) {
+        for (id, file) in incoming where file.batch == batch {
+            discard(file)
+            incoming[id] = nil
+        }
+        openBatches.remove(batch)
+        batchBytes[batch] = nil
+        refusedBatches[batch] = nil
+    }
+
     /// Refuses a whole batch (e.g. not enough space): its files are acked with `reason` and
     /// nothing is written.
     func refuseBatch(_ batch: String, reason: String) {

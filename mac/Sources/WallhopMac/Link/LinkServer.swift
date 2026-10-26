@@ -38,6 +38,8 @@ enum LinkEvent {
     case batchFinished(id: String)
     /// The connection dropped before the batch finished.
     case batchInterrupted(id: String)
+    /// The phone cancelled the send part-way.
+    case batchCancelled(id: String)
     case notification(PhoneNotification, icon: Data?)
     case call(PhoneCall)
     case smsChanged
@@ -526,7 +528,7 @@ final class LinkServer {
         // its status, media, calls and notifications would mix with the active phone's.
         if connection !== active {
             let background: Set<String> = ["ping", "text", "otp", "open_url", "ack", "forget",
-                                           "batch_start", "file_start", "file_chunk", "file_end", "batch_end"]
+                                           "batch_start", "file_start", "file_chunk", "file_end", "batch_end", "batch_cancel"]
             guard background.contains(message.type) else { return }
         }
         let files = connection.files
@@ -580,6 +582,13 @@ final class LinkServer {
                 connection.send(Message("ack", ["id": message.string("id") ?? "", "ok": false, "err": reason]))
             case .refused(let reason):
                 connection.send(Message("ack", ["id": message.string("id") ?? "", "ok": false, "err": reason]))
+            }
+
+        case "batch_cancel":
+            if let batch = message.string("batch") {
+                files.cancelBatch(batch)
+                busy.end("in:\(batch)")
+                emit(.batchCancelled(id: batch))
             }
 
         case "batch_end":

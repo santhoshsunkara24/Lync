@@ -1,5 +1,9 @@
 package app.wallhop.ui.screens
 
+import androidx.compose.runtime.setValue
+
+import kotlinx.coroutines.launch
+
 import android.text.format.Formatter
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
@@ -91,6 +95,20 @@ fun SendingScreen(
     val done = transfer.phase == TransferPhase.Done
     val waiting = transfer.phase == TransferPhase.Waiting
     val failed = transfer.phase == TransferPhase.Failed
+    // Cancel: the link powers down first (about half a second), then the screen goes. Nothing
+    // else on the screen can be pressed meanwhile.
+    var cancelling by remember { androidx.compose.runtime.mutableStateOf(false) }
+    val reduceMotion = app.wallhop.ui.design.Wallhop.a11y.reduceMotion
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
+    fun cancel() {
+        if (cancelling) return
+        if (reduceMotion) { onCancel(); return }
+        cancelling = true
+        scope.launch {
+            kotlinx.coroutines.delay(480)
+            onCancel()
+        }
+    }
     // What the screen says went wrong (failed), or why it's still waiting.
     val problem = if (failed) transfer.problem ?: app.wallhop.core.Problems.MAC_STOPPED_ANSWERING else if (waiting) waitingFor else null
     BackHandler(onBack = onHide)
@@ -124,10 +142,13 @@ fun SendingScreen(
                 }
             }
             Spacer(Modifier.weight(1f))
-            Liftoff(sending = !waiting && !failed, done = done, modifier = Modifier.widthIn(max = 300.dp).fillMaxWidth().aspectRatio(1f))
+            Liftoff(
+                sending = !waiting && !failed && !cancelling, done = done, failed = failed, cancelled = cancelling,
+                modifier = Modifier.widthIn(max = 300.dp).fillMaxWidth().aspectRatio(1f),
+            )
             // The number, or what happened.
             AnimatedContent(
-                targetState = when { done -> "done"; failed -> "failed"; waiting -> "waiting"; else -> "sending" },
+                targetState = when { cancelling -> "cancelled"; done -> "done"; failed -> "failed"; waiting -> "waiting"; else -> "sending" },
                 transitionSpec = {
                     (fadeIn(tween(Durations.Enter, easing = Easings.Out)) + scaleIn(Springs.pop(), initialScale = 0.94f)) togetherWith
                         fadeOut(tween(Durations.Quick, easing = Easings.Out)) using SizeTransform(clip = false)
@@ -139,6 +160,7 @@ fun SendingScreen(
                     "done" -> Text("On your Mac", style = app.wallhop.ui.design.Type.pageTitle.copy(fontSize = 32.sp), color = Ink)
                     "waiting" -> Text("Waiting for your Mac", style = Type.title2, color = Ink)
                     "failed" -> Text("Didn't send", style = Type.title2, color = Ink)
+                    "cancelled" -> Text("Cancelled", style = Type.title2, color = Ink)
                     else -> Row(verticalAlignment = Alignment.Bottom) {
                         Text(
                             "${(transfer.progress * 100).toInt()}",
@@ -226,7 +248,7 @@ fun SendingScreen(
                     }
                     .clip(RoundedCornerShape(50))
                     // A failed send has nothing left to cancel: this closes it.
-                    .tappable(source, onClick = if (done || failed) onHide else onCancel),
+                    .tappable(source, onClick = if (done || failed) onHide else ({ cancel() })),
                 contentAlignment = Alignment.Center,
             ) {
                 AnimatedContent(

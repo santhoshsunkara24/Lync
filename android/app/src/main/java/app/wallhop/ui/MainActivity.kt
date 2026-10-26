@@ -61,6 +61,11 @@ class MainActivity : ComponentActivity() {
             intent.removeExtra("stress_send")
             LinkService.sendFiles(this, uris.split(',').filter { it.isNotBlank() }.map { it.trim().toUri() })
         }
+        // Test builds only: `--es stress_code 123456` sends a code as if a text had just brought it.
+        if (app.wallhop.BuildConfig.STRESS_HOOKS) intent?.getStringExtra("stress_code")?.let { code ->
+            intent.removeExtra("stress_code")
+            LinkManager.get(this).sendOtp(code, "Test", "test")
+        }
         intent?.getStringExtra(app.wallhop.link.Notifications.EXTRA_ASK)?.let { key ->
             intent.removeExtra(app.wallhop.link.Notifications.EXTRA_ASK)
             AppNav.ask.value = key

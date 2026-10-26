@@ -1,6 +1,5 @@
 package app.wallhop.ui.components
 
-import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.Orientation
@@ -55,22 +54,31 @@ fun SwipeToDelete(onDelete: () -> Unit, modifier: Modifier = Modifier, content: 
     val red = Wallhop.colors.red
     val button = with(density) { 88.dp.toPx() }
     var width by remember { mutableFloatStateOf(1f) }
-    val offset = remember { Animatable(0f) }
+    // Written straight from the finger (no coroutine in between), so a late finger update can
+    // never cancel the spring that follows and leave the row stuck part-way open.
+    var x by remember { mutableFloatStateOf(0f) }
+    val settling = remember { arrayOfNulls<kotlinx.coroutines.Job>(1) }
     var raw by remember { mutableFloatStateOf(0f) }
     var armed by remember { mutableStateOf(false) }
 
     fun shown(r: Float): Float = if (r <= 0f) r else (1f - 1f / (r * 0.55f / button + 1f)) * button * 0.5f
-    suspend fun settle(target: Float, velocity: Float) {
+    fun animateTo(target: Float, velocity: Float) {
+        settling[0]?.cancel()
+        settling[0] = scope.launch {
+            androidx.compose.animation.core.animate(x, target, velocity, spring(1f, 500f)) { value, _ -> x = value }
+        }
+    }
+    fun settle(target: Float, velocity: Float) {
         raw = target
-        offset.animateTo(target, spring(1f, 500f), initialVelocity = velocity)
+        animateTo(target, velocity)
     }
     // Deleted the moment it's decided: the row slides the rest of the way off while the list
     // closes the gap, in one motion, rather than a red row waiting to be removed.
     fun delete(velocity: Float = 0f) {
         onDelete()
-        scope.launch { offset.animateTo(-width, spring(1f, 500f), initialVelocity = velocity) }
+        animateTo(-width, velocity)
     }
-    val open = offset.value < -button * 0.5f
+    val open = x < -button * 0.5f
 
     Box(
         modifier
@@ -79,7 +87,7 @@ fun SwipeToDelete(onDelete: () -> Unit, modifier: Modifier = Modifier, content: 
             .semantics { customActions = listOf(CustomAccessibilityAction("Delete") { onDelete(); true }) },
     ) {
         // The red behind the row, growing with the swipe; "Delete" sits in its trailing end.
-        val revealed = (-offset.value).coerceAtLeast(0f)
+        val revealed = (-x).coerceAtLeast(0f)
         if (revealed > 0f) {
             val source = remember { MutableInteractionSource() }
             Box(Modifier.matchParentSize()) {
@@ -104,25 +112,26 @@ fun SwipeToDelete(onDelete: () -> Unit, modifier: Modifier = Modifier, content: 
         }
         Box(
             Modifier
-                .offset { IntOffset(offset.value.roundToInt(), 0) }
+                .offset { IntOffset(x.roundToInt(), 0) }
                 .draggable(
                     rememberDraggableState { delta ->
+                        settling[0]?.cancel()
                         raw += delta
                         val next = shown(raw)
                         // One tick as it crosses the line where letting go deletes.
                         val past = next < -width * 0.5f
                         if (past != armed) { armed = past; if (past) haptics.perform(Haptic.Light) }
-                        scope.launch { offset.snapTo(next) }
+                        x = next
                     },
                     Orientation.Horizontal,
                     enabled = !reduceMotion,
-                    onDragStarted = { raw = offset.value },
+                    onDragStarted = { settling[0]?.cancel(); raw = x },
                     onDragStopped = { velocity ->
                         val dpPerSec = velocity / density.density
                         armed = false
                         when {
-                            offset.value < -width * 0.5f || dpPerSec < -800f -> delete(velocity)
-                            offset.value < -button * 0.6f && dpPerSec < 300f -> settle(-button, velocity)
+                            x < -width * 0.5f || dpPerSec < -800f -> delete(velocity)
+                            x < -button * 0.6f && dpPerSec < 300f -> settle(-button, velocity)
                             else -> settle(0f, velocity)
                         }
                     },
@@ -136,7 +145,7 @@ fun SwipeToDelete(onDelete: () -> Unit, modifier: Modifier = Modifier, content: 
                 Box(
                     Modifier.align(Alignment.CenterStart).fillMaxHeight()
                         .width(with(density) { (width - button).coerceAtLeast(0f).toDp() })
-                        .tappable(source) { scope.launch { settle(0f, 0f) } },
+                        .tappable(source) { settle(0f, 0f) },
                 )
             }
         }
