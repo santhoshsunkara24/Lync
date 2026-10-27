@@ -210,6 +210,9 @@ class LinkManager private constructor(private val context: Context) {
     @Volatile private var session: Session? = null
     /** The Bluetooth fallback once its handshake is done; only used while [session] is down. */
     @Volatile private var blePath: MacPath? = null
+    /** Set on pairing, so the first session after it lights the Glyphs whatever came before. */
+    private val justPaired = java.util.concurrent.atomic.AtomicBoolean(false)
+
     /** The session pairing confirmed with, waiting for the connect loop to take it over. */
     private val pairedSession = java.util.concurrent.atomic.AtomicReference<Session?>(null)
     private val _bluetooth = MutableStateFlow(false)
@@ -516,9 +519,11 @@ class LinkManager private constructor(private val context: Context) {
 
     private suspend fun runSession(session: Session) {
         this.session = session
-        // A Glyph pulse when the Mac connects, but not for a reconnect after a short network blip.
+        // A Glyph pulse when the Mac connects: always just after pairing, otherwise not for a
+        // reconnect after a short network blip.
         val now = android.os.SystemClock.elapsedRealtime()
-        if (disconnectedAt == 0L || now - disconnectedAt >= 2 * 60_000) {
+        val justPaired = this.justPaired.getAndSet(false)
+        if (justPaired || disconnectedAt == 0L || now - disconnectedAt >= 2 * 60_000) {
             app.wallhop.glyph.Glyphs.play(context, app.wallhop.glyph.Glyphs.Effect.Connected)
         }
         iconsSent.clear()
@@ -858,6 +863,7 @@ class LinkManager private constructor(private val context: Context) {
                             if (!isActive) { session.close(); ensureActive() }
                             pairingSocket.set(null) // Now the session's: not closed with the pairing.
                             store.save(PairedMac(Crypto.deviceId(macPub), session.macName.ifEmpty { macName }, macPub, target, port))
+                            justPaired.set(true)
                             pairedSession.getAndSet(session)?.close()
                             updateBluetooth(BLUETOOTH_GRACE_MS)
                             _state.value = LinkState.Searching(macName)

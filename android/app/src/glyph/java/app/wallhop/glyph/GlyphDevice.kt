@@ -75,6 +75,7 @@ internal object GlyphDevice {
     private val release = Runnable { releaseNow() }
 
     fun play(context: Context, effect: Glyphs.Effect) {
+        trace("play $effect on $hardware, ready=$ready")
         main.post {
             cancelSteps()
             main.removeCallbacks(release)
@@ -126,8 +127,10 @@ internal object GlyphDevice {
             Glyphs.Hardware.Matrix -> {
                 val manager = GlyphMatrixManager.getInstance(context)
                 matrixManager = manager
+                trace("binding the matrix service")
                 manager.init(object : GlyphMatrixManager.Callback {
                     override fun onServiceConnected(name: ComponentName) {
+                        trace("matrix service connected")
                         main.post {
                             if (matrixManager !== manager) return@post
                             onConnected { manager.register(matrixTarget!!) }
@@ -182,6 +185,7 @@ internal object GlyphDevice {
     private fun playMatrix(context: Context, effect: Glyphs.Effect) {
         val manager = matrixManager ?: return
         val n = Common.getDeviceMatrixLength()
+        trace("matrix $n x $n")
         fun show(apart: Int = 0, brightness: Int = 255) =
             safely { manager.setAppMatrixFrame(frame(context, n, apart, brightness)) }
         when (effect) {
@@ -247,6 +251,11 @@ internal object GlyphDevice {
 
     private fun safely(block: () -> Unit) {
         runCatching(block).onFailure { log("Glyph effect failed", it) }
+    }
+
+    /** Test builds: each step of an effect, to see where one stops. */
+    private fun trace(message: String) {
+        if (BuildConfig.STRESS_HOOKS) Log.d(TAG, message)
     }
 
     private fun log(message: String, error: Throwable) {

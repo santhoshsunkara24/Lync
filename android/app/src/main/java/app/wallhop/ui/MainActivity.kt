@@ -63,6 +63,11 @@ class MainActivity : ComponentActivity() {
             intent.removeExtra("stress_send")
             LinkService.sendFiles(this, uris.split(',').filter { it.isNotBlank() }.map { it.trim().toUri() })
         }
+        // Test builds only: `--ez stress_glyph true` plays the Glyph connection effect.
+        if (app.wallhop.BuildConfig.STRESS_HOOKS && intent?.getBooleanExtra("stress_glyph", false) == true) {
+            intent.removeExtra("stress_glyph")
+            app.wallhop.glyph.Glyphs.preview(this)
+        }
         // Test builds only: `--es stress_code 123456` sends a code as if a text had just brought it.
         if (app.wallhop.BuildConfig.STRESS_HOOKS) intent?.getStringExtra("stress_code")?.let { code ->
             intent.removeExtra("stress_code")
