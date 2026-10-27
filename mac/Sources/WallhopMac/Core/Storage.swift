@@ -24,7 +24,15 @@ enum Storage {
         try? Data(contentsOf: directory.appendingPathComponent(name))
     }
 
-    /// Overwrites a file with zeros, then removes it (an old plain copy of a key).
+    /// Renames a file out of the way (`name.unreadable-<time>`), keeping it.
+    static func moveAside(_ name: String) {
+        let url = directory.appendingPathComponent(name)
+        let aside = directory.appendingPathComponent("\(name).unreadable-\(Int(Date().timeIntervalSince1970))")
+        try? FileManager.default.moveItem(at: url, to: aside)
+    }
+
+    /// Overwrites a file with zeros, then removes it (an old plain copy of a key). On APFS the old
+    /// blocks may survive the overwrite, and backups keep their copies: this is tidying, not erasure.
     static func shred(_ name: String) {
         let url = directory.appendingPathComponent(name)
         if let size = try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int, size > 0,
@@ -43,8 +51,11 @@ enum Storage {
 enum EnclaveSeal {
     private static let info = Data("lync-identity-seal-v1".utf8)
 
+    /// 2: the Enclave key opens from the first unlock on. 1 (one earlier build): only while unlocked.
+    static let currentVersion = 2
+
     private struct Sealed: Codable {
-        var v = 1
+        var v = EnclaveSeal.currentVersion
         let enclave: Data
         let ephemeral: Data
         let box: Data
@@ -52,19 +63,26 @@ enum EnclaveSeal {
 
     static var available: Bool { SecureEnclave.isAvailable }
 
+    static func version(_ data: Data) -> Int? { (try? JSONDecoder().decode(Sealed.self, from: data))?.v }
+
     static func seal(_ secret: Data) -> Data? {
+        // Usable from the first unlock after a restart on, also while the screen is locked (Lync
+        // relaunching then must still open its key), and only on this Mac.
         guard available,
-              let enclaveKey = try? SecureEnclave.P256.KeyAgreement.PrivateKey() else { return nil }
+              let access = SecAccessControlCreateWithFlags(nil, kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly, [], nil),
+              let enclaveKey = try? SecureEnclave.P256.KeyAgreement.PrivateKey(accessControl: access) else { return nil }
         let ephemeral = P256.KeyAgreement.PrivateKey()
         guard let shared = try? ephemeral.sharedSecretFromKeyAgreement(with: enclaveKey.publicKey),
               let box = try? AES.GCM.seal(secret, using: key(shared, ephemeral.publicKey)).combined else { return nil }
-        return try? JSONEncoder().encode(Sealed(enclave: enclaveKey.dataRepresentation,
-                                                ephemeral: ephemeral.publicKey.x963Representation, box: box))
+        guard let sealed = try? JSONEncoder().encode(Sealed(enclave: enclaveKey.dataRepresentation,
+                                                             ephemeral: ephemeral.publicKey.x963Representation, box: box)),
+              open(sealed) == secret else { return nil } // Only trusted once it opens again.
+        return sealed
     }
 
     static func open(_ data: Data) -> Data? {
         guard available,
-              let sealed = try? JSONDecoder().decode(Sealed.self, from: data), sealed.v == 1,
+              let sealed = try? JSONDecoder().decode(Sealed.self, from: data), (1...currentVersion).contains(sealed.v),
               let enclaveKey = try? SecureEnclave.P256.KeyAgreement.PrivateKey(dataRepresentation: sealed.enclave),
               let ephemeral = try? P256.KeyAgreement.PublicKey(x963Representation: sealed.ephemeral),
               let shared = try? enclaveKey.sharedSecretFromKeyAgreement(with: ephemeral),
@@ -81,7 +99,8 @@ enum EnclaveSeal {
 /// This Mac's long-term X25519 key, sealed by the Secure Enclave (`identity.sealed`), so a copy
 /// of the file taken off this Mac can't be used to pretend to be it. Macs without a Secure
 /// Enclave (older Intel ones) keep it in a user-only file, as earlier builds all did; a plain
-/// file from an earlier build is sealed and shredded on first launch.
+/// file from an earlier build is sealed, checked, then removed on first launch. A sealed file
+/// that won't open is never overwritten: it's set aside, so nothing is lost for good.
 final class Identity {
     let privateKey: Curve25519.KeyAgreement.PrivateKey
 
@@ -99,10 +118,23 @@ final class Identity {
     private static let sealedFile = "identity.sealed"
 
     static func loadOrCreate() -> Identity {
-        if let sealed = Storage.read(sealedFile),
-           let raw = EnclaveSeal.open(sealed) ?? EnclaveSeal.open(sealed), // The Enclave, once more if busy.
-           let key = try? Curve25519.KeyAgreement.PrivateKey(rawRepresentation: raw) {
-            return Identity(privateKey: key)
+        if let sealed = Storage.read(sealedFile) {
+            // The Enclave, a few times over a second or so if it's busy.
+            for attempt in 0..<4 {
+                if let raw = EnclaveSeal.open(sealed), let key = try? Curve25519.KeyAgreement.PrivateKey(rawRepresentation: raw) {
+                    // Sealed by an earlier build (only while unlocked): seal it again, checked, so a
+                    // relaunch with the screen locked can still open it.
+                    if EnclaveSeal.version(sealed) != EnclaveSeal.currentVersion, let resealed = EnclaveSeal.seal(raw) {
+                        try? Storage.writePrivate(resealed, to: sealedFile)
+                    }
+                    return Identity(privateKey: key)
+                }
+                if attempt < 3 { Thread.sleep(forTimeInterval: 0.35) }
+            }
+            // Can't be opened here (moved from another Mac, or the Enclave refuses it): keep it,
+            // under another name, rather than writing over it, and carry on with a new key.
+            NSLog("Lync: this Mac's sealed key can't be opened; set aside, using a new key")
+            Storage.moveAside(sealedFile)
         }
         if let raw = Storage.read(plainFile),
            let key = try? Curve25519.KeyAgreement.PrivateKey(rawRepresentation: raw) {

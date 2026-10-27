@@ -56,7 +56,7 @@ let myPub = me.publicKey.rawRepresentation
 // Pairing v2: commit to a nonce, get the Mac's, then reveal ours (PROTOCOL.md, Pairing).
 let myNonce = Handshake.randomBytes(16)!
 let commit = Handshake.pairingCommit(phonePub: myPub, phoneNonce: myNonce)
-sendJSON(["t": "pair", "v": 2, "name": "Test Phone", "pub": myPub.base64EncodedString(), "commit": commit.base64EncodedString()])
+sendJSON(["t": "pair", "v": 3, "name": "Test Phone", "pub": myPub.base64EncodedString(), "commit": commit.base64EncodedString()])
 let wait = readJSON()
 guard wait["t"] as? String == "pair_wait", let macPubB64 = wait["pub"] as? String, let macPub = Data(base64Encoded: macPubB64),
       let macNonce = (wait["nonce"] as? String).flatMap({ Data(base64Encoded: $0) }) else {

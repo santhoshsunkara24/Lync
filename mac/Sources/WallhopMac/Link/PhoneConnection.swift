@@ -26,6 +26,7 @@ final class PhoneConnection {
     static let appVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "dev"
 
     let id = UUID()
+    let openedAt = Date()
     private let connection: NWConnection
     private unowned let server: LinkServer
     private var reader = FrameReader()
@@ -172,10 +173,11 @@ final class PhoneConnection {
             close()
             return
         }
-        // v1 compared a code an attacker could grind for; only v2 is accepted (PROTOCOL.md, Pairing).
-        guard (json["v"] as? NSNumber)?.intValue == 2 else {
-            server.refusedOldPhone()
-            sendHandshake(["t": "pair_no", "err": PhoneError.version], thenClose: true)
+        // Pairing v3: the v2 exchange from a phone that speaks the v3 (Noise) session; older
+        // phones couldn't connect once paired, so they're told to update now (PROTOCOL.md).
+        guard (json["v"] as? NSNumber)?.intValue == Self.protocolVersion else {
+            if ((json["v"] as? NSNumber)?.intValue ?? 0) < Self.protocolVersion { server.refusedOldPhone() }
+            sendHandshake(["t": "pair_no", "err": PhoneError.version, "v": Self.protocolVersion], thenClose: true)
             return
         }
         guard server.allowPairAttempt(from: remoteHost) else {
@@ -260,10 +262,10 @@ final class PhoneConnection {
               let message = (json["noise"] as? String).flatMap({ Data(base64Encoded: $0) }),
               let noise = try? Noise.Handshake(role: .responder, prologue: Handshake.tcpPrologue, staticKey: server.identity.privateKey)
         else {
-            // An older phone (v1/v2 hello) has to be updated to talk to this Mac; a newer one
-            // needs a newer Mac, which the phone says itself.
-            if ((json["v"] as? NSNumber)?.intValue ?? 0) < Self.protocolVersion { server.refusedOldPhone() }
-            close()
+            // Another session protocol: tell the phone which one this Mac speaks (it says "update"),
+            // and the user here, once, which side needs it.
+            server.refusedSession(protocolVersion: (json["v"] as? NSNumber)?.intValue)
+            sendHandshake(["t": "hello_no", "v": Self.protocolVersion], thenClose: true)
             return
         }
         guard let payload = try? noise.readMessage(message), let pub = noise.remoteStatic?.rawRepresentation else {

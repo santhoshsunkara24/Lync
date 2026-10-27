@@ -54,7 +54,7 @@ depends on a random nonce from each side, and the phone commits to its nonce bef
 the Mac's. Whoever is in the middle has to fix their own key and nonce before learning the
 other side's nonce, so they get one guess: a 1 in 1 000 000 chance, not a search.
 
-1. Phone → Mac `{"t":"pair","v":2,"name":"Nothing Phone (3)","pub":"<phone static>","commit":"<c>"}`
+1. Phone → Mac `{"t":"pair","v":3,"name":"Nothing Phone (3)","pub":"<phone static>","commit":"<c>"}`
    where `nonceP` is 16 random bytes and
    `c = SHA-256("lync-pair-commit-v2" ‖ phonePub ‖ nonceP)` (32 bytes, base64).
 2. Mac → Phone `{"t":"pair_wait","name":"MacBook Air","pub":"<mac static>","nonce":"<nonceM>"}`
@@ -72,8 +72,8 @@ other side's nonce, so they get one guess: a 1 in 1 000 000 chance, not a search
 `‖` is byte concatenation; the ASCII labels have no terminator. Public keys are the raw 32-byte
 X25519 keys. All binary values in the JSON are standard base64 with padding.
 
-`pair_no` may carry `"err"`: `"version"` (the `pair` frame wasn't `"v":2`; the phone should ask
-the user to update), `"busy"` (another phone's pairing request is already on screen; try
+`pair_no` may carry `"err"`: `"version"` (the `pair` frame wasn't `"v":3`, the version of the
+session protocol this Mac speaks, which it sends as `"v"`; the phone should ask the user to update), `"busy"` (another phone's pairing request is already on screen; try
 again shortly), or `"rate"` (more than 5 pairing attempts from this address in the last
 minute). Without `err` the user declined. The Mac closes the connection after any `pair_no`.
 
@@ -97,7 +97,7 @@ unchanged (still `v=1`).
 
 `h` lists every IPv4 address the Mac has, Wi‑Fi and Ethernet first. The phone tries them all
 at once and uses the first that accepts a connection. It connects to that address and port and
-sends the usual v2 `pair` frame (`v`, `name`, `pub`, `commit`) plus
+sends the usual `pair` frame (`v`, `name`, `pub`, `commit`) plus
 `"qr":"<base64 HMAC-SHA256(key = t, "wallhop-qr-v1" ‖ phonePub ‖ macPub)>"`. The secret never
 crosses the network, so someone watching the Wi‑Fi can't reuse it, and swapping in another
 phone key breaks the HMAC.
@@ -131,8 +131,8 @@ from pairing, so it is the IK pre-message (`<- s`). Prologue: the ASCII bytes `l
    - It doesn't decrypt (written for another key: Lync was reinstalled on this Mac, or it's another
      Mac): Mac → Phone `{"t":"not_me"}` and closes. This is unauthenticated; the phone may treat it
      only as a hint ("this Mac has a different key").
-   - `v` isn't 3 (an older phone): the Mac closes without answering and asks the user to update the
-     phone.
+   - `v` isn't 3: Mac → Phone `{"t":"hello_no","v":3}` and closes; the phone tells the user which
+     side to update, and so does the Mac (once).
    - Otherwise Mac → Phone `{"t":"hello_ok","noise":"<base64 message 2>"}`, message 2's payload being
      `{"name":"<Mac name>","app":"<app version>","paired":true}`. If the phone's key (learned from
      message 1) isn't paired with this Mac, the payload is `{"app":"…","paired":false}` and the Mac
@@ -245,7 +245,9 @@ Mac static = 32 × `0x33`, Mac ephemeral = 32 × `0x44` (X25519, clamped as usua
 - **Mac:** the private key is sealed by the Secure Enclave (`identity.sealed`: ECIES on P-256 with an
   Enclave key, HKDF-SHA256, AES-GCM), so a copy of the file is useless on any other machine. Macs
   without a Secure Enclave keep it in a user-only file. A file restored onto another Mac can't be
-  opened there: Lync makes a new key and phones pair again.
+  opened there: Lync sets it aside (never overwrites it), makes a new key, and phones pair again.
+  A plain key from an earlier build is sealed, checked, then deleted (older backups may still hold
+  it).
 
 ## Messages
 

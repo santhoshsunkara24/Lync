@@ -157,6 +157,7 @@ final class LinkServer {
     static let pairAttemptsPerMinuteTotal = 20
     /// Connections still in the handshake at once; more are turned away until some finish.
     static let maxUnauthenticated = 16
+    static let maxUnauthenticatedPerHost = 4
 
     let identity: Identity
     let paired: PairedPhones
@@ -292,10 +293,18 @@ final class LinkServer {
         }
         listener.newConnectionHandler = { [weak self] nw in
             guard let self else { nw.cancel(); return }
-            // Only so many connections that haven't proved who they are (a phone needs one).
-            guard self.connections.values.filter({ $0.state != .ready }).count < Self.maxUnauthenticated else {
+            // Only so many connections that haven't proved who they are, and a few per address, so
+            // one host can't hold them all. When full, the oldest gives way (not a pairing waiting
+            // for the user), so a real phone always gets in.
+            let host: String = { if case let .hostPort(h, _) = nw.endpoint { return "\(h)" }; return "unknown" }()
+            let waiting = self.connections.values.filter { $0.state != .ready }
+            guard waiting.filter({ $0.remoteHost == host }).count < Self.maxUnauthenticatedPerHost else {
                 nw.cancel()
                 return
+            }
+            if waiting.count >= Self.maxUnauthenticated,
+               let oldest = waiting.filter({ $0.state != .awaitingPairingDecision }).min(by: { $0.openedAt < $1.openedAt }) {
+                oldest.close()
             }
             let connection = PhoneConnection(connection: nw, server: self)
             self.connections[connection.id] = connection
@@ -383,6 +392,11 @@ final class LinkServer {
     /// A phone too old to pair was turned away.
     func refusedOldPhone() {
         emit(.phoneTooOldToPair)
+    }
+
+    /// A paired phone spoke a session protocol this Mac doesn't (it says once which side to update).
+    func refusedSession(protocolVersion: Int?) {
+        emit(.phoneVersion(app: nil, protocolVersion: protocolVersion ?? 1))
     }
 
     /// At most `pairAttemptsPerMinute` pairing attempts per address per minute, and

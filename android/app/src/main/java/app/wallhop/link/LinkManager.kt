@@ -393,10 +393,10 @@ class LinkManager private constructor(private val context: Context) {
                 // "Not paired" comes inside the Noise handshake, so it's from our own Mac. Still it
                 // never deletes the pairing by itself: the phone asks the user to pair again
                 // (keeping the keys until they do) and keeps retrying, so a Mac that still knows us
-                // reconnects. Only where Bonjour found our Mac's name, as before.
+                // reconnects. Wherever it was reached: no one else could have said it.
                 val unpaired = result.exceptionOrNull() as? UnpairedException
                 if (unpaired != null) {
-                    if (resolved && unpaired.macPub != null && java.security.MessageDigest.isEqual(unpaired.macPub, mac.publicKey)) {
+                    if (unpaired.macPub != null && java.security.MessageDigest.isEqual(unpaired.macPub, mac.publicKey)) {
                         _state.value = LinkState.Forgotten(mac.name)
                     } else if (resolved && unpaired.macPub != null) {
                         // Our Mac's name with a new key: Lync on it was reinstalled or reset.
@@ -806,7 +806,7 @@ class LinkManager private constructor(private val context: Context) {
                     val phoneNonce = Crypto.pairNonce()
                     val request = JSONObject()
                         .put("t", "pair")
-                        .put("v", 2)
+                        .put("v", Session.PROTOCOL)
                         .put("name", phoneName)
                         .put("pub", identity.publicKey.b64())
                         .put("commit", Crypto.pairingCommit(identity.publicKey, phoneNonce).b64())
@@ -821,7 +821,11 @@ class LinkManager private constructor(private val context: Context) {
                     when (wait.optString("t")) {
                         "pair_wait" -> Unit
                         // Turned down straight away: busy, too many tries, an old version, a used code.
-                        "pair_no" -> throw PairingDeclinedException(wait.optString("err").takeIf { it.isNotEmpty() })
+                        "pair_no" -> {
+                            // The Mac speaks an older protocol than this phone: it's the one to update.
+                            if (wait.optString("err") == "version" && wait.optInt("v", Int.MAX_VALUE) < Session.PROTOCOL) throw MacTooOldException()
+                            throw PairingDeclinedException(wait.optString("err").takeIf { it.isNotEmpty() })
+                        }
                         else -> throw HandshakeException("Not a pairing reply")
                     }
                     val macPub = android.util.Base64.decode(wait.getString("pub"), android.util.Base64.NO_WRAP)
@@ -850,6 +854,8 @@ class LinkManager private constructor(private val context: Context) {
                             // added this phone. Then that session is the first connection.
                             step = PairStep.Confirming
                             val (session, _) = Session.handshake(socket, identity, phoneName, macPub)
+                            // Cancelled during that handshake: don't pair behind the user's back.
+                            if (!isActive) { session.close(); ensureActive() }
                             pairingSocket.set(null) // Now the session's: not closed with the pairing.
                             store.save(PairedMac(Crypto.deviceId(macPub), session.macName.ifEmpty { macName }, macPub, target, port))
                             pairedSession.getAndSet(session)?.close()
@@ -928,10 +934,10 @@ class LinkManager private constructor(private val context: Context) {
         // Tell the Mac first (PROTOCOL.md, forget), so it drops this phone too; then close.
         // Over Wi-Fi and the Bluetooth link both at once, whichever are up: without it the Mac
         // never hears, keeps the pairing and goes on showing this phone as away.
-        val open = session?.takeIf { !it.closed }
+        val open = session?.takeIf { !it.closed } ?: pairedSession.getAndSet(null)?.takeIf { !it.closed }
+        pairedSession.getAndSet(null)?.close()
         val paths = listOfNotNull<MacPath>(open, blePath?.takeIf { !it.closed })
         session = null
-        pairedSession.getAndSet(null)?.close()
         store.forget()
         scope.launch {
             paths.map { path ->
