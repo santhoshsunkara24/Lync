@@ -23,8 +23,10 @@ enum class Fix(val label: String) {
     NotificationSettings("Notification settings"),
     BatterySettings("Battery settings"),
     TurnOnBluetooth("Turn on"),
-    /** The releases page, for a newer Lync. */
+    /** A newer Lync for this phone: Play when it came from Play (its only way to update), else the releases page. */
     Update("Get update"),
+    /** A newer Lync for the Mac: the Mac download link, shared to send to the Mac. */
+    UpdateMac("Send Mac link"),
     OpenLync("Open Lync"),
 }
 
@@ -111,7 +113,7 @@ object Problems {
         Away.MacNotAnswering -> Problem("Mac isn't answering", "Wake your Mac and check its firewall allows Lync.", listOf(Fix.TryAgain))
         Away.MacReset -> Problem("Your Mac was reset", "Pair again to reconnect.", listOf(Fix.PairAgain))
         Away.KeyLocked -> Problem("Phone's key is locked", "Unlock your phone, or pair again.", listOf(Fix.TryAgain, Fix.PairAgain))
-        Away.VersionMismatch -> Problem("Lync versions don't match", "Update Lync on this phone and on your Mac.", listOf(Fix.Update))
+        Away.VersionMismatch -> Problem("Lync versions don't match", "Update Lync on this phone and on your Mac.", listOf(Fix.Update, Fix.UpdateMac))
     }
 
     /** Looking around without a Mac: sending needs one paired first. */
@@ -180,7 +182,7 @@ object Problems {
     val CODE_EXPIRED = Problem("This code no longer works", "Show a new code on your Mac.", listOf(Fix.TryAgain))
     val DECLINED = Problem("Pairing declined on your Mac", "Try again and click Pair.", listOf(Fix.TryAgain))
     val NOT_QR_MAC = Problem("This isn't the Mac from the code", "Scan the code on the Mac you want to pair.", listOf(Fix.TryAgain))
-    val MAC_NEEDS_UPDATE = Problem("Mac needs a Lync update", "Update Lync on your Mac.", listOf(Fix.Update))
+    val MAC_NEEDS_UPDATE = Problem("Mac needs a Lync update", "Update Lync on your Mac.", listOf(Fix.UpdateMac))
 
     // MARK: - Sending files
 

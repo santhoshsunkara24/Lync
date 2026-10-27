@@ -657,6 +657,7 @@ private fun fixIcon(fix: app.wallhop.core.Fix): ImageVector? = when (fix) {
     app.wallhop.core.Fix.PairMac -> WIcons.QrCode
     app.wallhop.core.Fix.ChooseAgain -> WIcons.Image
     app.wallhop.core.Fix.TurnOnBluetooth -> WIcons.Bluetooth
+    app.wallhop.core.Fix.UpdateMac -> WIcons.Laptop
     else -> null
 }
 

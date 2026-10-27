@@ -177,6 +177,9 @@ Done in the repo:
 - [x] Release bundle builds signed with the upload key; native libraries 16 KB aligned (Android 15+).
 - [x] In-app disclosure before each permission prompt says what is read and that it goes only to the
       paired Mac, encrypted.
+- [x] "Get update" on the phone opens Lync's Play Store page when it was installed from Play
+      (Play's rule: an app from Play updates only through Play); the Mac's update shares the Mac
+      download link instead of opening it here.
 
 Only you can do:
 - [ ] Back up the upload key and its password (`~/Documents/signing/`).
