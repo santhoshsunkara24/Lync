@@ -3,6 +3,6 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 mkdir -p build
-swiftc -O -o build/test-phone Sources/WallhopMac/Core/Crypto.swift Sources/WallhopMac/Core/Framing.swift \
-  Sources/WallhopMac/Core/Message.swift Sources/WallhopMac/Core/Storage.swift scripts/TestPhone/main.swift
+swiftc -O -D DEBUG -o build/test-phone Sources/WallhopMac/Core/Noise.swift Sources/WallhopMac/Core/Crypto.swift Sources/WallhopMac/Core/Framing.swift \
+  Sources/WallhopMac/Core/Message.swift Sources/WallhopMac/Core/Storage.swift Sources/WallhopMac/Core/DevEnv.swift scripts/TestPhone/main.swift
 exec build/test-phone "$@"

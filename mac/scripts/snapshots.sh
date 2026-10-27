@@ -4,5 +4,5 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 mkdir -p build
 SOURCES=$(find Sources/WallhopMac -name '*.swift' ! -name main.swift)
-swiftc -O -o build/snapshots $SOURCES scripts/Snapshots/main.swift 2>&1 | grep -E "error" || true
+swiftc -O -D SNAPSHOTS -o build/snapshots $SOURCES scripts/Snapshots/main.swift 2>&1 | grep -E "error" || true
 exec build/snapshots "${1:-build/snapshots-out}"

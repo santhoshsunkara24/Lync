@@ -136,7 +136,7 @@ final class PanelController {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
             guard let self, !self.model.panelOpen else { return }
             self.panel.orderOut(nil)
-            if ProcessInfo.processInfo.environment["WALLHOP_CAPTURE"] == "1" { NSLog("Lync: panel visible=\(self.panel.isVisible)") }
+            if DevEnv.on("WALLHOP_CAPTURE") { NSLog("Lync: panel visible=\(self.panel.isVisible)") }
         }
     }
 
@@ -372,11 +372,11 @@ final class NotchSensor {
 
     /// Covers the notch on the built-in display; hidden when there's no notch or in menu bar mode.
     func update(active: Bool) {
-        if ProcessInfo.processInfo.environment["WALLHOP_CAPTURE"] == "1" { NSLog("Lync: notch sensor active=\(active)") }
+        if DevEnv.on("WALLHOP_CAPTURE") { NSLog("Lync: notch sensor active=\(active)") }
         guard active, let screen = NSScreen.screens.first(where: { $0.safeAreaInsets.top > 0 }),
               let left = screen.auxiliaryTopLeftArea, let right = screen.auxiliaryTopRightArea else {
             window.orderOut(nil)
-            if ProcessInfo.processInfo.environment["WALLHOP_CAPTURE"] == "1" { NSLog("Lync: sensor visible=\(window.isVisible)") }
+            if DevEnv.on("WALLHOP_CAPTURE") { NSLog("Lync: sensor visible=\(window.isVisible)") }
             return
         }
         let height = screen.safeAreaInsets.top

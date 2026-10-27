@@ -19,9 +19,9 @@ final class PhoneConnection {
     static let handshakeTimeout: TimeInterval = 15
     /// Time a pairing request waits for the user before it's declined.
     static let pairingDecisionTimeout: TimeInterval = 120
-    /// The session protocol (`v` in `hello`/`hello_ok`) this Mac speaks, and the range it accepts.
-    static let protocolVersion = 1
-    static let supportedProtocols = 1...2
+    /// The session protocol (`v` in `hello`) this Mac speaks: 3 is the Noise handshake.
+    static let protocolVersion = 3
+    static let supportedProtocols = 3...3
     /// This app's version, sent as `app` in `hello_ok`.
     static let appVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "dev"
 
@@ -56,7 +56,11 @@ final class PhoneConnection {
         self.server = server
     }
 
+    /// The largest frame before the session is up (PROTOCOL.md, Framing).
+    static let handshakeFrameLimit = 16 * 1024
+
     func start() {
+        reader.limit = Self.handshakeFrameLimit
         connection.stateUpdateHandler = { [weak self] state in
             switch state {
             case .failed, .cancelled: self?.close()
@@ -68,8 +72,9 @@ final class PhoneConnection {
         receive()
     }
 
-    func close() {
+    func close(_ why: String = "closed", line: Int = #line) {
         guard state != .closed else { return }
+        if LinkServer.debugLog { NSLog("Lync: connection closed (\(why), line \(line), state \(state))") }
         state = .closed
         deadline?.cancel()
         connection.cancel()
@@ -132,6 +137,7 @@ final class PhoneConnection {
             }
             state = .ready
             deadline?.cancel()
+            reader.limit = Framing.maxPayload
             send(Message("ready"))
             server.connectionReady(self, phone: phone)
             return
@@ -247,50 +253,49 @@ final class PhoneConnection {
         }
     }
 
+    /// The session handshake (PROTOCOL.md, v3): Noise IK, the phone initiating. Its key and name
+    /// arrive encrypted; only a phone that knows this Mac's key can write a hello it can read.
     private func handleHello(_ json: [String: Any]) {
-        guard
-            let pub = (json["pub"] as? String).flatMap({ Data(base64Encoded: $0) }),
-            let eph = (json["eph"] as? String).flatMap({ Data(base64Encoded: $0) }),
-            let phoneStatic = try? Curve25519.KeyAgreement.PublicKey(rawRepresentation: pub),
-            let phoneEphemeral = try? Curve25519.KeyAgreement.PublicKey(rawRepresentation: eph)
+        guard (json["v"] as? NSNumber)?.intValue == Self.protocolVersion,
+              let message = (json["noise"] as? String).flatMap({ Data(base64Encoded: $0) }),
+              let noise = try? Noise.Handshake(role: .responder, prologue: Handshake.tcpPrologue, staticKey: server.identity.privateKey)
+        else {
+            // An older phone (v1/v2 hello) has to be updated to talk to this Mac; a newer one
+            // needs a newer Mac, which the phone says itself.
+            if ((json["v"] as? NSNumber)?.intValue ?? 0) < Self.protocolVersion { server.refusedOldPhone() }
+            close()
+            return
+        }
+        guard let payload = try? noise.readMessage(message), let pub = noise.remoteStatic?.rawRepresentation else {
+            // Not written for this Mac's key: Lync was reinstalled here, or it's meant for another
+            // Mac. Say so (a hint the phone can't rely on), and nothing else.
+            sendHandshake(["t": "not_me"], thenClose: true)
+            return
+        }
+        let about = (try? JSONSerialization.jsonObject(with: payload)) as? [String: Any] ?? [:]
+        let phone = server.paired.phone(withPublicKey: pub)
+        var answer: [String: Any] = ["name": server.macName, "app": Self.appVersion, "paired": phone != nil]
+        if phone == nil { answer["name"] = nil }
+        guard let reply = try? noise.writeMessage(payload: (try? JSONSerialization.data(withJSONObject: answer)) ?? Data()),
+              let ciphers = try? noise.split()
         else {
             close()
             return
         }
-        guard let phone = server.paired.phone(withPublicKey: pub) else {
-            // With this Mac's key, so the phone only forgets if it's really its own Mac.
-            sendHandshake(["t": "unpaired", "pub": server.identity.publicKey.base64EncodedString()], thenClose: true)
+        // Not paired (forgotten here): the phone hears it from this Mac, authenticated, and stops.
+        guard let phone else {
+            sendHandshake(["t": "hello_ok", "noise": reply.base64EncodedString()], thenClose: true)
             return
         }
-        if let name = json["name"] as? String, !name.isEmpty, name != phone.name {
+        if let name = about["name"] as? String, !name.isEmpty, name != phone.name {
             pendingName = String(name.prefix(60))
         }
-        phoneApp = (json["app"] as? String).map { String($0.prefix(40)) }
-        phoneProtocol = (json["v"] as? NSNumber)?.intValue
-
-        let macEphemeral = Curve25519.KeyAgreement.PrivateKey()
-        do {
-            let dh1 = try macEphemeral.sharedSecretFromKeyAgreement(with: phoneEphemeral).data
-            let dh2 = try macEphemeral.sharedSecretFromKeyAgreement(with: phoneStatic).data
-            let dh3 = try server.identity.privateKey.sharedSecretFromKeyAgreement(with: phoneEphemeral).data
-            let macEphPub = macEphemeral.publicKey.rawRepresentation
-            let transcript = pub + eph + server.identity.publicKey + macEphPub
-            let keys = Handshake.sessionKeys(ikm: dh1 + dh2 + dh3, transcript: transcript)
-
-            sendHandshake([
-                "t": "hello_ok",
-                "v": Self.protocolVersion,
-                "app": Self.appVersion,
-                "name": server.macName,
-                "pub": server.identity.publicKey.base64EncodedString(),
-                "eph": macEphPub.base64EncodedString(),
-            ])
-            channel = SecureChannel(sendKey: keys.macToPhone, receiveKey: keys.phoneToMac)
-            self.phone = phone
-            state = .awaitingReady
-        } catch {
-            close()
-        }
+        phoneApp = (about["app"] as? String).map { String($0.prefix(40)) }
+        phoneProtocol = Self.protocolVersion
+        sendHandshake(["t": "hello_ok", "noise": reply.base64EncodedString()])
+        channel = SecureChannel(ciphers)
+        self.phone = phone
+        state = .awaitingReady
     }
 
     // MARK: - Writing

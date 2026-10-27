@@ -2,10 +2,11 @@ import CryptoKit
 import Foundation
 import Security
 
-/// Key derivation and the pairing code. See docs/PROTOCOL.md.
+/// The pairing code, the QR proof and the Noise prologues. See docs/PROTOCOL.md.
 enum Handshake {
-    static let infoPhoneToMac = Data("wallhop v1 phone->mac".utf8)
-    static let infoMacToPhone = Data("wallhop v1 mac->phone".utf8)
+    /// Noise prologues (PROTOCOL.md, v3): a handshake made for one path can't be used on the other.
+    static let tcpPrologue = Data("lync-tcp-v3".utf8)
+    static let blePrologue = Data("lync-ble-v3".utf8)
 
     /// Pairing v2 commitment: the phone commits to its nonce before it sees the Mac's, so neither
     /// side can grind keys or nonces to make the six digits match (PROTOCOL.md, Pairing).
@@ -40,14 +41,6 @@ enum Handshake {
         return zip(a, b).reduce(UInt8(0)) { $0 | ($1.0 ^ $1.1) } == 0
     }
 
-    static func sessionKeys(ikm: Data, transcript: Data) -> (phoneToMac: SymmetricKey, macToPhone: SymmetricKey) {
-        let salt = Data(SHA256.hash(data: transcript))
-        let key = SymmetricKey(data: ikm)
-        let p2m = HKDF<SHA256>.deriveKey(inputKeyMaterial: key, salt: salt, info: infoPhoneToMac, outputByteCount: 32)
-        let m2p = HKDF<SHA256>.deriveKey(inputKeyMaterial: key, salt: salt, info: infoMacToPhone, outputByteCount: 32)
-        return (p2m, m2p)
-    }
-
     /// Proof that a phone scanned this Mac's pairing QR: an HMAC of both public keys under the
     /// QR's one-time secret. The secret itself never crosses the network (PROTOCOL.md, QR pairing).
     static func qrProof(token: Data, phonePub: Data, macPub: Data) -> Data {
@@ -66,47 +59,20 @@ extension SharedSecret {
     var data: Data { withUnsafeBytes { Data($0) } }
 }
 
-enum ChannelError: Error {
-    case tooShort
-}
-
-/// Encrypts and decrypts frames for one connection, with counter nonces per direction.
+/// Encrypts and decrypts frames for one connection: the two ciphers from the Noise handshake,
+/// one per direction (PROTOCOL.md, Sealed frames).
 final class SecureChannel {
-    private let sendKey: SymmetricKey
-    private let receiveKey: SymmetricKey
-    private var sendCounter: UInt64 = 0
-    private var receiveCounter: UInt64 = 0
+    private var sender: Noise.Cipher
+    private var receiver: Noise.Cipher
 
-    init(sendKey: SymmetricKey, receiveKey: SymmetricKey) {
-        self.sendKey = sendKey
-        self.receiveKey = receiveKey
+    init(_ ciphers: (send: Noise.Cipher, receive: Noise.Cipher)) {
+        sender = ciphers.send
+        receiver = ciphers.receive
     }
 
-    func seal(_ plaintext: Data) throws -> Data {
-        let nonce = try ChaChaPoly.Nonce(data: Self.nonce(sendCounter))
-        sendCounter += 1
-        let box = try ChaChaPoly.seal(plaintext, using: sendKey, nonce: nonce)
-        return box.ciphertext + box.tag
-    }
+    func seal(_ plaintext: Data) throws -> Data { try sender.encrypt(plaintext) }
 
-    func open(_ sealed: Data) throws -> Data {
-        guard sealed.count >= 16 else { throw ChannelError.tooShort }
-        let nonce = try ChaChaPoly.Nonce(data: Self.nonce(receiveCounter))
-        receiveCounter += 1
-        let box = try ChaChaPoly.SealedBox(
-            nonce: nonce,
-            ciphertext: sealed.prefix(sealed.count - 16),
-            tag: sealed.suffix(16)
-        )
-        return try ChaChaPoly.open(box, using: receiveKey)
-    }
-
-    private static func nonce(_ counter: UInt64) -> Data {
-        var data = Data(repeating: 0, count: 4)
-        var big = counter.bigEndian
-        withUnsafeBytes(of: &big) { data.append(contentsOf: $0) }
-        return data
-    }
+    func open(_ sealed: Data) throws -> Data { try receiver.decrypt(sealed) }
 }
 
 extension Data {

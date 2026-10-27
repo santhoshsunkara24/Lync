@@ -1,6 +1,6 @@
 # Lync privacy policy
 
-_Last updated: 23 October 2026_
+_Last updated: 27 October 2026_
 
 Lync connects your Android phone to your own Mac. This policy explains what the Android app and the Mac
 app do with your data.
@@ -25,6 +25,8 @@ Nothing below is read while its switch is off or its Android permission isn't gr
 | Notifications | Notifications from the apps you pick (notification access) | Shown on your Mac. Codes in them are copied the same way as SMS codes |
 | Pairing | The camera (`CAMERA`) | Only to scan the QR code your Mac shows. No images are saved or sent |
 | Files and links | Files, text and links you choose to share | Sent to your Mac only when you send them |
+| Now playing | What's playing in your media apps (title, artist, artwork), from the notification access above | Shown on your Mac with play and pause controls |
+| Ring my phone | Nothing read | When you ask from your Mac, the phone plays a sound and vibrates until you stop it |
 | Bluetooth backup | Nearby devices (`BLUETOOTH_ADVERTISE`, `BLUETOOTH_CONNECT`) | Lets your paired Mac connect to the phone over Bluetooth when Wi-Fi can't reach it. Never used to scan for other devices or to find your location |
 
 Lync also shares your phone's battery level, its name and its wallpaper colours with your Mac, so the

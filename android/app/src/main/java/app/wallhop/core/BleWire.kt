@@ -24,8 +24,6 @@ object BleWire {
     const val MAX_MESSAGE = 16 * 1024
 
     private val INFO_TAG = "lync ble v1 tag".toByteArray()
-    private val INFO_PHONE_TO_MAC = "lync ble v1 phone->mac".toByteArray()
-    private val INFO_MAC_TO_PHONE = "lync ble v1 mac->phone".toByteArray()
 
     /** The key both devices can work out from the pairing alone: HKDF of DH(phone static, Mac static). */
     fun tagKey(staticShared: ByteArray, phonePub: ByteArray, macPub: ByteArray): ByteArray =
@@ -41,20 +39,6 @@ object BleWire {
     }
 
     fun window(unixMillis: Long): Long = unixMillis / 1000 / TAG_WINDOW_SECONDS
-
-    /**
-     * Keys for one Bluetooth connection, as (phone→Mac, Mac→phone). Same construction as the
-     * Wi-Fi session (both statics and both ephemerals), with labels of its own.
-     */
-    fun sessionKeys(ikm: ByteArray, phonePub: ByteArray, phoneEph: ByteArray, macPub: ByteArray, macEph: ByteArray): Pair<ByteArray, ByteArray> {
-        val salt = Crypto.sha256(phonePub, phoneEph, macPub, macEph)
-        return Hkdf.computeHkdf("HMACSHA256", ikm, salt, INFO_PHONE_TO_MAC, 32) to
-            Hkdf.computeHkdf("HMACSHA256", ikm, salt, INFO_MAC_TO_PHONE, 32)
-    }
-
-    /** The phone's side of the key agreement: DH(ePhone, eMac) ‖ DH(sPhone, eMac) ‖ DH(ePhone, sMac). */
-    fun phoneIkm(phonePrivate: ByteArray, phoneEphPrivate: ByteArray, macPub: ByteArray, macEph: ByteArray): ByteArray =
-        Crypto.dh(phoneEphPrivate, macEph) + Crypto.dh(phonePrivate, macEph) + Crypto.dh(phoneEphPrivate, macPub)
 
     /**
      * Splits a frame into GATT writes or notifications of at most [maxChunk] bytes. Each starts

@@ -2,7 +2,8 @@ import CryptoKit
 import Foundation
 
 /// The Bluetooth LE fallback's keys and framing (docs/PROTOCOL.md, Bluetooth fallback).
-/// Must match `BleWire.kt` on the phone; both are checked against the test vector there.
+/// Must match `BleWire.kt` on the phone; both are checked against the test vector there. The
+/// handshake itself is Noise (Noise.swift), as on Wi‑Fi.
 enum BleWire {
     static let service = "6C796E63-0001-4B1E-9C3A-5D2F7E8A1B40"
     static let characteristic = "6C796E63-0002-4B1E-9C3A-5D2F7E8A1B40"
@@ -29,28 +30,6 @@ enum BleWire {
 
     static func window(_ date: Date) -> Int64 {
         Int64(floor(date.timeIntervalSince1970 / tagWindowSeconds))
-    }
-
-    /// Keys for one Bluetooth connection. Same construction as the Wi-Fi session, own labels.
-    static func sessionKeys(ikm: Data, phonePub: Data, phoneEph: Data, macPub: Data, macEph: Data)
-        -> (phoneToMac: SymmetricKey, macToPhone: SymmetricKey) {
-        let salt = Data(SHA256.hash(data: phonePub + phoneEph + macPub + macEph))
-        let key = SymmetricKey(data: ikm)
-        return (
-            HKDF<SHA256>.deriveKey(inputKeyMaterial: key, salt: salt, info: Data("lync ble v1 phone->mac".utf8), outputByteCount: 32),
-            HKDF<SHA256>.deriveKey(inputKeyMaterial: key, salt: salt, info: Data("lync ble v1 mac->phone".utf8), outputByteCount: 32)
-        )
-    }
-
-    /// The Mac's side: DH(eMac, ePhone) ‖ DH(eMac, sPhone) ‖ DH(sMac, ePhone).
-    static func macIkm(macStatic: Curve25519.KeyAgreement.PrivateKey, macEphemeral: Curve25519.KeyAgreement.PrivateKey,
-                       phonePub: Data, phoneEph: Data) throws -> Data {
-        let phoneStatic = try Curve25519.KeyAgreement.PublicKey(rawRepresentation: phonePub)
-        let phoneEphemeral = try Curve25519.KeyAgreement.PublicKey(rawRepresentation: phoneEph)
-        func dh(_ a: Curve25519.KeyAgreement.PrivateKey, _ b: Curve25519.KeyAgreement.PublicKey) throws -> Data {
-            try a.sharedSecretFromKeyAgreement(with: b).withUnsafeBytes { Data($0) }
-        }
-        return try dh(macEphemeral, phoneEphemeral) + dh(macEphemeral, phoneStatic) + dh(macStatic, phoneEphemeral)
     }
 
     /// Splits a frame into pieces of at most `maxChunk` bytes, each led by 1 (last) or 0 (more follow).

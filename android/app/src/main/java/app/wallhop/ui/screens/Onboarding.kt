@@ -457,7 +457,8 @@ fun CodeTiles(code: String, modifier: Modifier = Modifier) {
 fun AllowCodesScreen(onAllow: () -> Unit, onLater: () -> Unit) {
     OnboardingFrame(
         title = "Let Lync catch codes.",
-        body = "Only the code goes to your Mac, never the message.",
+        // Play's prominent disclosure: what is read, what goes where, before Android's prompt.
+        body = "Lync reads incoming texts to find login codes. Only the code goes to your Mac, encrypted, never the message.",
         hero = { MacEdge(R.drawable.onb_code, behind = 2) },
         foot = {
             OnboardingPill("Turn on codes", onAllow, Modifier.fillMaxWidth())

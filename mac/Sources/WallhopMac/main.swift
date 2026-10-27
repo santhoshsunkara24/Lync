@@ -52,7 +52,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Development (WALLHOP_CAPTURE=1 only): drive the panel for screenshots, e.g.
         // `distnoted`-style: post "app.wallhop.debug" with object open | close | settings | notch | menubar
         // | save-latest | send-clipboard | send-files:<path>[|<path>…].
-        if ProcessInfo.processInfo.environment["WALLHOP_CAPTURE"] == "1" {
+        if DevEnv.on("WALLHOP_CAPTURE") {
             observers.append(DistributedNotificationCenter.default().addObserver(
                 forName: .init("app.wallhop.debug"), object: nil, queue: .main) { [weak self] note in
                 guard let self else { return }
@@ -82,7 +82,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             })
         }
         // Development: WALLHOP_OPEN_PANEL=1 opens the panel at launch.
-        if ProcessInfo.processInfo.environment["WALLHOP_OPEN_PANEL"] == "1" {
+        if DevEnv.on("WALLHOP_OPEN_PANEL") {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in self?.panel.open(byHover: false) }
         }
         // ⌥⌘L from anywhere: gives a card with buttons keyboard focus, otherwise opens or closes the panel.
@@ -108,7 +108,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // First run: unpaired, the panel opens by itself with the pairing steps; until the panel
         // has been opened once, a short hint says where Lync lives.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
-            guard let self, ProcessInfo.processInfo.environment["WALLHOP_OPEN_PANEL"] != "1" else { return }
+            guard let self, !DevEnv.on("WALLHOP_OPEN_PANEL") else { return }
             self.model.launched { self.panel.open(byHover: false, user: false) }
         }
 

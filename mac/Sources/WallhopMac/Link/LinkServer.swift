@@ -146,19 +146,22 @@ struct PairingRequest: Identifiable {
 final class LinkServer {
     static let serviceType = "_wallhop._tcp"
     /// Development: WALLHOP_DEBUG=1 logs message types (never message text).
-    static let debugLog = ProcessInfo.processInfo.environment["WALLHOP_DEBUG"] == "1"
+    static let debugLog = DevEnv.on("WALLHOP_DEBUG")
     /// WALLHOP_PORT overrides it for a test copy, so a real phone never reaches that copy.
-    static let preferredPort: UInt16 = ProcessInfo.processInfo.environment["WALLHOP_PORT"].flatMap(UInt16.init) ?? 47474
+    static let preferredPort: UInt16 = DevEnv.value("WALLHOP_PORT").flatMap(UInt16.init) ?? 47474
 
     /// The longest text that still fits in one frame with its header (PROTOCOL.md, Framing).
     static let maxTextBytes = Framing.maxOutgoingPayload - 16 - 2 - 1024
     /// Pairing attempts allowed per address per minute.
     static let pairAttemptsPerMinute = 5
+    static let pairAttemptsPerMinuteTotal = 20
+    /// Connections still in the handshake at once; more are turned away until some finish.
+    static let maxUnauthenticated = 16
 
     let identity: Identity
     let paired: PairedPhones
     let queue = DispatchQueue(label: "app.wallhop.link")
-    let macName = ProcessInfo.processInfo.environment["WALLHOP_NAME"] ?? Host.current().localizedName ?? "Mac"
+    let macName = DevEnv.value("WALLHOP_NAME") ?? Host.current().localizedName ?? "Mac"
 
     /// Called on the main thread.
     var onEvent: ((LinkEvent) -> Void)?
@@ -289,6 +292,11 @@ final class LinkServer {
         }
         listener.newConnectionHandler = { [weak self] nw in
             guard let self else { nw.cancel(); return }
+            // Only so many connections that haven't proved who they are (a phone needs one).
+            guard self.connections.values.filter({ $0.state != .ready }).count < Self.maxUnauthenticated else {
+                nw.cancel()
+                return
+            }
             let connection = PhoneConnection(connection: nw, server: self)
             self.connections[connection.id] = connection
             connection.start()
@@ -377,11 +385,14 @@ final class LinkServer {
         emit(.phoneTooOldToPair)
     }
 
-    /// At most `pairAttemptsPerMinute` pairing attempts per address per minute.
+    /// At most `pairAttemptsPerMinute` pairing attempts per address per minute, and
+    /// `pairAttemptsPerMinuteTotal` from everywhere (so changing address doesn't get round it).
     func allowPairAttempt(from host: String) -> Bool {
         let now = Date()
         var recent = (pairAttempts[host] ?? []).filter { now.timeIntervalSince($0) < 60 }
         guard recent.count < Self.pairAttemptsPerMinute else { return false }
+        let total = pairAttempts.values.reduce(0) { $0 + $1.filter { now.timeIntervalSince($0) < 60 }.count }
+        guard total < Self.pairAttemptsPerMinuteTotal else { return false }
         recent.append(now)
         pairAttempts[host] = recent
         pairAttempts = pairAttempts.filter { !$0.value.isEmpty && now.timeIntervalSince($0.value.last!) < 60 }
@@ -410,7 +421,7 @@ final class LinkServer {
                 self?.emit(.pairingEnded(id: id))
             }
         }
-        if ProcessInfo.processInfo.environment["WALLHOP_AUTO_PAIR"] == "1" {
+        if DevEnv.on("WALLHOP_AUTO_PAIR") {
             decideOnce.call(true)
             return
         }

@@ -49,3 +49,7 @@ cd mac
 - [Design notes](docs/DESIGN.md)
 - [Publishing on Google Play](docs/PLAY_STORE.md)
 - [App icon source](brand/icon/final.py): builds the icon for both apps
+
+## Licence
+
+Apache 2.0: see [LICENSE](LICENSE).

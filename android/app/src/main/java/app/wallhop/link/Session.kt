@@ -5,6 +5,7 @@ import app.wallhop.core.Crypto
 import app.wallhop.core.Framing
 import app.wallhop.core.Identity
 import app.wallhop.core.Message
+import app.wallhop.core.Noise
 import app.wallhop.core.SecureChannel
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
@@ -23,15 +24,15 @@ import java.net.Socket
 import java.util.concurrent.ConcurrentHashMap
 
 /**
- * A Mac said it doesn't know this phone. [macPub] is that Mac's key (newer Macs send it), so
- * the phone can tell its own Mac forgetting it from some other Mac on the network.
+ * The paired Mac said it no longer knows this phone. [macPub] is that Mac's key: the answer came
+ * inside the Noise handshake, so it really is from the Mac this phone paired with.
  */
 class UnpairedException(val macPub: ByteArray?) : IOException("This Mac no longer recognises the phone")
 
 /** The Mac turned pairing down; [err] is its `pair_no` code (PROTOCOL.md), null from older Macs. */
 class PairingDeclinedException(val err: String? = null) : IOException("Pairing was declined on the Mac")
 
-/** The Mac at this address has a different key from the paired one. */
+/** The Mac at this address has a different key from the paired one (reinstalled, or another Mac). */
 class WrongMacException : IOException("This isn't the Mac you paired with")
 
 /** The other side doesn't speak this handshake: a different protocol version, or not Lync. */
@@ -94,6 +95,8 @@ class Session(
 
     companion object {
         private const val CONNECT_TIMEOUT_MS = 3_000
+        /** The session protocol (`v` in `hello`): 3 is the Noise handshake. */
+        const val PROTOCOL = 3
         /** No traffic for this long means the connection is dead. Heartbeats run every 15 s. */
         const val READ_TIMEOUT_MS = 45_000
 
@@ -105,54 +108,47 @@ class Session(
         }
 
         /**
-         * Runs the session handshake from docs/PROTOCOL.md on an open socket.
-         * Checks the Mac's key matches [expectedMacKey] when given.
+         * Runs the session handshake from docs/PROTOCOL.md (v3, Noise IK) on an open socket, with
+         * the paired Mac's key [macKey]. Only that Mac can answer it, and this phone's own key and
+         * name go across encrypted.
          */
         fun handshake(
             socket: Socket,
             identity: Identity,
             phoneName: String,
-            expectedMacKey: ByteArray?,
+            macKey: ByteArray,
         ): Pair<Session, ByteArray> {
             val input = DataInputStream(BufferedInputStream(socket.getInputStream(), 64 * 1024))
             val output = BufferedOutputStream(socket.getOutputStream(), 64 * 1024)
 
-            val ephemeral = Crypto.generatePrivateKey()
-            val ephemeralPub = Crypto.publicKey(ephemeral)
+            val noise = Noise.Handshake(Noise.Role.Initiator, Crypto.TCP_PROLOGUE, identity.privateKey, macKey)
+            val about = JSONObject().put("name", phoneName).put("app", app.wallhop.BuildConfig.VERSION_NAME)
             writeJson(output, JSONObject()
                 .put("t", "hello")
-                .put("v", 1)
-                .put("name", phoneName)
-                .put("app", app.wallhop.BuildConfig.VERSION_NAME)
-                .put("pub", identity.publicKey.b64())
-                .put("eph", ephemeralPub.b64()))
+                .put("v", PROTOCOL)
+                .put("noise", noise.writeMessage(about.toString().toByteArray(Charsets.UTF_8)).b64()))
 
             val reply = readJson(input)
             when (reply.optString("t")) {
-                "unpaired" -> throw UnpairedException(reply.optString("pub").takeIf { it.isNotEmpty() }?.unb64())
                 "hello_ok" -> Unit
+                // A Lync Mac that couldn't read the hello: not the key this phone paired with (Lync
+                // reinstalled or reset there, or simply another Mac). Unauthenticated: a hint only.
+                "not_me" -> throw WrongMacException()
                 else -> throw HandshakeException("Unexpected reply: ${reply.optString("t")}")
             }
-            val macPub = reply.getString("pub").unb64()
-            val macEph = reply.getString("eph").unb64()
-            if (expectedMacKey != null && !macPub.contentEquals(expectedMacKey)) {
-                throw WrongMacException()
-            }
-
-            val ikm = Crypto.dh(ephemeral, macEph) +
-                Crypto.dh(identity.privateKey, macEph) +
-                Crypto.dh(ephemeral, macPub)
-            val (sendKey, receiveKey) = Crypto.sessionKeys(ikm, identity.publicKey + ephemeralPub + macPub + macEph)
-            val channel = SecureChannel(sendKey, receiveKey)
+            val answer = JSONObject(String(noise.readMessage(reply.getString("noise").unb64()), Charsets.UTF_8))
+            // Authenticated: only the paired Mac could have written this.
+            if (!answer.optBoolean("paired", false)) throw UnpairedException(macKey)
+            val channel = SecureChannel(noise.split())
 
             val host = socket.inetAddress.hostAddress ?: ""
-            val session = Session(socket, input, output, channel, reply.optString("name", "Mac"), host, socket.port)
+            val session = Session(socket, input, output, channel, answer.optString("name", "Mac").take(60), host, socket.port)
             Framing.write(output, channel.seal(Message.of("ready").encode()))
             output.flush()
             val ready = session.read()
             if (ready.type != "ready") throw HandshakeException("Handshake failed")
             socket.soTimeout = READ_TIMEOUT_MS
-            return session to macPub
+            return session to macKey
         }
 
         fun writeJson(output: OutputStream, json: JSONObject) {

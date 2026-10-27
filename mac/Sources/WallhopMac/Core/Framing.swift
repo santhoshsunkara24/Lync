@@ -23,6 +23,9 @@ enum FramingError: Error {
 /// Collects incoming bytes and hands back complete frames.
 struct FrameReader {
     private var buffer = Data()
+    /// The biggest frame accepted. Small until the session is up: handshake frames are a few
+    /// hundred bytes, so a stranger can't make the Mac hold a megabyte per connection.
+    var limit = Framing.maxPayload
 
     mutating func push(_ bytes: Data) throws -> [Data] {
         buffer.append(bytes)
@@ -30,7 +33,7 @@ struct FrameReader {
         while buffer.count >= 4 {
             let start = buffer.startIndex
             let length = buffer[start..<start + 4].reduce(0) { ($0 << 8) | Int($1) }
-            guard length <= Framing.maxPayload else { throw FramingError.tooLarge(length) }
+            guard length <= limit else { throw FramingError.tooLarge(length) }
             guard buffer.count >= 4 + length else { break }
             frames.append(Data(buffer[start + 4..<start + 4 + length]))
             buffer.removeSubrange(start..<start + 4 + length)

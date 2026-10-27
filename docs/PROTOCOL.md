@@ -1,15 +1,18 @@
-# Wallhop link protocol, v2
+# Wallhop link protocol, v3
 
 How the phone app and the Mac app talk. Both implementations must match this file exactly:
 Mac in `mac/Sources/WallhopMac/Core`, Android in `android/app/src/main/java/app/wallhop/core`.
 
-> v2 (October 2026) changes only pairing: the 6-digit code now comes from a commit-then-reveal
-> exchange of nonces (below), and `pair` must carry `"v":2`. The session handshake, sealed frames
-> and messages are unchanged from v1.
+> v3 (October 2026) replaces the session handshake, on Wi‑Fi and Bluetooth, with
+> **Noise_IK_25519_ChaChaPoly_SHA256** ([noiseprotocol.org](https://noiseprotocol.org/noise.html),
+> revision 34). Static keys and device names now travel encrypted, the whole handshake is hashed
+> into the keys, and "not paired" answers are authenticated. Pairing is unchanged from v2 (the
+> 6-digit code from a commit-then-reveal exchange, or the QR's one-time secret). Sealed frames use
+> Noise's cipher states, so their nonces are now little-endian. v1/v2 sessions are refused.
 >
-> Status: development. The handshake below is a small custom design built from standard parts
-> (X25519, HKDF-SHA256, ChaCha20-Poly1305). Before a public release, replace it with an audited
-> Noise protocol implementation and get it reviewed.
+> Both implementations are checked against the official Noise test vector and against each
+> other's bytes (`docs/vectors/lync-v3.json`): `mac/scripts/crypto-check.sh` and the Android
+> `NoiseTest`.
 
 ## Transport
 
@@ -109,28 +112,53 @@ The phone may still send `pair_nonce` after `pair_wait`; the Mac ignores it (and
 everything continues as in normal pairing. QR attempts count towards the same 5-per-minute
 limit.
 
-### Session (every connection)
+### Session (every connection), v3
 
-1. Phone → Mac `{"t":"hello","v":2,"name":"…","pub":"<phone static>","eph":"<phone ephemeral>"}`
-   (the Mac doesn't check `v` here; the session is the same as v1). A changed `name` is only
-   saved once the phone's `ready` has decrypted, which proves it holds its key.
-2. If the phone's public key isn't paired: Mac → Phone `{"t":"unpaired","pub":"<mac static>"}` and closes.
-   The phone only drops its pairing if `pub` is the Mac it paired with; any other Mac is skipped.
-   Otherwise Mac → Phone `{"t":"hello_ok","name":"…","pub":"<mac static>","eph":"<mac ephemeral>"}`.
-   The phone checks `pub` matches the Mac it paired with.
-3. Both compute
-   - `ikm = DH(ePhone, eMac) ‖ DH(sPhone, eMac) ‖ DH(ePhone, sMac)`
-   - `salt = SHA-256(phonePub ‖ phoneEph ‖ macPub ‖ macEph)`
-   - `kPhoneToMac = HKDF-SHA256(ikm, salt, info "wallhop v1 phone->mac", 32)`
-   - `kMacToPhone = HKDF-SHA256(ikm, salt, info "wallhop v1 mac->phone", 32)`
+Noise_IK_25519_ChaChaPoly_SHA256 with the phone as initiator. The phone knows the Mac's static key
+from pairing, so it is the IK pre-message (`<- s`). Prologue: the ASCII bytes `lync-tcp-v3`.
+
+```
+<- s
+...
+-> e, es, s, ss
+<- e, ee, se
+```
+
+1. Phone → Mac, plain JSON `{"t":"hello","v":3,"noise":"<base64 message 1>"}`. Message 1's payload
+   is UTF-8 JSON `{"name":"<phone name>","app":"<app version>"}`, so the phone's key and name are
+   encrypted to the Mac's key.
+2. The Mac reads message 1.
+   - It doesn't decrypt (written for another key: Lync was reinstalled on this Mac, or it's another
+     Mac): Mac → Phone `{"t":"not_me"}` and closes. This is unauthenticated; the phone may treat it
+     only as a hint ("this Mac has a different key").
+   - `v` isn't 3 (an older phone): the Mac closes without answering and asks the user to update the
+     phone.
+   - Otherwise Mac → Phone `{"t":"hello_ok","noise":"<base64 message 2>"}`, message 2's payload being
+     `{"name":"<Mac name>","app":"<app version>","paired":true}`. If the phone's key (learned from
+     message 1) isn't paired with this Mac, the payload is `{"app":"…","paired":false}` and the Mac
+     closes after sending it. That answer is authenticated: only the Mac the phone paired with
+     could have written it.
+3. Both `Split()`: the first cipher state is phone → Mac, the second Mac → phone.
 4. From here every frame is sealed (below). The phone sends `ready`, the Mac answers `ready`.
-   A frame that fails to decrypt closes the connection.
+   A frame that fails to decrypt closes the connection. A new `name` is saved only after `ready`.
+
+Right after `pair_ok` the phone runs this handshake on the same connection, and says "paired"
+only once it succeeds; that session is then its first connection. So a forged `pair_ok` pairs
+nothing.
+
+Until the session is up the Mac accepts frames of at most 16 KiB and at most 16 connections
+that haven't finished the handshake; pairing is limited to 5 attempts per address and 20 in
+total per minute.
 
 ## Sealed frames
 
-`payload = ChaCha20-Poly1305(key, nonce, plaintext)` as ciphertext followed by the 16-byte tag.
-The nonce is 4 zero bytes followed by a 64-bit big-endian counter, starting at 0 for each
-direction of each connection and increasing by one per frame. Nonces are never sent.
+`payload = EncryptWithAd(cipher state, ad = empty, plaintext)` (Noise): ChaCha20-Poly1305
+ciphertext followed by the 16-byte tag. The nonce is 4 zero bytes followed by a 64-bit
+**little-endian** counter, starting at 0 for each direction of each connection and increasing by
+one per frame. Nonces are never sent.
+
+Noise caps a message at 65 535 bytes; Lync keeps its own framing (above, up to 1 MiB) and seals
+each frame with the transport cipher states, which ChaCha20-Poly1305 allows at any length.
 
 Plaintext: 2-byte big-endian header length, the header (UTF-8 JSON with `"t"`), then an
 optional binary body.
@@ -170,21 +198,23 @@ and `0` when more follow, then up to MTU − 4 bytes of the frame. The receiver 
 writes aren't used.
 
 **Handshake.** Within **10 s** of connecting (the phone) / 15 s of finding the phone (the Mac), or the
-link is closed:
+link is closed. Noise_IK_25519_ChaChaPoly_SHA256 again, but with the **Mac as initiator** (it knows
+which phone it's talking to from the tag) and the prologue `lync-ble-v3`, so a Wi‑Fi handshake
+can't be replayed here or the other way round:
 
-1. Mac → phone, plain JSON `{"t":"hello","v":1,"pub":"<mac static>","eph":"<mac ephemeral>"}`.
-   The phone closes the link unless `pub` is the Mac it paired with.
-2. Phone → Mac, plain JSON `{"t":"hello_ok","v":1,"pub":"<phone static>","eph":"<phone ephemeral>"}`.
-   The Mac closes the link unless `pub` is the phone whose tag it followed.
-3. Both compute, as for the Wi-Fi session but with their own labels:
-   - `ikm = DH(ePhone, eMac) ‖ DH(sPhone, eMac) ‖ DH(ePhone, sMac)`
-   - `salt = SHA-256(phonePub ‖ phoneEph ‖ macPub ‖ macEph)`
-   - `kPhoneToMac = HKDF-SHA256(ikm, salt, info "lync ble v1 phone->mac", 32)`
-   - `kMacToPhone = HKDF-SHA256(ikm, salt, info "lync ble v1 mac->phone", 32)`
+1. Mac → phone, plain JSON `{"t":"hello","v":3,"noise":"<base64 message 1>"}`, empty payload. The
+   phone reads it and closes the link unless it decrypts and the Mac's static key inside is the
+   Mac it paired with. Nothing is sent back to anyone else, and the phone's own key never crosses
+   the air: a stranger can't use the link to recognise or follow the phone.
+2. Phone → Mac, plain JSON `{"t":"hello_ok","noise":"<base64 message 2>"}`, empty payload.
+3. Both `Split()` (first cipher state Mac → phone, second phone → Mac).
 4. Mac → phone sealed `ready`; the phone answers with a sealed `ready`. Only then does either side use
-   the link. Sealing is exactly as in [Sealed frames](#sealed-frames): counter nonces from 0 per
-   direction, fresh keys per connection (so frames can't be replayed into another connection), and a
-   frame that fails to decrypt closes the link.
+   the link. Sealing is exactly as in [Sealed frames](#sealed-frames): fresh keys per connection (so
+   frames can't be replayed into another connection), and a frame that fails to decrypt closes the
+   link.
+
+A phone the Mac finds already connected at the system level has no tag to say which phone it is;
+the Mac then tries its paired phones in turn, one per attempt.
 
 **Messages over Bluetooth.** Phone → Mac: `otp` (answered with `ack`), `call`, `notif` (never with an
 icon body), `notif_removed`, `forget`, `ping` (answered with `pong`). Mac → phone: `ack`, `ping`, `pong`,
@@ -201,14 +231,21 @@ closes the link if the phone's services change. While it has no link, every 10 s
 scan and also tries a phone already connected at the system level, whose advertisements macOS may not
 report; that phone is identified by the key in its `hello_ok`.
 
-**Test vector.** Private keys: phone static = 32 × `0x11`, phone ephemeral = 32 × `0x22`,
+**Test vectors.** Private keys: phone static = 32 × `0x11`, phone ephemeral = 32 × `0x22`,
 Mac static = 32 × `0x33`, Mac ephemeral = 32 × `0x44` (X25519, clamped as usual).
 
 - tag for window 1 000 000 = `eb87fa08c61a1082`
-- kPhoneToMac = `a52d1d7a9201aad4a7c8b3887433e011c283050bc75b044c19069c5920a9234b`
-- kMacToPhone = `326c08e1c1627ef3a8625f9a6bf60acd700065a3e8dd27e0a1693befd092a70f`
-- first phone → Mac sealed frame for `{"t":"ready"}` (counter 0) =
-  `7c7294c7f537c91f8e6d155c5b0bff0bc0bc1c54f8e939f56753d46df64d0d`
+- the Wi‑Fi and Bluetooth handshakes with these keys, byte for byte, and the first sealed `ready`
+  on each: `docs/vectors/lync-v3.json`.
+
+## Keys at rest
+
+- **Phone:** the private key is encrypted with an AES key held in the Android Keystore; Lync's data is
+  excluded from backups.
+- **Mac:** the private key is sealed by the Secure Enclave (`identity.sealed`: ECIES on P-256 with an
+  Enclave key, HKDF-SHA256, AES-GCM), so a copy of the file is useless on any other machine. Macs
+  without a Secure Enclave keep it in a user-only file. A file restored onto another Mac can't be
+  opened there: Lync makes a new key and phones pair again.
 
 ## Messages
 
@@ -253,7 +290,7 @@ just before it disconnects, when the user forgets this Mac on the phone. Exactly
 public key) from its paired phones, as Forget in its own Settings does but without asking,
 closes the connection and tells the user "<phone> unpaired this Mac". It's accepted from a
 paired phone that is connected in the background too. A phone that is forgotten while the
-Mac is unreachable is simply answered with `unpaired` the next time it connects (Session,
+Mac is unreachable is simply answered with `"paired":false` the next time it connects (Session,
 step 2).
 
 Files from the phone land in the Mac's private inbox (`~/Library/Application Support/Wallhop/Inbox`)

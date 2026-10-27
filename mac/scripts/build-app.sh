@@ -6,7 +6,10 @@
 #   scripts/build-app.sh release dmg   # also build/Lync.dmg
 #
 # A universal binary (Apple silicon and Intel). Signs ad-hoc ("-") unless SIGN_IDENTITY is set
-# to a Developer ID. Not notarized. OUT_DIR puts the app and DMG somewhere other than build/.
+# to a Developer ID ("Developer ID Application: Name (TEAMID)"). With NOTARY_PROFILE as well (a
+# notarytool keychain profile: xcrun notarytool store-credentials <name>), the DMG is notarized
+# by Apple and stapled, so it opens on any Mac without a warning. OUT_DIR puts the app and DMG
+# somewhere other than build/.
 # Never launches anything.
 set -euo pipefail
 
@@ -38,7 +41,12 @@ if [ -f Resources/AppIcon.icns ]; then
   /usr/libexec/PlistBuddy -c "Add :CFBundleIconFile string AppIcon" "$APP/Contents/Info.plist"
 fi
 
-codesign --force --options runtime --sign "${SIGN_IDENTITY:--}" "$APP"
+if [ -n "${SIGN_IDENTITY:-}" ]; then
+  # Notarization needs the hardened runtime and a secure timestamp.
+  codesign --force --options runtime --timestamp --sign "$SIGN_IDENTITY" "$APP"
+else
+  codesign --force --options runtime --sign - "$APP"
+fi
 echo "Built $APP"
 
 if [ "$MAKE_DMG" = "dmg" ]; then
@@ -48,5 +56,14 @@ if [ "$MAKE_DMG" = "dmg" ]; then
   rm -f "$OUT_DIR/Lync.dmg"
   hdiutil create -volname "Lync" -srcfolder "$STAGE" -ov -format UDZO "$OUT_DIR/Lync.dmg" >/dev/null
   rm -rf "$STAGE"
+  if [ -n "${SIGN_IDENTITY:-}" ]; then
+    codesign --force --timestamp --sign "$SIGN_IDENTITY" "$OUT_DIR/Lync.dmg"
+  fi
+  if [ -n "${NOTARY_PROFILE:-}" ]; then
+    [ -n "${SIGN_IDENTITY:-}" ] || { echo "NOTARY_PROFILE needs SIGN_IDENTITY (a Developer ID)" >&2; exit 1; }
+    xcrun notarytool submit "$OUT_DIR/Lync.dmg" --keychain-profile "$NOTARY_PROFILE" --wait
+    xcrun stapler staple "$OUT_DIR/Lync.dmg"
+    xcrun stapler validate "$OUT_DIR/Lync.dmg"
+  fi
   echo "Built $OUT_DIR/Lync.dmg"
 fi

@@ -33,6 +33,8 @@ final class BluetoothLink: NSObject {
     private var link: Link?
     /// Tag keys per paired phone, worked out once (a DH each).
     private var tagKeys: [Data: SymmetricKey] = [:]
+    /// Which paired phone to try next on a link found already connected (it has no tag).
+    private var systemTries = 0
 
     private static let serviceUUID = CBUUID(string: BleWire.service)
     private static let characteristicUUID = CBUUID(string: BleWire.characteristic)
@@ -116,12 +118,12 @@ final class BluetoothLink: NSObject {
         enum Stage { case connecting, hello, awaitingReady, open }
 
         let peripheral: CBPeripheral
-        /// Known from the advertised tag; for a phone found already connected, from its hello_ok.
+        /// Known from the advertised tag; for a phone found already connected, a paired phone to try.
         var phone: PairedPhone?
         var stage = Stage.connecting
         var characteristic: CBCharacteristic?
         var reassembler = BleWire.Reassembler()
-        var ephemeral: Curve25519.KeyAgreement.PrivateKey?
+        var noise: Noise.Handshake?
         var channel: SecureChannel?
         var timeout: DispatchWorkItem?
         var heartbeat: DispatchSourceTimer?
@@ -138,7 +140,8 @@ final class BluetoothLink: NSObject {
 
     /// Scans while `on` (there's a paired phone); off drops any Bluetooth link.
     func setWanted(_ on: Bool) {
-        let on = on && !paired.all.isEmpty
+        // WALLHOP_NO_BLE (development): a test copy run as a bare binary can't use Bluetooth.
+        let on = on && !paired.all.isEmpty && !DevEnv.on("WALLHOP_NO_BLE")
         guard on != wanted else { return }
         wanted = on
         if on {
@@ -242,13 +245,26 @@ final class BluetoothLink: NSObject {
         }
     }
 
+    /// The handshake (PROTOCOL.md, v3): Noise IK with the Mac initiating, to the phone it expects.
+    /// Only that phone can read it; neither key crosses the air in the clear.
     private func sendHello(on link: Link) {
-        let ephemeral = Curve25519.KeyAgreement.PrivateKey()
-        link.ephemeral = ephemeral
+        // A phone found already connected at the system level has no tag to say which one it is:
+        // try the paired phones in turn, one per attempt.
+        if link.phone == nil {
+            let phones = paired.all
+            guard !phones.isEmpty else { return drop(link) }
+            link.phone = phones[systemTries % phones.count]
+            systemTries += 1
+        }
+        guard let phone = link.phone,
+              let noise = try? Noise.Handshake(role: .initiator, prologue: Handshake.blePrologue,
+                                               staticKey: identity.privateKey, remoteStatic: phone.publicKey),
+              let message = try? noise.writeMessage(),
+              let data = try? HandshakeJSON.encode(["t": "hello", "v": PhoneConnection.protocolVersion,
+                                                    "noise": message.base64EncodedString()])
+        else { return drop(link) }
+        link.noise = noise
         link.stage = .hello
-        let hello: [String: Any] = ["t": "hello", "v": 1, "pub": identity.publicKey.base64EncodedString(),
-                                    "eph": ephemeral.publicKey.rawRepresentation.base64EncodedString()]
-        guard let data = try? HandshakeJSON.encode(hello) else { return drop(link) }
         write(data, on: link)
     }
 
@@ -257,21 +273,14 @@ final class BluetoothLink: NSObject {
         case .connecting:
             throw BleWire.FrameError.bad
         case .hello:
-            // hello_ok: it must be the phone whose tag we followed.
+            // hello_ok: only the phone the hello was written for can answer it.
             guard let reply = HandshakeJSON.decode(frame), reply["t"] as? String == "hello_ok",
-                  let pub = (reply["pub"] as? String).flatMap({ Data(base64Encoded: $0) }),
-                  let eph = (reply["eph"] as? String).flatMap({ Data(base64Encoded: $0) }), eph.count == 32,
-                  // The phone whose tag we followed, or, for one found already connected, any paired phone.
-                  let phone = link.phone.flatMap({ Handshake.constantTimeEqual(pub, $0.publicKey) ? $0 : nil })
-                      ?? (link.phone == nil ? paired.all.first(where: { Handshake.constantTimeEqual(pub, $0.publicKey) }) : nil),
-                  let ephemeral = link.ephemeral else { throw BleWire.FrameError.bad }
-            link.phone = phone
-            let ikm = try BleWire.macIkm(macStatic: identity.privateKey, macEphemeral: ephemeral, phonePub: pub, phoneEph: eph)
-            let keys = BleWire.sessionKeys(ikm: ikm, phonePub: pub, phoneEph: eph, macPub: identity.publicKey,
-                                           macEph: ephemeral.publicKey.rawRepresentation)
-            let channel = SecureChannel(sendKey: keys.macToPhone, receiveKey: keys.phoneToMac)
+                  let message = (reply["noise"] as? String).flatMap({ Data(base64Encoded: $0) }),
+                  let noise = link.noise else { throw BleWire.FrameError.bad }
+            _ = try noise.readMessage(message)
+            let channel = SecureChannel(try noise.split())
             link.channel = channel
-            link.ephemeral = nil
+            link.noise = nil
             link.stage = .awaitingReady
             write(try channel.seal(Message("ready").encoded()), on: link)
         case .awaitingReady:

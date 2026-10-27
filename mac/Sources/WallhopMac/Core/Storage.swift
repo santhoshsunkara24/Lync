@@ -6,7 +6,7 @@ enum Storage {
     static let directory: URL = {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         // Development: WALLHOP_HOME runs a separate test copy with its own keys and pairings.
-        let url = ProcessInfo.processInfo.environment["WALLHOP_HOME"].map { URL(fileURLWithPath: $0, isDirectory: true) }
+        let url = DevEnv.value("WALLHOP_HOME").map { URL(fileURLWithPath: $0, isDirectory: true) }
             ?? base.appendingPathComponent("Wallhop", isDirectory: true)
         try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true,
                                                  attributes: [.posixPermissions: 0o700])
@@ -23,13 +23,65 @@ enum Storage {
     static func read(_ name: String) -> Data? {
         try? Data(contentsOf: directory.appendingPathComponent(name))
     }
+
+    /// Overwrites a file with zeros, then removes it (an old plain copy of a key).
+    static func shred(_ name: String) {
+        let url = directory.appendingPathComponent(name)
+        if let size = try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int, size > 0,
+           let handle = try? FileHandle(forWritingTo: url) {
+            try? handle.write(contentsOf: Data(count: size))
+            try? handle.synchronize()
+            try? handle.close()
+        }
+        try? FileManager.default.removeItem(at: url)
+    }
 }
 
-/// This Mac's long-term X25519 key.
-///
-/// Development builds keep it in a user-only file. Release builds should move it to the
-/// Keychain once the app is signed with a stable Developer ID (rebuilt ad-hoc binaries would
-/// otherwise trigger Keychain access prompts on every build).
+/// Seals a secret with a key that lives in this Mac's Secure Enclave and never leaves it: the
+/// sealed file is useless copied to any other machine. ECIES on P-256 (the Enclave's own curve):
+/// a one-off key agreement with the Enclave key, HKDF-SHA256, then AES-GCM.
+enum EnclaveSeal {
+    private static let info = Data("lync-identity-seal-v1".utf8)
+
+    private struct Sealed: Codable {
+        var v = 1
+        let enclave: Data
+        let ephemeral: Data
+        let box: Data
+    }
+
+    static var available: Bool { SecureEnclave.isAvailable }
+
+    static func seal(_ secret: Data) -> Data? {
+        guard available,
+              let enclaveKey = try? SecureEnclave.P256.KeyAgreement.PrivateKey() else { return nil }
+        let ephemeral = P256.KeyAgreement.PrivateKey()
+        guard let shared = try? ephemeral.sharedSecretFromKeyAgreement(with: enclaveKey.publicKey),
+              let box = try? AES.GCM.seal(secret, using: key(shared, ephemeral.publicKey)).combined else { return nil }
+        return try? JSONEncoder().encode(Sealed(enclave: enclaveKey.dataRepresentation,
+                                                ephemeral: ephemeral.publicKey.x963Representation, box: box))
+    }
+
+    static func open(_ data: Data) -> Data? {
+        guard available,
+              let sealed = try? JSONDecoder().decode(Sealed.self, from: data), sealed.v == 1,
+              let enclaveKey = try? SecureEnclave.P256.KeyAgreement.PrivateKey(dataRepresentation: sealed.enclave),
+              let ephemeral = try? P256.KeyAgreement.PublicKey(x963Representation: sealed.ephemeral),
+              let shared = try? enclaveKey.sharedSecretFromKeyAgreement(with: ephemeral),
+              let box = try? AES.GCM.SealedBox(combined: sealed.box) else { return nil }
+        return try? AES.GCM.open(box, using: key(shared, ephemeral))
+    }
+
+    private static func key(_ shared: SharedSecret, _ ephemeral: P256.KeyAgreement.PublicKey) -> SymmetricKey {
+        shared.hkdfDerivedSymmetricKey(using: SHA256.self, salt: Data(), sharedInfo: info + ephemeral.x963Representation,
+                                       outputByteCount: 32)
+    }
+}
+
+/// This Mac's long-term X25519 key, sealed by the Secure Enclave (`identity.sealed`), so a copy
+/// of the file taken off this Mac can't be used to pretend to be it. Macs without a Secure
+/// Enclave (older Intel ones) keep it in a user-only file, as earlier builds all did; a plain
+/// file from an earlier build is sealed and shredded on first launch.
 final class Identity {
     let privateKey: Curve25519.KeyAgreement.PrivateKey
 
@@ -43,15 +95,32 @@ final class Identity {
     /// The new key couldn't be written: phones paired now won't recognise this Mac after a restart.
     nonisolated(unsafe) private(set) static var saveFailed = false
 
+    private static let plainFile = "identity.key"
+    private static let sealedFile = "identity.sealed"
+
     static func loadOrCreate() -> Identity {
-        let file = "identity.key"
-        if let raw = Storage.read(file),
+        if let sealed = Storage.read(sealedFile),
+           let raw = EnclaveSeal.open(sealed) ?? EnclaveSeal.open(sealed), // The Enclave, once more if busy.
            let key = try? Curve25519.KeyAgreement.PrivateKey(rawRepresentation: raw) {
             return Identity(privateKey: key)
         }
+        if let raw = Storage.read(plainFile),
+           let key = try? Curve25519.KeyAgreement.PrivateKey(rawRepresentation: raw) {
+            // From an earlier build, in the clear: seal it, then shred the plain copy.
+            if let sealed = EnclaveSeal.seal(raw), (try? Storage.writePrivate(sealed, to: sealedFile)) != nil {
+                Storage.shred(plainFile)
+            }
+            return Identity(privateKey: key)
+        }
+        // A new key (first launch, or a sealed one moved here from another Mac, which only that
+        // Mac's Enclave could open: phones then see "a different Mac" and pair again).
         let key = Curve25519.KeyAgreement.PrivateKey()
         do {
-            try Storage.writePrivate(key.rawRepresentation, to: file)
+            if let sealed = EnclaveSeal.seal(key.rawRepresentation) {
+                try Storage.writePrivate(sealed, to: sealedFile)
+            } else {
+                try Storage.writePrivate(key.rawRepresentation, to: plainFile)
+            }
         } catch {
             NSLog("Lync: couldn't save this Mac's key: \(error.localizedDescription)")
             saveFailed = true

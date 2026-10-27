@@ -73,7 +73,7 @@ fun askFor(key: Features.Key): Ask? = when (key) {
     )
     Features.Key.Calls -> Ask(
         key, "Calls on your Mac", "When your phone rings, your Mac shows who it is.",
-        listOf("The caller's name and number", "Contacts for names, if you allow it"), "Never your call audio",
+        listOf("The caller's number, from your phone and call log", "Contacts for names, if you allow it"), "Never your call audio or history",
         WIcons.Call, R.drawable.onb_call,
     )
     Features.Key.Texts -> Ask(

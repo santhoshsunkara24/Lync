@@ -10,9 +10,9 @@ import java.io.IOException
 import java.nio.ByteBuffer
 
 /**
- * The Bluetooth fallback's framing and encryption, phone side against a Mac side built from the
- * same formulas (docs/PROTOCOL.md, Bluetooth fallback). The fixed keys give the test vector the
- * protocol document lists; the Mac's code must produce the same values.
+ * The Bluetooth fallback's framing, tag and encryption (Noise, as the Mac runs it), phone side
+ * against a Mac side (docs/PROTOCOL.md, Bluetooth fallback). The handshake bytes themselves are
+ * checked against the Mac's in NoiseTest.
  */
 class BleWireTest {
     private val phonePriv = ByteArray(32) { 0x11 }
@@ -20,12 +20,16 @@ class BleWireTest {
     private val macPriv = ByteArray(32) { 0x33 }
     private val macEphPriv = ByteArray(32) { 0x44 }
     private val phonePub = Crypto.publicKey(phonePriv)
-    private val phoneEph = Crypto.publicKey(phoneEphPriv)
     private val macPub = Crypto.publicKey(macPriv)
-    private val macEph = Crypto.publicKey(macEphPriv)
 
-    /** The Mac's side of the key agreement: DH(eMac, ePhone) ‖ DH(eMac, sPhone) ‖ DH(sMac, ePhone). */
-    private fun macIkm() = Crypto.dh(macEphPriv, phoneEph) + Crypto.dh(macEphPriv, phonePub) + Crypto.dh(macPriv, phoneEph)
+    /** A Bluetooth handshake as both sides run it (the Mac initiates), returning (phone, Mac) channels. */
+    private fun channels(): Pair<SecureChannel, SecureChannel> {
+        val mac = Noise.Handshake(Noise.Role.Initiator, Crypto.BLE_PROLOGUE, macPriv, phonePub, macEphPriv)
+        val phone = Noise.Handshake(Noise.Role.Responder, Crypto.BLE_PROLOGUE, phonePriv, ephemeral = phoneEphPriv)
+        phone.readMessage(mac.writeMessage())
+        mac.readMessage(phone.writeMessage())
+        return SecureChannel(phone.split()) to SecureChannel(mac.split())
+    }
 
     /** A message as it goes inside a sealed frame: 2-byte header length, JSON header, body. */
     private fun plaintext(json: String, body: ByteArray = ByteArray(0)): ByteArray {
@@ -33,25 +37,21 @@ class BleWireTest {
         return ByteBuffer.allocate(2 + header.size + body.size).putShort(header.size.toShort()).put(header).put(body).array()
     }
 
-    @Test fun bothSidesDeriveTheSameKeys() {
-        val phone = BleWire.sessionKeys(BleWire.phoneIkm(phonePriv, phoneEphPriv, macPub, macEph), phonePub, phoneEph, macPub, macEph)
-        val mac = BleWire.sessionKeys(macIkm(), phonePub, phoneEph, macPub, macEph)
-        assertArrayEquals(phone.first, mac.first)
-        assertArrayEquals(phone.second, mac.second)
-        assertNotEquals(phone.first.toHex(), phone.second.toHex())
-    }
-
-    @Test fun differentFromTheWifiSessionKeys() {
-        val ikm = BleWire.phoneIkm(phonePriv, phoneEphPriv, macPub, macEph)
-        val ble = BleWire.sessionKeys(ikm, phonePub, phoneEph, macPub, macEph)
-        val wifi = Crypto.sessionKeys(ikm, phonePub + phoneEph + macPub + macEph)
-        assertNotEquals(ble.first.toHex(), wifi.first.toHex())
+    @Test fun phoneLearnsTheMacsKeyOnlyEncrypted() {
+        val mac = Noise.Handshake(Noise.Role.Initiator, Crypto.BLE_PROLOGUE, macPriv, phonePub, macEphPriv)
+        val hello = mac.writeMessage()
+        // The Mac's static key never appears in the clear.
+        assertEquals(-1, hello.toHex().indexOf(macPub.toHex()))
+        val phone = Noise.Handshake(Noise.Role.Responder, Crypto.BLE_PROLOGUE, phonePriv)
+        phone.readMessage(hello)
+        assertArrayEquals(macPub, phone.remoteStatic)
+        // A Wi‑Fi handshake can't be used on Bluetooth: the prologue differs.
+        val wifi = Noise.Handshake(Noise.Role.Initiator, Crypto.TCP_PROLOGUE, macPriv, phonePub, macEphPriv)
+        assertThrows(IOException::class.java) { Noise.Handshake(Noise.Role.Responder, Crypto.BLE_PROLOGUE, phonePriv).readMessage(wifi.writeMessage()) }
     }
 
     @Test fun codeRoundTripThroughFragmentsAndEncryption() {
-        val (p2m, m2p) = BleWire.sessionKeys(BleWire.phoneIkm(phonePriv, phoneEphPriv, macPub, macEph), phonePub, phoneEph, macPub, macEph)
-        val phone = SecureChannel(p2m, m2p)
-        val mac = SecureChannel(m2p, p2m)
+        val (phone, mac) = channels()
         val reassembler = BleWire.Reassembler()
 
         val messages = listOf(
@@ -75,17 +75,19 @@ class BleWireTest {
     }
 
     @Test fun tamperedOrReplayedFramesAreRejected() {
-        val (p2m, m2p) = BleWire.sessionKeys(macIkm(), phonePub, phoneEph, macPub, macEph)
-        val phone = SecureChannel(p2m, m2p)
+        val (phone, _) = channels()
         val sealed = phone.seal(plaintext("""{"t":"otp","code":"111111"}"""))
         val flipped = sealed.copyOf().also { it[3] = (it[3].toInt() xor 1).toByte() }
-        assertThrows(Exception::class.java) { SecureChannel(m2p, p2m).open(flipped) }
-        val mac = SecureChannel(m2p, p2m)
+        assertThrows(Exception::class.java) { channels().second.open(flipped) }
+        val mac = channels().second
         mac.open(sealed)
         assertThrows(Exception::class.java) { mac.open(sealed) } // Same frame again: the counter moved on.
-        // A Mac with another key can't read it.
-        val stranger = BleWire.sessionKeys(Crypto.dh(ByteArray(32) { 0x55 }, phoneEph) + macIkm().copyOfRange(32, 96), phonePub, phoneEph, macPub, macEph)
-        assertThrows(Exception::class.java) { SecureChannel(stranger.second, stranger.first).open(sealed) }
+        // A Mac with another key can't even start: the phone can't read its hello.
+        val stranger = Noise.Handshake(Noise.Role.Initiator, Crypto.BLE_PROLOGUE, ByteArray(32) { 0x55 }, phonePub)
+        val hello = stranger.writeMessage()
+        val phoneSide = Noise.Handshake(Noise.Role.Responder, Crypto.BLE_PROLOGUE, phonePriv)
+        phoneSide.readMessage(hello) // It decrypts (any Mac may knock), but it isn't the paired Mac:
+        assertNotEquals(macPub.toHex(), phoneSide.remoteStatic!!.toHex())
     }
 
     @Test fun fragmentEdges() {
@@ -109,20 +111,8 @@ class BleWireTest {
     }
 
     /** Test vector, also in docs/PROTOCOL.md: the Mac's implementation is checked against it. */
-    @Test fun vector() {
+    @Test fun tagVector() {
         val tagKey = BleWire.tagKey(Crypto.dh(phonePriv, macPub), phonePub, macPub)
-        val (p2m, m2p) = BleWire.sessionKeys(BleWire.phoneIkm(phonePriv, phoneEphPriv, macPub, macEph), phonePub, phoneEph, macPub, macEph)
-        val sealed = SecureChannel(p2m, m2p).seal(plaintext("""{"t":"ready"}"""))
-        assertEquals(VECTOR_TAG, BleWire.tag(tagKey, 1_000_000).toHex())
-        assertEquals(VECTOR_P2M, p2m.toHex())
-        assertEquals(VECTOR_M2P, m2p.toHex())
-        assertEquals(VECTOR_READY, sealed.toHex())
-    }
-
-    private companion object {
-        const val VECTOR_TAG = "eb87fa08c61a1082"
-        const val VECTOR_P2M = "a52d1d7a9201aad4a7c8b3887433e011c283050bc75b044c19069c5920a9234b"
-        const val VECTOR_M2P = "326c08e1c1627ef3a8625f9a6bf60acd700065a3e8dd27e0a1693befd092a70f"
-        const val VECTOR_READY = "7c7294c7f537c91f8e6d155c5b0bff0bc0bc1c54f8e939f56753d46df64d0d"
+        assertEquals("eb87fa08c61a1082", BleWire.tag(tagKey, 1_000_000).toHex())
     }
 }

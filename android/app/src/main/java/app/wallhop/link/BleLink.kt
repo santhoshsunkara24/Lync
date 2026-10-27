@@ -30,6 +30,7 @@ import app.wallhop.core.BleWire
 import app.wallhop.core.Crypto
 import app.wallhop.core.Identity
 import app.wallhop.core.Message
+import app.wallhop.core.Noise
 import app.wallhop.core.SecureChannel
 import app.wallhop.link.Session.Companion.b64
 import app.wallhop.link.Session.Companion.unb64
@@ -353,21 +354,17 @@ class BleLink(
         private fun handle(frame: ByteArray) {
             val channel = channel
             if (channel == null) {
-                // hello: the Mac's static key must be the paired Mac's.
+                // hello (Noise IK, the Mac initiating): it must come from the paired Mac's key.
+                // Nothing goes back to anyone else, and this phone's key never crosses in the clear.
                 val hello = JSONObject(String(frame, Charsets.UTF_8))
                 if (hello.optString("t") != "hello") throw IOException("Expected hello")
-                val macPub = hello.getString("pub").unb64()
-                val macEph = hello.getString("eph").unb64()
                 val paired = mac?.publicKey ?: throw IOException("Not paired")
-                if (macEph.size != 32 || !MessageDigest.isEqual(macPub, paired)) throw IOException("Unknown Mac")
                 val id = identity ?: throw IOException("No identity")
-                val ephemeral = Crypto.generatePrivateKey()
-                val ephemeralPub = Crypto.publicKey(ephemeral)
-                val ikm = BleWire.phoneIkm(id.privateKey, ephemeral, paired, macEph)
-                val (sendKey, receiveKey) = BleWire.sessionKeys(ikm, id.publicKey, ephemeralPub, paired, macEph)
-                this.channel = SecureChannel(sendKey, receiveKey)
-                val reply = JSONObject().put("t", "hello_ok").put("v", 1)
-                    .put("pub", id.publicKey.b64()).put("eph", ephemeralPub.b64())
+                val noise = Noise.Handshake(Noise.Role.Responder, Crypto.BLE_PROLOGUE, id.privateKey)
+                noise.readMessage(hello.getString("noise").unb64())
+                if (!MessageDigest.isEqual(noise.remoteStatic, paired)) throw IOException("Unknown Mac")
+                val reply = JSONObject().put("t", "hello_ok").put("noise", noise.writeMessage().b64())
+                this.channel = SecureChannel(noise.split())
                 scope.launch { runCatching { write(reply.toString().toByteArray(Charsets.UTF_8)) }.onFailure { closeConnection(this@Connection) } }
                 return
             }

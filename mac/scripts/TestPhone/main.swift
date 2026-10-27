@@ -68,20 +68,17 @@ let decision = readJSON()
 guard decision["t"] as? String == "pair_ok" else { log("pairing: \(decision)"); exit(4) }
 log("paired")
 
-let eph = Curve25519.KeyAgreement.PrivateKey()
-let ephPub = eph.publicKey.rawRepresentation
-sendJSON(["t": "hello", "v": 2, "name": "Test Phone", "pub": myPub.base64EncodedString(), "eph": ephPub.base64EncodedString()])
+// Session v3: Noise IK, this phone initiating to the Mac's key from pair_wait (PROTOCOL.md).
+let noise = try! Noise.Handshake(role: .initiator, prologue: Handshake.tcpPrologue, staticKey: me, remoteStatic: macPub)
+let about = try! JSONSerialization.data(withJSONObject: ["name": "Test Phone", "app": "test"])
+sendJSON(["t": "hello", "v": 3, "noise": try! noise.writeMessage(payload: about).base64EncodedString()])
 let ok = readJSON()
-guard ok["t"] as? String == "hello_ok", let macEph = (ok["eph"] as? String).flatMap({ Data(base64Encoded: $0) }) else {
+guard ok["t"] as? String == "hello_ok", let reply = (ok["noise"] as? String).flatMap({ Data(base64Encoded: $0) }),
+      let answer = try? JSONSerialization.jsonObject(with: noise.readMessage(reply)) as? [String: Any],
+      answer["paired"] as? Bool == true else {
     log("hello: \(ok)"); exit(5)
 }
-let macStatic = try! Curve25519.KeyAgreement.PublicKey(rawRepresentation: macPub)
-let macEphKey = try! Curve25519.KeyAgreement.PublicKey(rawRepresentation: macEph)
-let dh1 = try! eph.sharedSecretFromKeyAgreement(with: macEphKey).data
-let dh2 = try! me.sharedSecretFromKeyAgreement(with: macEphKey).data
-let dh3 = try! eph.sharedSecretFromKeyAgreement(with: macStatic).data
-let keys = Handshake.sessionKeys(ikm: dh1 + dh2 + dh3, transcript: myPub + ephPub + macPub + macEph)
-let channel = SecureChannel(sendKey: keys.phoneToMac, receiveKey: keys.macToPhone)
+let channel = SecureChannel(try! noise.split())
 let sendLock = NSLock()
 func send(_ m: Message) {
     sendLock.lock(); defer { sendLock.unlock() }

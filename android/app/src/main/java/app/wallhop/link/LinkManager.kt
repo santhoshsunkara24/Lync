@@ -210,6 +210,8 @@ class LinkManager private constructor(private val context: Context) {
     @Volatile private var session: Session? = null
     /** The Bluetooth fallback once its handshake is done; only used while [session] is down. */
     @Volatile private var blePath: MacPath? = null
+    /** The session pairing confirmed with, waiting for the connect loop to take it over. */
+    private val pairedSession = java.util.concurrent.atomic.AtomicReference<Session?>(null)
     private val _bluetooth = MutableStateFlow(false)
     /** Codes, calls and notifications are going over Bluetooth because Wi-Fi can't reach the Mac. */
     val bluetooth: StateFlow<Boolean> = _bluetooth.asStateFlow()
@@ -323,6 +325,7 @@ class LinkManager private constructor(private val context: Context) {
         loopJob?.cancel()
         loopJob = null
         session?.close()
+        pairedSession.getAndSet(null)?.close()
         bleJob?.cancel()
         ble.stop()
         discovery.stop()
@@ -375,20 +378,22 @@ class LinkManager private constructor(private val context: Context) {
             val failures = mutableListOf<Failure>()
             for ((host, port, resolved, own) in candidates(mac)) {
                 val result = runCatching {
-                    val socket = Session.open(host, port)
-                    try {
-                        Session.handshake(socket, identity, phoneName, mac.publicKey).first
-                    } catch (e: Exception) {
-                        runCatching { socket.close() }
-                        throw e
+                    // The session pairing just opened, while it's still up: no second connection.
+                    pairedSession.getAndSet(null)?.takeIf { !it.closed } ?: run {
+                        val socket = Session.open(host, port)
+                        try {
+                            Session.handshake(socket, identity, phoneName, mac.publicKey).first
+                        } catch (e: Exception) {
+                            runCatching { socket.close() }
+                            throw e
+                        }
                     }
                 }
                 val opened = result.getOrNull()
-                // "unpaired" isn't authenticated, so it never deletes the pairing: anyone on the
-                // network could send it. When it comes from the address Bonjour gave for our Mac's
-                // name with our Mac's key, the phone asks the user to pair again (keeping the keys
-                // until they do) and keeps retrying, so a Mac that still knows us reconnects.
-                // Any other Mac (a second Mac, a test copy) is just the wrong one: try the next.
+                // "Not paired" comes inside the Noise handshake, so it's from our own Mac. Still it
+                // never deletes the pairing by itself: the phone asks the user to pair again
+                // (keeping the keys until they do) and keeps retrying, so a Mac that still knows us
+                // reconnects. Only where Bonjour found our Mac's name, as before.
                 val unpaired = result.exceptionOrNull() as? UnpairedException
                 if (unpaired != null) {
                     if (resolved && unpaired.macPub != null && java.security.MessageDigest.isEqual(unpaired.macPub, mac.publicKey)) {
@@ -791,7 +796,7 @@ class LinkManager private constructor(private val context: Context) {
                 target = if (invite != null && invite.hosts.size > 1) firstReachable(invite.hosts, port) ?: host else host
                 val socket = Session.open(target, port)
                 pairingSocket.set(socket)
-                socket.use {
+                try {
                     ensureActive() // Cancelled while connecting.
                     socket.soTimeout = 130_000 // The user has two minutes to confirm on the Mac.
                     val input = DataInputStream(socket.getInputStream().buffered())
@@ -840,13 +845,23 @@ class LinkManager private constructor(private val context: Context) {
                         "pair_ok" -> {
                             // Cancelled while the Mac was accepting: don't pair behind the user's back.
                             ensureActive()
-                            store.save(PairedMac(Crypto.deviceId(macPub), macName, macPub, target, port))
+                            // pair_ok itself isn't authenticated: a session on this connection only
+                            // opens with the Mac whose key was just shown, and only once it really
+                            // added this phone. Then that session is the first connection.
+                            step = PairStep.Confirming
+                            val (session, _) = Session.handshake(socket, identity, phoneName, macPub)
+                            pairingSocket.set(null) // Now the session's: not closed with the pairing.
+                            store.save(PairedMac(Crypto.deviceId(macPub), session.macName.ifEmpty { macName }, macPub, target, port))
+                            pairedSession.getAndSet(session)?.close()
                             updateBluetooth(BLUETOOTH_GRACE_MS)
                             _state.value = LinkState.Searching(macName)
                         }
                         "pair_no" -> throw PairingDeclinedException(answer.optString("err").takeIf { it.isNotEmpty() })
                         else -> throw java.io.EOFException("Pairing ended unexpectedly")
                     }
+                } finally {
+                    // Closed unless it became the session.
+                    if (pairingSocket.get() === socket) runCatching { socket.close() }
                 }
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
@@ -916,6 +931,7 @@ class LinkManager private constructor(private val context: Context) {
         val open = session?.takeIf { !it.closed }
         val paths = listOfNotNull<MacPath>(open, blePath?.takeIf { !it.closed })
         session = null
+        pairedSession.getAndSet(null)?.close()
         store.forget()
         scope.launch {
             paths.map { path ->

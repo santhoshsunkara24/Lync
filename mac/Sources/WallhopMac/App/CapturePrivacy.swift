@@ -15,7 +15,7 @@ enum CapturePrivacy {
 
     /// Call on every window Lync shows; the setting change re-applies it to open windows.
     static func apply(_ window: NSWindow) {
-        let forced = ProcessInfo.processInfo.environment["WALLHOP_CAPTURE"] == "1"
+        let forced = DevEnv.on("WALLHOP_CAPTURE")
         window.sharingType = hidden && !forced ? .none : .readOnly
     }
 }
