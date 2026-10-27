@@ -171,6 +171,32 @@ fun SettingsTab(
                         )
                     }
                     if (setup.notificationsBlocked) fixRow(app.wallhop.core.Problems.NOTIFICATIONS_BLOCKED, actions.runFix)
+                    // Android 14 on: full screen over the lock screen needs the user's say-so (Play
+                    // grants it by default only to calling and alarm apps). Android's own page.
+                    if (android.os.Build.VERSION.SDK_INT >= 34) row {
+                        val context = LocalContext.current
+                        fun allowed() = context.getSystemService(android.app.NotificationManager::class.java).canUseFullScreenIntent()
+                        var fullScreen by remember { mutableStateOf(allowed()) }
+                        androidx.lifecycle.compose.LifecycleResumeEffect(Unit) {
+                            fullScreen = allowed()
+                            onPauseOrDispose { }
+                        }
+                        ListRow(
+                            title = "Ring over the lock screen",
+                            subtitle = "When your Mac rings this phone, it fills the screen like an alarm",
+                            leading = { IconTile(WIcons.BellRinging, colors.orange) },
+                            value = if (fullScreen) "On" else "Off",
+                            chevron = true,
+                            onClick = {
+                                runCatching {
+                                    context.startActivity(android.content.Intent(
+                                        android.provider.Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT,
+                                        android.net.Uri.parse("package:${context.packageName}"),
+                                    ))
+                                }.onFailure { app.wallhop.core.Open.appSettings(context) }
+                            },
+                        )
+                    }
                 }
                 Spacer(Modifier.height(32.dp))
             }

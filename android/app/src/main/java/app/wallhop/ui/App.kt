@@ -528,15 +528,13 @@ private fun Tabs(
         runCatching { multiple.launch(ask.toTypedArray()) }.onFailure { answered() }
     }
     askAgain = { key, required, optional -> request(key, required, optional) }
-    // Android's "allow in background?" dialog. Some phones close it at once without showing it;
-    // then the app's battery page is the way, so a tap never does nothing.
-    var batteryAskedAt by remember { mutableStateOf(0L) }
+    // Lync's App info page, where Battery › Unrestricted lets it run in the background. Not
+    // Android's "ignore battery optimisations?" dialog: Play allows that only for apps that give
+    // a device internet access. Back from it, the switch shows whether it was allowed.
     val battery = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
         currentOnPermissionChange()
-        val instant = android.os.SystemClock.elapsedRealtime() - batteryAskedAt < 800
-        if (instant && !isBackgroundAllowed(context)) openAppBatterySettings(context)
-        // Declined: say what that means, with the way to change it.
-        else if (!isBackgroundAllowed(context)) overlays.toast(app.wallhop.core.Problems.BACKGROUND_DECLINED, WIcons.Warning,
+        // Not allowed: say what that means, with the way to change it.
+        if (!isBackgroundAllowed(context)) overlays.toast(app.wallhop.core.Problems.BACKGROUND_DECLINED, WIcons.Warning,
             action = ToastAction(app.wallhop.core.Fix.BatterySettings.label) { openAppBatterySettings(context) })
         afterAnswer.value?.invoke(isBackgroundAllowed(context))
         afterAnswer.value = null
@@ -550,10 +548,25 @@ private fun Tabs(
             afterAnswer.value = null
             return
         }
-        batteryAskedAt = android.os.SystemClock.elapsedRealtime()
-        runCatching {
-            battery.launch(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, "package:${context.packageName}".toUri()))
-        }.onFailure { openAppBatterySettings(context) }
+        overlays.showAlert(AlertSpec(
+            title = "Let Lync run in the background",
+            message = "On the next screen, tap Battery and choose Unrestricted. Lync then stays connected to your Mac with the app closed.",
+            actions = listOf(
+                AlertAction("Open settings", default = true) {
+                    runCatching {
+                        battery.launch(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, "package:${context.packageName}".toUri()))
+                    }.onFailure { openAppBatterySettings(context) }
+                },
+                AlertAction("Not now") {
+                    afterAnswer.value?.invoke(false)
+                    afterAnswer.value = null
+                },
+            ),
+            onBack = {
+                afterAnswer.value?.invoke(false)
+                afterAnswer.value = null
+            },
+        ))
     }
     // The last picker used, so a failed transfer with nothing to resend can reopen it.
     var lastPicker by remember { mutableIntStateOf(0) }

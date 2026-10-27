@@ -136,14 +136,14 @@ Mac and attach a video showing the persistent notification.
 
 **Full-screen intent** (`USE_FULL_SCREEN_INTENT`, for "Ring my phone" over the lock screen): in the
 declaration, say the app does **not** have calling or alarm as its core function. Play then doesn't
-grant it by default on Android 14+, and the app already asks the user for it there
-(`canUseFullScreenIntent`); without it the ring still sounds and shows as a heads-up alert. Nothing
-breaks either way.
+grant it by default on Android 14+; Settings › Notifications › "Ring over the lock screen" opens
+Android's page for it and shows whether it's on. Without it the ring still sounds and shows as a
+heads-up alert. Nothing breaks either way.
 
-**`REQUEST_IGNORE_BATTERY_OPTIMIZATIONS`:**
-- Justify it as needed to keep the link to the paired device alive.
-- If Play rejects it, remove the permission. The app can open the battery settings page instead, with
-  `ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS`, which needs no permission.
+**Battery (`REQUEST_IGNORE_BATTERY_OPTIMIZATIONS`): not used.** Play accepts that permission for a
+companion app only when its connection gives the device internet access, which Lync's doesn't. So
+"Run in background" explains the step, then opens Lync's App info page (Battery › Unrestricted),
+which needs no permission and no declaration; coming back, the switch shows whether it worked.
 
 **Notification access:** no form, but the in-app prominent disclosure rule applies (below).
 
