@@ -759,7 +759,8 @@ final class AppModel: ObservableObject {
             notifications.insert(notification, at: 0)
             if notifications.count > 30 { notifications.removeLast(notifications.count - 30) }
             if showNotifications, mutedApps[notification.packageName] == nil, replyingTo == nil {
-                show(.notification(key: notification.key), for: 6)
+                // Two seconds, then gone; the pointer over it keeps it (to read or reply).
+                show(.notification(key: notification.key), for: 2)
             }
 
         case .call(let call):
