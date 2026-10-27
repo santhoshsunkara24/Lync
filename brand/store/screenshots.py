@@ -41,10 +41,17 @@ html, body {{ margin: 0; width: 1080px; height: 1920px; overflow: hidden;
                        check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     Image.open(out).convert('RGB').save(out)  # Play wants no alpha.
 
+# The phone's own status bar (54 dp at density 3) carries its owner's icons: cropped off.
+STATUS_BAR_PX = 162
+
 for raw in sorted(glob.glob(os.path.join(RAW, '*.png'))):
     name = os.path.basename(raw)[:-4]
     key = name.split('-', 1)[-1]
     top, bottom = CAPTIONS.get(key, ('Lync', ''))
     out = os.path.join(OUT, name + '.png')
-    frame(raw, top, bottom, out)
+    with tempfile.TemporaryDirectory() as tmp:
+        clean = os.path.join(tmp, 'clean.png')
+        im = Image.open(raw).convert('RGB')
+        im.crop((0, STATUS_BAR_PX, im.width, im.height)).save(clean)
+        frame(clean, top, bottom, out)
     print(out)
