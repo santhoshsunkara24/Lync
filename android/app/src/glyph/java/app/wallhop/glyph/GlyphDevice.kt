@@ -87,7 +87,7 @@ internal object GlyphDevice {
                 pending = run
                 connect(context)
             }
-            val lasts = if (effect == Glyphs.Effect.Ringing) 30_000L else 3_000L
+            val lasts = if (effect == Glyphs.Effect.Ringing) 30_000L else CONNECT_MS
             main.postDelayed(release, lasts + 500)
         }
     }
@@ -174,18 +174,19 @@ internal object GlyphDevice {
     }
 
     /**
-     * Glyph Matrix: Lync's link. For a connection its two hooks slide in from either side and clasp,
-     * like the logo's own animation; while the Mac rings the phone they squeeze together and back.
+     * Glyph Matrix: Lync's link. For a connection it plays the app's clasp in pixels (CONNECT):
+     * the hooks wait apart and dim, slide in on an ease-out, catch a pixel past each other, settle
+     * as they light up full, hold, then fade. While the Mac rings the phone they squeeze together
+     * and back.
      */
     private fun playMatrix(context: Context, effect: Glyphs.Effect) {
         val manager = matrixManager ?: return
         val n = Common.getDeviceMatrixLength()
-        fun show(apart: Int = 0) = safely { manager.setAppMatrixFrame(frame(context, n, apart)) }
+        fun show(apart: Int = 0, brightness: Int = 255) =
+            safely { manager.setAppMatrixFrame(frame(context, n, apart, brightness)) }
         when (effect) {
-            Glyphs.Effect.Connected -> {
-                show(apart = 2)
-                later(110) { show(apart = 1) }
-                later(200) { show() }
+            Glyphs.Effect.Connected -> CONNECT.forEach { (at, apart, brightness) ->
+                if (at == 0L) show(apart, brightness) else later(at) { show(apart, brightness) }
             }
             Glyphs.Effect.Ringing -> {
                 show()
@@ -203,7 +204,7 @@ internal object GlyphDevice {
         }
     }
 
-    private fun frame(context: Context, n: Int, apart: Int): IntArray {
+    private fun frame(context: Context, n: Int, apart: Int, brightness: Int = 255): IntArray {
         val grid = Glyphs.matrix(n, apart)
         val bitmap = Bitmap.createBitmap(n, n, Bitmap.Config.ARGB_8888)
         for (i in grid.indices) bitmap.setPixel(i % n, i / n, if (grid[i]) Color.WHITE else Color.BLACK)
@@ -212,10 +213,24 @@ internal object GlyphDevice {
             .setScale(100)
             .setOrientation(0)
             .setPosition(0, 0)
-            .setBrightness(255)
+            .setBrightness(brightness.coerceIn(0, 255))
             .build()
         return GlyphMatrixFrame.Builder().addTop(link).build(context).render()
     }
+
+    /**
+     * The connection clasp, frame by frame: (ms from the start, how far apart the hooks are in
+     * pixels, brightness). The steps shrink as the hooks near (an ease-out), the catch overshoots
+     * by a pixel and springs back, and the link brightens as it closes, like the app's LinkCatch.
+     */
+    private val CONNECT = listOf(
+        Triple(0L, 4, 70), Triple(70L, 3, 95), Triple(130L, 2, 125), Triple(185L, 1, 160),
+        Triple(235L, 0, 200), Triple(280L, -1, 255), Triple(370L, 0, 255),
+        // Hold, then fade out.
+        Triple(1_400L, 0, 200), Triple(1_470L, 0, 145), Triple(1_540L, 0, 95), Triple(1_610L, 0, 50),
+        Triple(1_680L, 0, 20), Triple(1_750L, 0, 0),
+    )
+    private const val CONNECT_MS = 1_900L
 
     // ---- Helpers -----------------------------------------------------------------------------
 
