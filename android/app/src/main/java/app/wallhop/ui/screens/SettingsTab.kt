@@ -489,6 +489,7 @@ private fun GlyphSection(hardware: app.wallhop.glyph.Glyphs.Hardware) {
     val colors = Wallhop.colors
     var ring by remember { mutableStateOf(Features.on(context, Features.Key.GlyphRing)) }
     var connect by remember { mutableStateOf(Features.on(context, Features.Key.GlyphConnect)) }
+    var transfer by remember { mutableStateOf(Features.on(context, Features.Key.GlyphTransfer)) }
     val matrix = hardware == app.wallhop.glyph.Glyphs.Hardware.Matrix
     SectionHeader(if (matrix) "Glyph Matrix" else "Glyph lights")
     InsetSection(
@@ -509,6 +510,15 @@ private fun GlyphSection(hardware: app.wallhop.glyph.Glyphs.Hardware) {
                 leading = { IconTile(WIcons.Link, colors.indigo) },
                 checked = connect,
                 onCheckedChange = { on -> connect = on; Features.set(context, Features.Key.GlyphConnect, on) },
+            )
+        }
+        row {
+            ListRow(
+                title = "While files send",
+                subtitle = if (matrix) "The link fills up, then flashes when they're there" else "A slow pulse, then two blinks when they're there",
+                leading = { IconTile(WIcons.File, colors.green) },
+                checked = transfer,
+                onCheckedChange = { on -> transfer = on; Features.set(context, Features.Key.GlyphTransfer, on) },
             )
         }
         row {

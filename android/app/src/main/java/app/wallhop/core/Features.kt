@@ -21,6 +21,8 @@ object Features {
         GlyphRing("glyph_ring"),
         /** Nothing phones: a short Glyph pulse when the Mac connects. */
         GlyphConnect("glyph_connect"),
+        /** Nothing phones: the Glyphs follow a file transfer, either way, and flash when it's done. */
+        GlyphTransfer("glyph_transfer"),
     }
 
     private fun prefs(context: Context) =

@@ -40,6 +40,7 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
@@ -271,6 +272,18 @@ class LinkManager private constructor(private val context: Context) {
         discovery.onFound = { found ->
             val mac = store.get()
             if (mac != null && _state.value !is LinkState.Connected && found.name == mac.name) poke()
+        }
+        // Nothing phones: the Glyphs follow a file transfer either way, and flash once it's done.
+        scope.launch {
+            kotlinx.coroutines.flow.combine(transfer, incomingTransfer) { out, incoming ->
+                when {
+                    out != null && out.phase == TransferPhase.Sending -> app.wallhop.glyph.Glyphs.Transfer.Moving(out.progress)
+                    incoming != null -> app.wallhop.glyph.Glyphs.Transfer.Moving(incoming.progress)
+                    out?.phase == TransferPhase.Done -> app.wallhop.glyph.Glyphs.Transfer.Done
+                    out?.phase == TransferPhase.Failed -> app.wallhop.glyph.Glyphs.Transfer.Stopped
+                    else -> app.wallhop.glyph.Glyphs.Transfer.Idle
+                }
+            }.distinctUntilChanged().collect { app.wallhop.glyph.Glyphs.transfer(context, it) }
         }
         // Ringing stopped here (the user silenced it, or it timed out): the Mac stops showing "Ringing".
         scope.launch {

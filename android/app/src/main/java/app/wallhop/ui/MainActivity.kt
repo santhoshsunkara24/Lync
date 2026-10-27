@@ -68,6 +68,18 @@ class MainActivity : ComponentActivity() {
             intent.removeExtra("stress_glyph")
             app.wallhop.glyph.Glyphs.preview(this)
         }
+        // Test builds only: `--ez stress_glyph_transfer true` plays a 4 s transfer on the Glyphs.
+        if (app.wallhop.BuildConfig.STRESS_HOOKS && intent?.getBooleanExtra("stress_glyph_transfer", false) == true) {
+            intent.removeExtra("stress_glyph_transfer")
+            val context = applicationContext
+            Thread {
+                for (step in 0..40) {
+                    app.wallhop.glyph.Glyphs.transfer(context, app.wallhop.glyph.Glyphs.Transfer.Moving(step / 40f))
+                    Thread.sleep(100)
+                }
+                app.wallhop.glyph.Glyphs.transfer(context, app.wallhop.glyph.Glyphs.Transfer.Done)
+            }.start()
+        }
         // Test builds only: `--es stress_code 123456` sends a code as if a text had just brought it.
         if (app.wallhop.BuildConfig.STRESS_HOOKS) intent?.getStringExtra("stress_code")?.let { code ->
             intent.removeExtra("stress_code")

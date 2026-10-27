@@ -11,6 +11,16 @@ object Glyphs {
     enum class Hardware { Lights, Matrix }
     enum class Effect { Connected, Ringing }
 
+    /** Where a file transfer is, for the Glyphs to follow. */
+    sealed interface Transfer {
+        /** [fraction] 0 to 1, in either direction. */
+        data class Moving(val fraction: Float) : Transfer
+        data object Done : Transfer
+        /** Failed or cancelled. */
+        data object Stopped : Transfer
+        data object Idle : Transfer
+    }
+
     /** What this phone has; null on phones without Glyphs, or when the SDK isn't built in. */
     val hardware: Hardware? get() = GlyphDevice.hardware
 
@@ -21,6 +31,15 @@ object Glyphs {
         }
         if (hardware == null || !Features.on(context, key)) return
         GlyphDevice.play(context.applicationContext, effect)
+    }
+
+    /**
+     * A transfer's progress. Steps of 1/24 so the Matrix only redraws when a pixel would change;
+     * the device keeps its session open while files move and lets go once the transfer ends.
+     */
+    fun transfer(context: Context, state: Transfer) {
+        if (hardware == null || !Features.on(context, Features.Key.GlyphTransfer)) return
+        GlyphDevice.transfer(context.applicationContext, state)
     }
 
     /** Plays the connection effect whatever the switches say, so people can see what it looks like. */
@@ -73,6 +92,27 @@ object Glyphs {
         "....AAAAAA...............",
         "......AA.................",
     )
+
+    /**
+     * The link as brightness levels (0 to 255) in an [n] x [n] grid, filled from the lower hook's
+     * open end towards the upper hook's by [fraction]: what's sent is lit full, what's still to go
+     * dim, and the pixels at the edge in between, so the fill moves smoothly.
+     */
+    internal fun progress(n: Int, fraction: Float): IntArray {
+        val lit = matrix(n)
+        // Along the link's own diagonal: lower left (A's open end) to upper right (B's).
+        val order = lit.indices.filter { lit[it] }.sortedBy { i -> (i % n) - (i / n) }
+        val levels = IntArray(n * n)
+        val edge = fraction.coerceIn(0f, 1f) * order.size
+        order.forEachIndexed { k, i ->
+            val t = (edge - k).coerceIn(0f, 1f)
+            levels[i] = (DIM + (255 - DIM) * t).toInt()
+        }
+        return levels
+    }
+
+    /** How bright the part of the link still to go is. */
+    private const val DIM = 45
 
     /**
      * The link centred in an [n] x [n] grid. [apart] moves the hooks along the diagonal, a pixel per

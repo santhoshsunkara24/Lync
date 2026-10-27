@@ -93,6 +93,117 @@ internal object GlyphDevice {
         }
     }
 
+    // ---- File transfers ----------------------------------------------------------------------
+
+    /** The last transfer state shown, and the fill it showed (in steps of 1/24). */
+    private var shownTransfer: Glyphs.Transfer = Glyphs.Transfer.Idle
+    private var shownFill = -1
+
+    fun transfer(context: Context, state: Glyphs.Transfer) {
+        main.post {
+            val was = shownTransfer
+            when (state) {
+                is Glyphs.Transfer.Moving -> {
+                    val fill = (state.fraction.coerceIn(0f, 1f) * FILL_STEPS).toInt()
+                    if (was is Glyphs.Transfer.Moving && fill == shownFill) return@post
+                    shownFill = fill
+                    shownTransfer = state
+                    if (was !is Glyphs.Transfer.Moving) cancelSteps()
+                    session(context) { transferFrame(fill, first = was !is Glyphs.Transfer.Moving) }
+                    // Let go if the transfer goes quiet without ending (it always ends normally).
+                    main.removeCallbacks(release)
+                    main.postDelayed(release, 20_000)
+                }
+                // Finished: the clasp's flash. Ended without a "done" (incoming files just stop
+                // reporting): a full fill means it arrived.
+                Glyphs.Transfer.Done, Glyphs.Transfer.Idle, Glyphs.Transfer.Stopped -> {
+                    if (was !is Glyphs.Transfer.Moving) return@post
+                    shownTransfer = state
+                    val arrived = state == Glyphs.Transfer.Done || (state == Glyphs.Transfer.Idle && shownFill >= FILL_STEPS - 1)
+                    val fill = shownFill
+                    shownFill = -1
+                    cancelSteps()
+                    session(context) { if (arrived) transferDone() else transferFade(fill) }
+                    main.removeCallbacks(release)
+                    main.postDelayed(release, 1_600)
+                }
+            }
+        }
+    }
+
+    /** Runs [effect] now if the service is bound, or once it is. */
+    private fun session(context: Context, effect: () -> Unit) {
+        if (ready) safely(effect) else {
+            pending = effect
+            connect(context)
+        }
+    }
+
+    private fun transferFrame(fill: Int, first: Boolean) {
+        when (hardware) {
+            Glyphs.Hardware.Matrix -> matrixLevels(Glyphs.progress(n(), fill.toFloat() / FILL_STEPS))
+            // Glyph lights have no picture: a slow breathing for as long as files move.
+            Glyphs.Hardware.Lights -> if (first) lightsFrame(period = 1_400, cycles = 400, interval = 200)
+            null -> Unit
+        }
+    }
+
+    /** Arrived: the link squeezes as it catches, lights full, holds, then fades. */
+    private fun transferDone() {
+        when (hardware) {
+            Glyphs.Hardware.Matrix -> {
+                val manager = matrixManager ?: return
+                val n = n()
+                fun show(apart: Int, brightness: Int) = safely { manager.setAppMatrixFrame(frameFor(n, apart, brightness)) }
+                show(-1, 255)
+                later(90) { show(0, 255) }
+                listOf(200, 140, 90, 45, 15, 0).forEachIndexed { k, b -> later(700L + 60L * k) { show(0, b) } }
+            }
+            Glyphs.Hardware.Lights -> {
+                lightManager?.let { runCatching { it.turnOff() } }
+                lightsFrame(period = 260, cycles = 2, interval = 120)
+            }
+            null -> Unit
+        }
+    }
+
+    /** Failed or cancelled: what was filled fades away, no flash. */
+    private fun transferFade(fill: Int) {
+        when (hardware) {
+            Glyphs.Hardware.Matrix -> {
+                val levels = Glyphs.progress(n(), fill.coerceAtLeast(0).toFloat() / FILL_STEPS)
+                listOf(0.7f, 0.45f, 0.25f, 0.1f, 0f).forEachIndexed { k, f ->
+                    later(70L * k) { matrixLevels(IntArray(levels.size) { (levels[it] * f).toInt() }) }
+                }
+            }
+            Glyphs.Hardware.Lights -> lightManager?.let { runCatching { it.turnOff() } }
+            null -> Unit
+        }
+    }
+
+    /** Brightness levels 0 to 255, row by row, as the Matrix's own 0 to 4095. */
+    private fun matrixLevels(levels: IntArray) {
+        val manager = matrixManager ?: return
+        manager.setAppMatrixFrame(IntArray(levels.size) { levels[it].coerceIn(0, 255) * 4095 / 255 })
+    }
+
+    private fun lightsFrame(period: Int, cycles: Int, interval: Int) {
+        val manager = lightManager ?: return
+        val model = lights ?: return
+        val builder = manager.glyphFrameBuilder
+        for (channel in 0 until model.channels) builder.buildChannel(channel)
+        manager.animate(builder.buildPeriod(period).buildCycles(cycles).buildInterval(interval).build())
+    }
+
+    private fun n() = Common.getDeviceMatrixLength()
+
+    private fun frameFor(n: Int, apart: Int, brightness: Int): IntArray {
+        val grid = Glyphs.matrix(n, apart)
+        return IntArray(n * n) { if (grid[it]) brightness * 4095 / 255 else 0 }
+    }
+
+    private const val FILL_STEPS = 24
+
     fun stop(context: Context) {
         main.post {
             cancelSteps()
@@ -186,6 +297,7 @@ internal object GlyphDevice {
         val manager = matrixManager ?: return
         val n = Common.getDeviceMatrixLength()
         trace("matrix $n x $n")
+        if (BuildConfig.STRESS_HOOKS) trace("raw frames match the SDK's: ${frame(context, n, 0).contentEquals(frameFor(n, 0, 255))}")
         fun show(apart: Int = 0, brightness: Int = 255) =
             safely { manager.setAppMatrixFrame(frame(context, n, apart, brightness)) }
         when (effect) {

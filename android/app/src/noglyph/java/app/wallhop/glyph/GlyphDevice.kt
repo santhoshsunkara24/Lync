@@ -7,4 +7,5 @@ internal object GlyphDevice {
     val hardware: Glyphs.Hardware? = null
     fun play(context: Context, effect: Glyphs.Effect) = Unit
     fun stop(context: Context) = Unit
+    fun transfer(context: Context, state: Glyphs.Transfer) = Unit
 }
