@@ -165,8 +165,8 @@ extension Problem {
         SystemSettings.open(SystemSettings.bluetoothPrivacy)
     }
 
-    /// Over Bluetooth for a while with no Wi‑Fi connection: the firewall is one likely cause.
-    static let firewallMaybe = Problem(symbol: "flame", title: "Firewall may block Lync",
+    /// Over Bluetooth for a while with no Wi‑Fi connection, and the firewall is on and blocking.
+    static let firewallMaybe = Problem(symbol: "flame", title: "Firewall is blocking Lync",
                                        detail: "Allow Lync in System Settings › Network › Firewall.", actionTitle: "Open") {
         SystemSettings.open(SystemSettings.firewall)
     }

@@ -151,6 +151,8 @@ final class AppModel: ObservableObject {
     @Published private(set) var bluetoothRadio: BluetoothRadio = .ready
     /// No phone over Wi‑Fi for ~30 s: the panel adds the likely cause.
     @Published private(set) var waitedLong = false
+    /// The firewall is on and keeping the phone from reaching Lync (checked once a wait gets long).
+    @Published private(set) var firewallBlocks = false
     private var waitWork: DispatchWorkItem?
     /// ⌥⌘L couldn't be registered (another app has it).
     @Published private(set) var hotkeyAvailable = true
@@ -417,6 +419,11 @@ final class AppModel: ObservableObject {
     /// Restarts the "waited a while" clock: ~30 s without a Wi‑Fi connection adds the likely cause.
     private func restartWaitClock() {
         waitedLong = false
+            // Only a firewall that's really on and blocking gets named as the cause.
+            DispatchQueue.global(qos: .utility).async {
+                let blocks = Firewall.blocksLync()
+                DispatchQueue.main.async { [weak self] in self?.firewallBlocks = blocks }
+            }
         waitWork?.cancel()
         let work = DispatchWorkItem { [weak self] in
             guard let self, self.connectedPhone == nil else { return }
@@ -450,7 +457,7 @@ final class AppModel: ObservableObject {
     /// firewall may be what keeps the phone on Bluetooth.
     var connectionNote: Problem? {
         guard connectedPhone == nil, isPaired else { return nil }
-        if bluetoothPhone != nil { return waitedLong && macOnline && listening ? .firewallMaybe : nil }
+        if bluetoothPhone != nil { return waitedLong && macOnline && listening && firewallBlocks ? .firewallMaybe : nil }
         switch bluetoothRadio {
         case .off: return .bluetoothOff
         case .denied: return .bluetoothDenied
