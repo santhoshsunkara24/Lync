@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The widget's card: Lync green in the picker's preview, recoloured in code to the phone's colours. -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
+    <solid android:color="#FF3C6B52" />
+    <corners android:radius="28dp" />
+</shape>

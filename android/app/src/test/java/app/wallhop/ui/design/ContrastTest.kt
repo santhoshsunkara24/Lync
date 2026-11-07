@@ -80,6 +80,20 @@ class ContrastTest {
         assertTrue("forest label on the mint Copy button", Contrast.ratio(forest, mint) >= Contrast.AA)
     }
 
+    @Test fun codeCardFollowsWallpaperAndReads() {
+        for ((name, seed) in seeds) {
+            val home = HomeColors.from(seed, null)
+            val card = home.codeCard.argb()
+            val accent = home.codeAccent.argb()
+            assertTrue("$name digits on code card", Contrast.ratio(accent, card) >= Contrast.AA)
+            assertTrue("$name secondary on code card", Contrast.whiteOn(card, HomeColors.CodeSecondaryAlpha) >= Contrast.AA)
+        }
+        for (hue in 0 until 360 step 5) {
+            val home = HomeColors.from(Contrast.hslToArgb(hue.toFloat(), 0.6f, 0.5f), null)
+            assertTrue("hue $hue digits", Contrast.ratio(home.codeAccent.argb(), home.codeCard.argb()) >= Contrast.AA)
+        }
+    }
+
     @Test fun shareDoneBarInkOnGreen() {
         assertTrue(Contrast.ratio(Ink.argb(), 0xFF30D158.toInt()) >= Contrast.AA)
     }

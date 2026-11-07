@@ -34,8 +34,6 @@ final class PanelController {
         panel.isMovable = false
         panel.hidesOnDeactivate = false
         panel.becomesKeyOnlyIfNeeded = false
-        // Codes and messages never show up in screen shares or recordings (WALLHOP_CAPTURE=1 for development).
-        CapturePrivacy.apply(panel)
 
         let root = PanelRoot(model: model, theme: model.themeStore, opening: opening,
                              onSize: { [weak self] size in self?.resize(to: size) },
@@ -290,7 +288,7 @@ private struct PanelRoot: View {
         let reduce = WMotion.reduceMotion
         let shape = inNotch
             ? AnyShape(NotchRevealShape(progress: shown || reduce ? 1 : 0, notch: Self.notchSize))
-            : AnyShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
+            : AnyShape(RoundedRectangle(cornerRadius: WRadius.panel, style: .continuous))
         PanelView(model: model, theme: theme, fromNotch: inNotch)
             // Increase Contrast or Reduce Transparency changed: everything redraws with the new colours.
             .id(motion.appearanceKey)

@@ -26,7 +26,7 @@ struct PairingQR: View {
     private var side: CGFloat { 260 }
 
     var body: some View {
-        VStack(spacing: 10) {
+        VStack(spacing: WSpace.xs) {
             ZStack {
                 if let image, !failed {
                     // Fades and grows in when ready; "New code" turns the old one over into the new.
@@ -43,13 +43,13 @@ struct PairingQR: View {
                         )))
                 } else if failed {
                     // The real reason: offline, Local Network off, or the listener failing.
-                    VStack(spacing: 10) {
+                    VStack(spacing: WSpace.xs) {
                         NudgeImage(problem.symbol).font(.wh(26, .medium)).foregroundStyle(WTheme.ink.opacity(0.6))
                         Text(problem.title)
                             .font(.wh(12, .semibold)).foregroundStyle(WTheme.ink.opacity(0.75))
                             .multilineTextAlignment(.center)
                     }
-                    .padding(.horizontal, 12)
+                    .padding(.horizontal, WSpace.s)
                     .frame(width: side, height: side)
                 } else {
                     ProgressView().controlSize(.small).environment(\.colorScheme, .light).frame(width: side, height: side)
@@ -58,7 +58,8 @@ struct PairingQR: View {
             }
             .animation(WMotion.animation(WMotion.smooth), value: generation)
             .animation(WMotion.animation(WMotion.smooth), value: failed)
-            .padding(bare ? 16 : 10)
+            // The QR's quiet zone: never less than this, for the phone's camera.
+            .padding(bare ? WSpace.m : WSpace.s)
             .background(RoundedRectangle(cornerRadius: bare ? 22 : WRadius.field, style: .continuous)
                 .fill(bare ? Color(white: 0.96) : Color.white))
             .accessibilityElement(children: .ignore)
@@ -74,7 +75,7 @@ struct PairingQR: View {
                     .font(.wh(11, .medium))
                     .foregroundStyle(WTheme.secondary)
                     .multilineTextAlignment(.center)
-                HStack(spacing: 8) {
+                HStack(spacing: WSpace.xs) {
                     if failed, let title = problem.actionTitle, let action = problem.action {
                         Button(title, action: action).buttonStyle(WPill(compact: true))
                     }

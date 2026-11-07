@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -37,6 +38,8 @@ import androidx.compose.foundation.interaction.PressInteraction
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.layout
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.customActions
@@ -48,6 +51,7 @@ import androidx.compose.ui.unit.dp
 import app.wallhop.ui.design.AnimatedChangeText
 import app.wallhop.ui.design.Durations
 import app.wallhop.ui.design.Fades
+import app.wallhop.ui.design.Space
 import app.wallhop.ui.design.Springs
 import app.wallhop.ui.design.Haptic
 import app.wallhop.ui.design.rememberHaptics
@@ -69,7 +73,7 @@ class SectionScope {
 fun InsetSection(
     modifier: Modifier = Modifier,
     footer: String? = null,
-    dividerInset: Dp = 16.dp,
+    dividerInset: Dp = Space.m,
     content: SectionScope.() -> Unit,
 ) {
     val colors = Wallhop.colors
@@ -96,7 +100,7 @@ fun InsetSection(
         }
         if (footer != null) {
             Text(footer, style = Type.footnote, color = colors.labelSecondary,
-                modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 7.dp))
+                modifier = Modifier.padding(start = Space.m, end = Space.m, top = Space.xs))
         }
     }
 }
@@ -108,7 +112,7 @@ fun InsetSection(
 fun <T> androidx.compose.foundation.lazy.LazyListScope.insetSectionItems(
     items: List<T>,
     key: (T) -> Any,
-    dividerInset: Dp = 16.dp,
+    dividerInset: Dp = Space.m,
     row: @Composable (T) -> Unit,
 ) {
     itemsIndexed(items, key = { _, item -> key(item) }) { index, item ->
@@ -264,56 +268,86 @@ fun ListRow(
                 },
             )
             .defaultMinSize(minHeight = if (subtitle != null) 64.dp else 56.dp)
-            .padding(horizontal = 16.dp, vertical = 10.dp),
+            .padding(horizontal = Space.m, vertical = Space.s),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        horizontalArrangement = Arrangement.spacedBy(Space.s),
     ) {
         leading?.invoke()
-        Column(Modifier.weight(1f)) {
-            if (titleContent != null) {
-                titleContent()
-            } else {
-                Text(
-                    title,
-                    style = Type.body.copy(fontWeight = androidx.compose.ui.text.font.FontWeight.Medium),
-                    color = titleColor ?: if (destructive) colors.red else colors.label,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                )
+        // Trailing things sit centred on the title's line, not the whole block, so a switch or
+        // chevron stays beside its title when the subtitle runs to more lines.
+        val titleLine = with(LocalDensity.current) { Type.body.lineHeight.toDp() }
+        Row(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(Space.s)) {
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(Space.xxs)) {
+                if (titleContent != null) {
+                    titleContent()
+                } else {
+                    Text(
+                        title,
+                        style = Type.body.copy(fontWeight = androidx.compose.ui.text.font.FontWeight.Medium),
+                        color = titleColor ?: if (destructive) colors.red else colors.label,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                if (subtitle != null) {
+                    Text(subtitle, style = Type.footnote, color = colors.labelSecondary, maxLines = subtitleMaxLines,
+                        overflow = TextOverflow.Ellipsis)
+                }
             }
-            if (subtitle != null) {
-                Text(subtitle, style = Type.footnote, color = colors.labelSecondary, maxLines = subtitleMaxLines,
-                    overflow = TextOverflow.Ellipsis)
+            if (value != null || trailing != null || isSwitch || chevron) {
+                Row(
+                    Modifier.centredOnLine(titleLine),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(Space.s),
+                ) {
+                    if (value != null) {
+                        // Capped, so a long value (an address) truncates instead of squeezing out the title.
+                        val capped = Modifier.widthIn(max = 192.dp)
+                        if (animateValue) {
+                            AnimatedChangeText(value, style = Type.callout.copy(fontFeatureSettings = "tnum"), color = colors.labelSecondary,
+                                modifier = capped, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        } else {
+                            Text(value, style = Type.callout, color = colors.labelSecondary, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                                modifier = capped)
+                        }
+                    }
+                    trailing?.invoke()
+                    if (isSwitch) {
+                        // Drawn only: the whole row is the control.
+                        WSwitch(checked, onCheckedChange = null, enabled = switchEnabled, interactionSource = source)
+                    }
+                    if (chevron) {
+                        Icon(WIcons.ChevronRight, null, tint = colors.labelTertiary, modifier = Modifier.size(16.dp))
+                    }
+                }
             }
-        }
-        if (value != null) {
-            if (animateValue) {
-                AnimatedChangeText(value, style = Type.callout, color = colors.labelSecondary, maxLines = 1)
-            } else {
-                Text(value, style = Type.callout, color = colors.labelSecondary, maxLines = 1)
-            }
-        }
-        trailing?.invoke()
-        if (isSwitch) {
-            // Drawn only: the whole row is the control.
-            WSwitch(checked, onCheckedChange = null, enabled = switchEnabled, interactionSource = source)
-        }
-        if (chevron) {
-            Icon(WIcons.ChevronRight, null, tint = colors.labelTertiary, modifier = Modifier.size(16.dp))
         }
     }
+}
+
+/** Lays this out as tall as [line] and centred on it; anything taller spills evenly above and below. */
+private fun Modifier.centredOnLine(line: Dp) = layout { measurable, constraints ->
+    val placeable = measurable.measure(constraints.copy(minHeight = 0, maxHeight = androidx.compose.ui.unit.Constraints.Infinity))
+    val height = line.roundToPx()
+    layout(placeable.width, height) { placeable.place(0, (height - placeable.height) / 2) }
 }
 
 /** Grouped sections are a soft see-through white over the page's colour (DESIGN.md §5.4). */
 val SectionSurface = Color.White.copy(alpha = 0.07f)
 val SectionRadius = 24.dp
 
+/** The default [IconTile] in a row. */
+val IconTileSize = 40.dp
+
+/** Where a row's text starts when it leads with an [IconTile]: dividers start here too. */
+val IconRowTextInset = Space.m + IconTileSize + Space.s
+
 /**
  * Round icon: the glyph in its colour, lightened, on a soft wash of the same colour. Colour
  * still tells the kind of row apart, but quietly (DESIGN.md §3.3).
  */
 @Composable
-fun IconTile(icon: ImageVector, color: Color, size: Dp = 36.dp) {
+fun IconTile(icon: ImageVector, color: Color, size: Dp = IconTileSize) {
     Box(
         Modifier
             .size(size)

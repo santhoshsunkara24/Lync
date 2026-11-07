@@ -126,6 +126,27 @@
             android:taskAffinity=""
             android:theme="@style/Theme.Wallhop.Sheet" />
 
+        <!-- The home screen widget: the Mac's status, and Photos and Files to send. -->
+        <receiver
+            android:name=".widget.MacWidget"
+            android:exported="false"
+            android:label="@string/app_name">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_mac_info" />
+        </receiver>
+
+        <!-- The widget's Photos and Files: only the system picker, over the home screen. -->
+        <activity
+            android:name=".widget.WidgetPickActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:taskAffinity=""
+            android:theme="@style/Theme.Wallhop.Sheet" />
+
         <receiver
             android:name=".extras.StopRingingReceiver"
             android:exported="false" />

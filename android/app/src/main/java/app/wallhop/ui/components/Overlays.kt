@@ -76,9 +76,11 @@ import androidx.compose.foundation.focusable
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import app.wallhop.ui.design.Durations
+import app.wallhop.ui.design.Space
 import app.wallhop.ui.design.Easings
 import app.wallhop.ui.design.Haptic
 import app.wallhop.ui.design.Radius
@@ -175,8 +177,8 @@ class Overlays {
     fun dismissActionSheet() { actionSheet = null }
     fun showMenu(anchor: Rect, items: List<MenuItem>) { menu = MenuSpec(anchor, items) }
     fun dismissMenu() { menu = null }
-    fun toast(text: String, icon: ImageVector? = null, tint: Color? = null, action: ToastAction? = null) {
-        toast = ToastSpec(text, icon, tint, action)
+    fun toast(text: String, icon: ImageVector? = null, tint: Color? = null, action: ToastAction? = null, detail: String? = null) {
+        toast = ToastSpec(text, icon, tint, action, detail = detail)
     }
 
     /**
@@ -230,7 +232,7 @@ private fun slideDownOut(reduceMotion: Boolean) =
     if (reduceMotion) fadeOut(tween(Durations.Quick)) else slideOutVertically(Springs.dematerialize()) { it }
 
 @Composable
-fun BoxScope.OverlayHost(overlays: Overlays, toastBottom: androidx.compose.ui.unit.Dp = 16.dp) {
+fun BoxScope.OverlayHost(overlays: Overlays, toastBottom: androidx.compose.ui.unit.Dp = Space.m) {
     val dimmed = overlays.sheet != null || overlays.alert != null || overlays.actionSheet != null
 
     AnimatedVisibility(dimmed, enter = fadeIn(tween(Durations.Enter, easing = Easings.Out)), exit = fadeOut(tween(Durations.Exit, easing = Easings.Out))) {
@@ -305,10 +307,10 @@ private fun BoxScope.SheetLayer(overlays: Overlays) {
         Column(
             Modifier
                 .fillMaxWidth()
-                .then(if (spec.large) Modifier else Modifier.padding(horizontal = 8.dp))
+                .then(if (spec.large) Modifier else Modifier.padding(horizontal = Space.xs))
                 .navigationBarsPadding()
                 .imePadding()
-                .padding(bottom = if (spec.large) 0.dp else 8.dp)
+                .padding(bottom = if (spec.large) 0.dp else Space.xs)
                 .offset { IntOffset(0, drag.offset.roundToInt()) }
                 .onSizeChanged { drag.extent = it.height.toFloat() }
                 // Always a solid surface: the slide is the entrance.
@@ -331,25 +333,26 @@ private fun BoxScope.SheetLayer(overlays: Overlays) {
         ) {
             Box(
                 Modifier
-                    .padding(top = 6.dp)
+                    .padding(top = Space.xs)
                     .align(Alignment.CenterHorizontally)
                     .size(36.dp, 5.dp)
                     .clip(capsule())
                     .background(colors.labelTertiary),
             )
             if (spec.title != null || spec.leading != null || spec.trailing != null) {
-                Box(Modifier.fillMaxWidth().height(52.dp).padding(horizontal = 16.dp)) {
+                Box(Modifier.fillMaxWidth().height(56.dp).padding(horizontal = Space.m)) {
                     Box(Modifier.align(Alignment.CenterStart)) { spec.leading?.invoke() }
                     if (spec.title != null) {
-                        Text(spec.title, style = Type.title3, color = colors.label,
-                            modifier = Modifier.align(Alignment.Center).semantics { heading() })
+                        // Clear of the actions either side; a long title truncates rather than running under them.
+                        Text(spec.title, style = Type.title3, color = colors.label, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.align(Alignment.Center).padding(horizontal = Space.huge).semantics { heading() })
                     }
                     Box(Modifier.align(Alignment.CenterEnd)) { spec.trailing?.invoke() }
                 }
             } else {
-                Spacer(Modifier.height(12.dp))
+                Spacer(Modifier.height(Space.s))
             }
-            Column(Modifier.fillMaxWidth().padding(start = 20.dp, end = 20.dp, bottom = 20.dp), content = spec.content)
+            Column(Modifier.fillMaxWidth().padding(start = Space.m, end = Space.m, bottom = Space.l), content = spec.content)
         }
     }
 }
@@ -390,8 +393,8 @@ private fun BoxScope.MenuLayer(overlays: Overlays) {
         val rowHeight = 48.dp * density.fontScale.coerceAtLeast(1f)
         // A thin line sets a destructive item (e.g. "Forget this Mac") apart from the rest.
         val separatorAt = spec.items.indexOfFirst { it.destructive }.takeIf { it > 0 }
-        val separator = if (separatorAt != null) 9.dp else 0.dp
-        val menuHeight = rowHeight * spec.items.size + 12.dp + separator
+        val separator = if (separatorAt != null) Space.xxs * 2 + 1.dp else 0.dp
+        val menuHeight = rowHeight * spec.items.size + Space.xs * 2 + separator
         // Grow away from the nearest screen edge, keeping the button's corner fixed.
         val growsLeft = anchor.center.x > maxWidth.value / 2
         val x = if (growsLeft) anchor.right.dp - menuWidth else anchor.left.dp
@@ -412,12 +415,12 @@ private fun BoxScope.MenuLayer(overlays: Overlays) {
                 }
                 .glass(RoundedRectangle(Radius.l))
                 .semantics { paneTitle = "Menu" }
-                .padding(vertical = 6.dp)
+                .padding(vertical = Space.xs)
                 .graphicsLayer { alpha = ((progress.value - 0.4f) / 0.6f).coerceIn(0f, 1f) },
         ) {
             spec.items.forEachIndexed { index, item ->
                 if (index == separatorAt) {
-                    Box(Modifier.padding(vertical = 4.dp).fillMaxWidth().height(1.dp).background(colors.separator))
+                    Box(Modifier.padding(vertical = Space.xxs).fillMaxWidth().height(1.dp).background(colors.separator))
                 }
                 val source = remember { MutableInteractionSource() }
                 Row(
@@ -429,11 +432,12 @@ private fun BoxScope.MenuLayer(overlays: Overlays) {
                             overlays.dismissMenu()
                             item.onClick()
                         }
-                        .padding(horizontal = 18.dp),
+                        .padding(horizontal = Space.m),
                     verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(Space.s),
                 ) {
                     Text(item.label, style = Type.body, color = if (item.destructive) colors.red else colors.label,
-                        maxLines = 1, softWrap = false, modifier = Modifier.weight(1f))
+                        maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
                     if (item.icon != null) {
                         Icon(item.icon, null, tint = if (item.destructive) colors.red else colors.label, modifier = Modifier.size(20.dp))
                     }
@@ -468,23 +472,23 @@ private fun BoxScope.AlertLayer(overlays: Overlays) {
         val spec = shown ?: return@AnimatedVisibility
         Column(
             Modifier
-                .width(270.dp)
-                .glass(rounded(Radius.xl))
+                .width(272.dp)
+                .glass(rounded(Radius.l))
                 .semantics {
                     paneTitle = spec.title
                     dialog()
                 }
-                .padding(20.dp),
+                .padding(Space.l),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             Text(spec.title, style = Type.headline, color = colors.label, textAlign = TextAlign.Center,
                 modifier = Modifier.semantics { heading() }.focusOnShow())
             if (spec.message != null) {
-                Spacer(Modifier.height(6.dp))
+                Spacer(Modifier.height(Space.xxs))
                 Text(spec.message, style = Type.footnote, color = colors.labelSecondary, textAlign = TextAlign.Center)
             }
-            Spacer(Modifier.height(18.dp))
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Spacer(Modifier.height(Space.m))
+            Column(verticalArrangement = Arrangement.spacedBy(Space.xs)) {
                 spec.actions.forEach { action ->
                     AlertButton(action) { overlays.dismissAlert(); action.onClick() }
                 }
@@ -543,21 +547,21 @@ private fun BoxScope.ActionSheetLayer(overlays: Overlays) {
         // half see-through, blended with the screen behind it.)
         val spec = shown ?: return@AnimatedVisibility
         Column(
-            Modifier.fillMaxWidth().navigationBarsPadding().padding(10.dp)
+            Modifier.fillMaxWidth().navigationBarsPadding().padding(Space.xs)
                 .semantics {
                     paneTitle = spec.message ?: "Actions"
                     dialog()
                 },
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(Space.xs),
         ) {
-            Column(Modifier.fillMaxWidth().glass(rounded(Radius.xl)).padding(8.dp)) {
+            Column(Modifier.fillMaxWidth().glass(rounded(Radius.l)).padding(Space.xs)) {
                 if (spec.message != null) {
                     Text(spec.message, style = Type.footnote, color = colors.labelSecondary, textAlign = TextAlign.Center,
-                        modifier = Modifier.fillMaxWidth().padding(12.dp).focusOnShow())
+                        modifier = Modifier.fillMaxWidth().padding(Space.s).focusOnShow())
                 } else {
                     Box(Modifier.size(1.dp).focusOnShow())
                 }
-                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Column(verticalArrangement = Arrangement.spacedBy(Space.xs)) {
                     spec.actions.forEach { action ->
                         AlertButton(action.copy(default = false)) { overlays.dismissActionSheet(); action.onClick() }
                     }
@@ -592,20 +596,27 @@ private fun BoxScope.ToastLayer(overlays: Overlays, bottom: androidx.compose.ui.
     if (current != null) shown = current
     // A finger on the toast (reading it, reaching for Undo, dragging it) stops the clock.
     var held by remember { mutableStateOf(false) }
+    // The time left to press the button (Undo), 1 to 0: a ring on the button runs down with it.
+    var timeLeft by remember { androidx.compose.runtime.mutableFloatStateOf(1f) }
     LaunchedEffect(current?.id) {
         if (current != null) {
             if (current.tint == colors.red || current.failure) haptics.perform(Haptic.Failure)
             // Longer when there's a button to reach (Undo) or a second line to read, and as long
             // as the user's accessibility settings ask for (TalkBack, "Time to take action").
             var left = toastDuration(context, current.action != null || current.detail != null)
+            var total = left.toFloat()
+            timeLeft = 1f
             var wasHeld = false
             while (left > 0) {
-                delay(100)
+                delay(50)
                 if (held) wasHeld = true
                 else {
-                    // Let go: at least a moment more to finish reading.
-                    if (wasHeld) { left = maxOf(left, 1_500); wasHeld = false }
-                    left -= 100
+                    // Let go: at least a moment more to finish reading; the ring runs on from
+                    // where it stopped and empties in that time.
+                    if (wasHeld && left < 1_500) { total = 1_500f / timeLeft.coerceAtLeast(0.01f); left = 1_500 }
+                    wasHeld = false
+                    left -= 50
+                    timeLeft = (left / total).coerceIn(0f, 1f)
                 }
             }
             overlays.clearToast(current.id)
@@ -645,8 +656,8 @@ private fun BoxScope.ToastLayer(overlays: Overlays, bottom: androidx.compose.ui.
             Modifier
                 .navigationBarsPadding()
                 .imePadding()
-                .padding(bottom = bottom + 8.dp)
-                .padding(horizontal = 16.dp)
+                .padding(bottom = bottom + Space.xs)
+                .padding(horizontal = Space.m)
                 .widthIn(max = 360.dp)
                 // Swipe it down to put it away; it follows the finger and resists going up.
                 .offset { IntOffset(0, drag.offset.roundToInt()) }
@@ -670,9 +681,9 @@ private fun BoxScope.ToastLayer(overlays: Overlays, bottom: androidx.compose.ui.
                 .background(Wallhop.home.pale)
                 // TalkBack reads it out without moving focus.
                 .semantics { liveRegion = LiveRegionMode.Polite }
-                .padding(start = 18.dp, end = if (spec.action != null) 6.dp else 18.dp, top = 12.dp, bottom = 12.dp),
+                .padding(start = Space.m, end = if (spec.action != null) Space.xs else Space.m, top = if (spec.action != null) 0.dp else Space.s, bottom = if (spec.action != null) 0.dp else Space.s),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            horizontalArrangement = Arrangement.spacedBy(Space.s),
         ) {
             // Pale pill, dark text (like the reference's buttons). Icons keep their colour
             // (red for errors, green for success), darkened enough to read on the pale pill.
@@ -689,21 +700,37 @@ private fun BoxScope.ToastLayer(overlays: Overlays, bottom: androidx.compose.ui.
             }
             spec.action?.let { action ->
                 val source = remember { MutableInteractionSource() }
-                // Just the word, bold: one shape (the toast), not a button inside a button.
+                // A solid pill in the toast's ink (the same as the Mac), with a ring that runs down
+                // as the time to press it does. The touch area is 48 dp tall around it.
                 Box(
                     Modifier
                         .heightIn(min = 48.dp)
-                        .widthIn(min = 48.dp)
-                        .pressDim(source)
-                        .clip(capsule())
+                        .pressScale(source, 0.96f)
                         .tappable(source) {
                             overlays.clearToast(spec.id)
                             action.onClick()
-                        }
-                        .padding(horizontal = 14.dp),
+                        },
                     contentAlignment = Alignment.Center,
                 ) {
-                    Text(action.label, style = Type.subheadline.copy(fontWeight = FontWeight.Bold), color = Wallhop.home.onPale)
+                    Row(
+                        Modifier.height(36.dp).clip(capsule()).background(Wallhop.home.onPale).padding(horizontal = Space.s),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(Space.xs),
+                    ) {
+                        val pale = Wallhop.home.pale
+                        if (current?.id == spec.id) {
+                            androidx.compose.foundation.Canvas(Modifier.size(16.dp)) {
+                                val stroke = 2.dp.toPx()
+                                val inset = stroke / 2 + 1.dp.toPx()
+                                val arc = androidx.compose.ui.geometry.Size(size.width - inset * 2, size.height - inset * 2)
+                                val at = androidx.compose.ui.geometry.Offset(inset, inset)
+                                drawArc(pale.copy(alpha = 0.25f), 0f, 360f, false, at, arc, style = androidx.compose.ui.graphics.drawscope.Stroke(stroke))
+                                drawArc(pale, -90f, 360f * timeLeft, false, at, arc,
+                                    style = androidx.compose.ui.graphics.drawscope.Stroke(stroke, cap = androidx.compose.ui.graphics.StrokeCap.Round))
+                            }
+                        }
+                        Text(action.label, style = Type.subheadline.copy(fontWeight = FontWeight.Bold), color = pale)
+                    }
                 }
             }
         }
@@ -713,7 +740,7 @@ private fun BoxScope.ToastLayer(overlays: Overlays, bottom: androidx.compose.ui.
 
 /** How long a toast stays; one with a button (Undo) gets the time the user's settings recommend. */
 fun toastDuration(context: android.content.Context, hasAction: Boolean): Long =
-    if (hasAction) recommendedTimeout(context, 5_000, controls = true) else recommendedTimeout(context, 2_500)
+    if (hasAction) recommendedTimeout(context, 3_500, controls = true) else recommendedTimeout(context, 2_500)
 
 /**
  * The menu's outline while it opens: a rounded rectangle growing from the button's size ([from])

@@ -4,4 +4,5 @@
     <string name="share_label">Send to Mac</string>
     <string name="listener_label">Lync codes from apps</string>
     <string name="tile_label">Clipboard to Mac</string>
+    <string name="widget_description">Your Mac at a glance, and photos or files to it in a tap</string>
 </resources>

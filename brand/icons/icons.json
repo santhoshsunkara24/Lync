@@ -1,0 +1,140 @@
+{
+  "_about": "Which icon each app icon draws. Keys are the Android WIcons names (CamelCase) and the SF Symbol names the Mac code asks for (dotted). Where both mean the same thing they share one entry value. Run generate.mjs after editing.",
+  "icons": {
+    "Laptop": { "bicon": "laptop", "style": "solid" },
+    "laptopcomputer": { "bicon": "laptop", "style": "solid" },
+
+    "Activity": { "bicon": "inbox", "style": "solid" },
+    "tray": { "bicon": "inbox", "style": "solid" },
+
+    "Settings": { "bicon": "settings", "style": "solid" },
+    "gearshape": { "bicon": "settings", "style": "solid" },
+
+    "File": { "bicon": "file", "style": "solid" },
+    "doc.fill": { "bicon": "file", "style": "solid" },
+
+    "Image": { "bicon": "image", "style": "solid" },
+    "photo": { "bicon": "image", "style": "solid" },
+
+    "Text": { "bicon": "chat", "style": "solid" },
+    "text.bubble.fill": { "bicon": "chat", "style": "solid" },
+
+    "Clipboard": { "bicon": "clipboard", "style": "solid" },
+    "doc.on.clipboard": { "bicon": "clipboard", "style": "solid" },
+
+    "Shield": { "bicon": "shield-check", "style": "solid" },
+
+    "BellRinging": { "bicon": "bell-ring", "style": "solid" },
+    "bell.and.waves.left.and.right": { "bicon": "bell-ring", "style": "solid" },
+    "Bell": { "bicon": "bell", "style": "solid" },
+    "bell": { "bicon": "bell", "style": "solid" },
+    "bell.slash": { "bicon": "bell-off", "style": "solid" },
+    "bell.slash.fill": { "bicon": "bell-off", "style": "solid" },
+
+    "Code": { "bicon": "password", "style": "solid" },
+
+    "Lock": { "bicon": "lock", "style": "solid" },
+    "lock": { "bicon": "lock", "style": "solid" },
+
+    "Warning": { "bicon": "alert-circle", "style": "solid" },
+    "exclamationmark.circle.fill": { "bicon": "alert-circle", "style": "solid" },
+    "exclamationmark.circle": { "bicon": "alert-circle", "style": "solid" },
+    "exclamationmark.triangle.fill": { "bicon": "alert-triangle", "style": "solid" },
+
+    "CheckCircle": { "bicon": "check-circle", "style": "solid" },
+    "checkmark.circle.fill": { "bicon": "check-circle", "style": "solid" },
+    "checkmark": { "bicon": "check", "style": "stroke" },
+
+    "XCircle": { "bicon": "x-circle", "style": "solid" },
+    "xmark.circle": { "bicon": "x-circle", "style": "solid" },
+    "Close": { "bicon": "x", "style": "stroke" },
+    "xmark": { "bicon": "x", "style": "stroke" },
+
+    "Call": { "bicon": "phone", "style": "solid" },
+    "phone.fill": { "bicon": "phone", "style": "solid" },
+    "phone.down.fill": { "bicon": "phone-hangup", "style": "solid" },
+    "CallMissed": { "bicon": "phone-missed", "style": "solid" },
+    "phone.arrow.down.left": { "bicon": "phone-missed", "style": "solid" },
+
+    "Chats": { "bicon": "messages", "style": "solid" },
+    "message": { "bicon": "messages", "style": "solid" },
+    "message.badge": { "bicon": "chat-off", "style": "stroke" },
+    "square.and.pencil": { "bicon": "edit", "style": "stroke" },
+    "arrowshape.turn.up.left": { "bicon": "reply", "style": "stroke" },
+
+    "Info": { "bicon": "info-circle", "style": "solid" },
+    "BatteryCharging": { "bicon": "battery-charging", "style": "solid" },
+    "battery.25percent": { "bicon": "battery-low", "style": "solid" },
+    "Lightning": { "bicon": "zap", "style": "solid" },
+
+    "Bluetooth": { "bicon": "bluetooth", "style": "solid" },
+    "dot.radiowaves.left.and.right": { "bicon": "bluetooth", "style": "solid" },
+    "antenna.radiowaves.left.and.right.slash": { "bicon": "bluetooth-off", "style": "stroke" },
+
+    "Wifi": { "bicon": "wifi", "style": "solid" },
+    "wifi.slash": { "bicon": "wifi-off", "style": "stroke" },
+    "wifi.exclamationmark": { "bicon": "wifi-off", "style": "stroke" },
+    "network.slash": { "bicon": "signal-off", "style": "stroke" },
+
+    "Gauge": { "bicon": "gauge", "style": "solid" },
+    "Clock": { "bicon": "clock", "style": "solid" },
+    "clock.badge.xmark": { "bicon": "history", "style": "stroke" },
+    "hourglass": { "bicon": "hourglass", "style": "stroke" },
+
+    "Search": { "bicon": "search", "style": "stroke" },
+    "magnifyingglass": { "bicon": "search", "style": "stroke" },
+    "More": { "bicon": "more-horizontal", "style": "stroke" },
+
+    "Link": { "bicon": "link", "style": "stroke" },
+    "link": { "bicon": "link", "style": "stroke" },
+    "LinkBreak": { "bicon": "link-off", "style": "stroke" },
+    "iphone.slash": { "bicon": "link-off", "style": "stroke" },
+
+    "QrCode": { "bicon": "qr-code", "style": "solid" },
+    "qrcode": { "bicon": "qr-code", "style": "solid" },
+
+    "Retry": { "bicon": "refresh", "style": "stroke" },
+    "arrow.clockwise": { "bicon": "refresh", "style": "stroke" },
+
+    "Scroll": { "bicon": "scroll", "style": "solid" },
+
+    "ChevronRight": { "bicon": "chevron-right", "style": "stroke" },
+    "ChevronDown": { "bicon": "chevron-down", "style": "stroke" },
+    "chevron.compact.down": { "bicon": "chevron-down", "style": "stroke" },
+    "ChevronLeft": { "bicon": "chevron-left", "style": "stroke" },
+    "chevron.left": { "bicon": "chevron-left", "style": "stroke" },
+
+    "arrow.up": { "bicon": "arrow-up", "style": "stroke" },
+    "arrow.down": { "bicon": "arrow-down", "style": "stroke" },
+    "arrow.down.circle.fill": { "bicon": "arrow-circle-down", "style": "solid" },
+    "arrow.down.app": { "bicon": "download", "style": "stroke" },
+    "arrow.up.doc.fill": { "bicon": "file-text-up", "style": "solid" },
+    "icloud.and.arrow.down": { "bicon": "cloud-down", "style": "stroke" },
+    "paperplane": { "bicon": "send", "style": "stroke" },
+
+    "doc.text": { "bicon": "file-text", "style": "stroke" },
+    "doc.on.doc": { "bicon": "copy", "style": "stroke" },
+    "lock.doc": { "bicon": "file-lock", "style": "stroke" },
+    "folder.badge.minus": { "bicon": "folder-minus", "style": "stroke" },
+    "externaldrive.badge.exclamationmark": { "bicon": "hard-drive", "style": "stroke" },
+    "trash": { "bicon": "trash", "style": "stroke" },
+
+    "person.fill": { "bicon": "user", "style": "solid" },
+    "person.badge.key": { "bicon": "user-lock", "style": "stroke" },
+    "person.crop.circle.badge.exclamationmark": { "bicon": "user-x", "style": "stroke" },
+
+    "iphone.gen3": { "bicon": "smartphone", "style": "stroke" },
+    "iphone.radiowaves.left.and.right": { "bicon": "vibrate", "style": "stroke" },
+    "menubar.rectangle": { "bicon": "panel-top", "style": "stroke" },
+    "app.badge": { "bicon": "notification", "style": "stroke" },
+    "hand.point.up.left.fill": { "bicon": "hand-point", "style": "solid" },
+    "safari": { "bicon": "globe", "style": "stroke" },
+    "flame": { "bicon": "firewall", "style": "stroke" },
+    "music.note": { "bicon": "music", "style": "stroke" },
+
+    "play.fill": { "bicon": "play", "style": "solid" },
+    "pause.fill": { "bicon": "pause", "style": "solid" },
+    "forward.fill": { "bicon": "fast-forward", "style": "solid" },
+    "backward.fill": { "bicon": "rewind", "style": "solid" }
+  }
+}

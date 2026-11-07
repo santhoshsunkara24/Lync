@@ -61,6 +61,8 @@ import app.wallhop.link.TransferPhase
 import app.wallhop.link.TransferState
 import app.wallhop.ui.components.FileThumb
 import app.wallhop.ui.components.Liftoff
+import app.wallhop.ui.design.Radius
+import app.wallhop.ui.design.Space
 import app.wallhop.ui.design.Durations
 import app.wallhop.ui.design.Easings
 import app.wallhop.ui.design.Springs
@@ -120,14 +122,14 @@ fun SendingScreen(
             .semantics { paneTitle = "Sending to $macName" },
     ) {
         Column(
-            Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().padding(horizontal = 22.dp, vertical = 12.dp),
+            Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().padding(horizontal = ScreenGutter, vertical = Space.s),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            Row(Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.End) {
+            Row(Modifier.fillMaxWidth().padding(top = Space.xs), horizontalArrangement = Arrangement.End) {
                 val source = remember { MutableInteractionSource() }
                 Box(
                     Modifier
-                        .size(44.dp)
+                        .size(48.dp)
                         .pressScale(source)
                         .clip(RoundedCornerShape(50))
                         .tappable(source, onClick = onHide)
@@ -135,7 +137,7 @@ fun SendingScreen(
                     contentAlignment = Alignment.Center,
                 ) {
                     Box(
-                        Modifier.size(36.dp).clip(RoundedCornerShape(50)).background(Color.White.copy(alpha = 0.07f))
+                        Modifier.size(40.dp).clip(RoundedCornerShape(50)).background(Color.White.copy(alpha = 0.07f))
                             .border(1.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(50)),
                         contentAlignment = Alignment.Center,
                     ) { Icon(WIcons.ChevronDown, null, tint = Color(0xFFD7EAE2), modifier = Modifier.size(16.dp)) }
@@ -161,18 +163,20 @@ fun SendingScreen(
                     "waiting" -> Text("Waiting for your Mac", style = Type.title2, color = Ink)
                     "failed" -> Text("Didn't send", style = Type.title2, color = Ink)
                     "cancelled" -> Text("Cancelled", style = Type.title2, color = Ink)
-                    else -> Row(verticalAlignment = Alignment.Bottom) {
+                    // The %, and the size beside it, sit on the number's baseline.
+                    else -> Row {
                         Text(
                             "${(transfer.progress * 100).toInt()}",
                             style = Type.largeTitle.copy(fontSize = 64.sp, lineHeight = 64.sp, fontWeight = FontWeight.SemiBold, letterSpacing = (-2).sp,
                                 fontFeatureSettings = "tnum"),
                             color = Ink,
+                            modifier = Modifier.alignByBaseline(),
                         )
-                        Text("%", style = Type.title2.copy(fontSize = 24.sp), color = Color(0xFF8FBFAA), modifier = Modifier.padding(bottom = 8.dp))
+                        Text("%", style = Type.title2.copy(fontSize = 24.sp), color = Color(0xFF8FBFAA), modifier = Modifier.alignByBaseline())
                         Text(
                             Formatter.formatShortFileSize(context, transfer.totalBytes),
-                            style = Type.title3.copy(fontWeight = FontWeight.Medium), color = Soft,
-                            modifier = Modifier.padding(start = 12.dp, bottom = 9.dp),
+                            style = Type.title3.copy(fontWeight = FontWeight.Medium, fontFeatureSettings = "tnum"), color = Soft,
+                            modifier = Modifier.padding(start = Space.s).alignByBaseline(),
                         )
                     }
                 }
@@ -180,34 +184,34 @@ fun SendingScreen(
             // What's going.
             Row(
                 Modifier
-                    .padding(top = 14.dp)
+                    .padding(top = Space.m)
                     .widthIn(max = 320.dp)
-                    .clip(RoundedCornerShape(18.dp))
+                    .clip(RoundedCornerShape(Radius.m))
                     .background(Color.White.copy(alpha = 0.05f))
-                    .border(1.dp, Color.White.copy(alpha = 0.06f), RoundedCornerShape(18.dp))
-                    .padding(start = 8.dp, end = 14.dp, top = 8.dp, bottom = 8.dp),
+                    .border(1.dp, Color.White.copy(alpha = 0.06f), RoundedCornerShape(Radius.m))
+                    .padding(start = Space.xs, end = Space.m, top = Space.xs, bottom = Space.xs),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                horizontalArrangement = Arrangement.spacedBy(Space.s),
             ) {
-                FileThumb(transfer.items.map { it.uri }, transfer.items.map { it.mime }, 44.dp)
-                Column(Modifier.weight(1f, fill = false)) {
+                FileThumb(transfer.items.map { it.uri }, transfer.items.map { it.mime }, 40.dp)
+                Column(Modifier.weight(1f, fill = false), verticalArrangement = Arrangement.spacedBy(Space.xxs)) {
                     Text(itemsTitle(transfer), style = Type.subheadline.copy(fontWeight = FontWeight.SemiBold), color = Ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     Text(itemsDetail(transfer), style = Type.caption1, color = Soft, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
             }
-            Row(Modifier.padding(top = 12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Icon(WIcons.Laptop, null, tint = Mint, modifier = Modifier.size(18.dp))
+            Row(Modifier.padding(top = Space.s), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Space.xs)) {
+                Icon(WIcons.Laptop, null, tint = Mint, modifier = Modifier.size(20.dp))
                 Text("to $macName", style = Type.subheadline.copy(fontWeight = FontWeight.SemiBold), color = Color(0xFFE6F4EE), maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
             // Why it failed, or why it's waiting: a few words, then what to do.
             if (problem != null) {
                 Column(
-                    Modifier.padding(top = 18.dp).widthIn(max = 320.dp).semantics(mergeDescendants = true) { liveRegion = LiveRegionMode.Polite },
+                    Modifier.padding(top = Space.m).widthIn(max = 320.dp).semantics(mergeDescendants = true) { liveRegion = LiveRegionMode.Polite },
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
                     Text(problem.title, style = Type.headline, color = Ink, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
                     Text(problem.action, style = Type.subheadline, color = Soft, textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                        modifier = Modifier.padding(top = 2.dp))
+                        modifier = Modifier.padding(top = Space.xxs))
                 }
             }
             Spacer(Modifier.weight(1f))
@@ -218,7 +222,7 @@ fun SendingScreen(
                 Box(
                     Modifier
                         .fillMaxWidth()
-                        .height(52.dp)
+                        .height(56.dp)
                         .pressScale(fixSource)
                         .clip(RoundedCornerShape(50))
                         .background(Mint)
@@ -227,7 +231,7 @@ fun SendingScreen(
                 ) {
                     Text(fix.label, style = Type.headline, color = Color(0xFF062015))
                 }
-                Spacer(Modifier.height(10.dp))
+                Spacer(Modifier.height(Space.xs))
             }
             val source = remember { MutableInteractionSource() }
             // Cancel turns into Done as the files land: the pill fills with mint and the word
@@ -237,7 +241,7 @@ fun SendingScreen(
             Box(
                 Modifier
                     .fillMaxWidth()
-                    .height(52.dp)
+                    .height(56.dp)
                     .pressScale(source)
                     .drawBehind {
                         val r = CornerRadius(size.height / 2)
@@ -259,7 +263,7 @@ fun SendingScreen(
                     Text(if (landed) "Done" else if (failed) "Close" else "Cancel", style = Type.headline, color = if (landed) Color(0xFF062015) else Color(0xFFE6F4EE))
                 }
             }
-            Spacer(Modifier.height(8.dp))
+            Spacer(Modifier.height(Space.xs))
         }
     }
 }

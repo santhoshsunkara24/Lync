@@ -43,18 +43,19 @@ struct QrLinkingView: View {
                         Canvas { ctx, size in Self.draw(ctx, size, geo: geo, t: t, reduce: reduce) }
                             .frame(width: Self.canvas, height: Self.canvas)
                     )
-                    .padding(.top, 24)
-                HStack(spacing: 8) {
+                    .padding(.top, WSpace.l)
+                HStack(spacing: WSpace.xs) {
                     Circle().fill(Self.mint).frame(width: 8, height: 8)
                     Text(phoneName)
                 }
                 .font(.wh(14)).foregroundStyle(.white.opacity(0.56))
                 .opacity(Self.seg(t, Self.clasp + 0.9, Self.clasp + 1.25))
-                .padding(.top, 20)
+                .padding(.top, WSpace.l)
             }
             .frame(maxWidth: .infinity)
         }
-        .padding(.top, 44).padding(.bottom, 4).padding(20)
+        // Laid out like the onboarding's scan step, so the QR stays put as this takes over.
+        .padding(.top, WSpace.xxxl).padding(.bottom, WSpace.xxs).padding(WSpace.m)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Linked with \(phoneName)")
         .onAppear {

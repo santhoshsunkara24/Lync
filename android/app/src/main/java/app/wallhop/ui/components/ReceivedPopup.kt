@@ -52,6 +52,8 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import app.wallhop.link.Notifications
 import app.wallhop.link.ReceivedBatch
+import app.wallhop.ui.design.Radius
+import app.wallhop.ui.design.Space
 import app.wallhop.ui.design.Durations
 import app.wallhop.ui.design.Springs
 import app.wallhop.ui.design.Type
@@ -101,7 +103,7 @@ fun BoxScope.ReceivedPopup(batch: ReceivedBatch?, onDismiss: () -> Unit, bottom:
         Column(
             Modifier
                 .navigationBarsPadding()
-                .padding(start = 12.dp, end = 12.dp, bottom = bottom)
+                .padding(start = Space.m, end = Space.m, bottom = bottom)
                 .widthIn(max = 520.dp)
                 .fillMaxWidth()
                 .offset { IntOffset(0, drag.offset.roundToInt()) }
@@ -120,17 +122,20 @@ fun BoxScope.ReceivedPopup(batch: ReceivedBatch?, onDismiss: () -> Unit, bottom:
                     onDragStarted = { drag.grab() },
                     onDragStopped = { velocity -> drag.release(velocity, onDismiss, commitAt = 0.35f) },
                 )
-                .clip(rounded(28.dp))
+                .clip(rounded(Radius.l))
                 .background(colors.backgroundElevated)
                 .semantics {
                     paneTitle = announce
                     liveRegion = LiveRegionMode.Polite
                 }
-                .padding(16.dp),
+                .padding(Space.m),
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Space.s)) {
                 ThumbnailStack(current.uris)
-                Column(Modifier.weight(1f).semantics(mergeDescendants = true) { contentDescription = announce }) {
+                Column(
+                    Modifier.weight(1f).semantics(mergeDescendants = true) { contentDescription = announce },
+                    verticalArrangement = Arrangement.spacedBy(Space.xxs),
+                ) {
                     Text(current.summary, style = Type.headline, color = colors.label, maxLines = 2, overflow = TextOverflow.Ellipsis)
                     Text(
                         if (current.uris.size == 1) current.names.first() else "Saved to Downloads › Lync",
@@ -138,8 +143,8 @@ fun BoxScope.ReceivedPopup(batch: ReceivedBatch?, onDismiss: () -> Unit, bottom:
                     )
                 }
             }
-            Spacer(Modifier.height(14.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Spacer(Modifier.height(Space.m))
+            Row(horizontalArrangement = Arrangement.spacedBy(Space.xs)) {
                 WButton("Open", {
                     onDismiss()
                     val intent = if (current.uris.size == 1) Notifications.viewIntent(current.uris.first(), current.mimes.firstOrNull())

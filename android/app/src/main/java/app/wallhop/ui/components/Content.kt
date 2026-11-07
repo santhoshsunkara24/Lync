@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -58,6 +59,7 @@ import app.wallhop.ui.design.Durations
 import app.wallhop.ui.design.Radius
 import app.wallhop.ui.design.floatIn
 import app.wallhop.ui.design.pressDim
+import app.wallhop.ui.design.Space
 import app.wallhop.ui.design.Type
 import app.wallhop.ui.design.Wallhop
 import app.wallhop.ui.design.capsule
@@ -96,7 +98,7 @@ fun WTextField(
     var focused by remember { mutableStateOf(false) }
     val ring by animateFloatAsState(if (focused || error != null) 1f else 0f, tween(Durations.Quick), label = "ring")
     val ringColor = if (error != null) colors.red else colors.tint
-    val shape = rounded(20.dp)
+    val shape = rounded(Radius.m)
     Column(modifier.fillMaxWidth()) {
         BasicTextField(
             value = value,
@@ -119,12 +121,14 @@ fun WTextField(
                 .then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier),
             decorationBox = { inner ->
                 val clear = value.isNotEmpty() && singleLine
-                // The clear button is a 44 dp target; the text's own padding keeps the field 52 dp tall.
+                // The clear button is a 48 dp target; the row is at least that tall, so the field is 56 dp.
                 Row(
-                    Modifier.padding(start = 18.dp, end = if (clear) 4.dp else 18.dp, top = 4.dp, bottom = 4.dp),
+                    Modifier
+                        .padding(start = Space.m, end = if (clear) Space.xxs else Space.m, top = Space.xxs, bottom = Space.xxs)
+                        .heightIn(min = 48.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Box(Modifier.weight(1f).padding(vertical = 11.dp)) {
+                    Box(Modifier.weight(1f).padding(vertical = Space.s)) {
                         // labelSecondary, not tertiary: placeholders need 4.5:1 too.
                         if (value.isEmpty()) Text(placeholder, style = Type.body, color = colors.labelSecondary)
                         inner()
@@ -136,25 +140,25 @@ fun WTextField(
         if (error != null) {
             // Read out as soon as it appears.
             Text(error, style = Type.footnote, color = colors.red,
-                modifier = Modifier.padding(start = 4.dp, top = 6.dp).semantics { liveRegion = androidx.compose.ui.semantics.LiveRegionMode.Assertive })
+                modifier = Modifier.padding(start = Space.m, top = Space.xxs).semantics { liveRegion = androidx.compose.ui.semantics.LiveRegionMode.Assertive })
         }
     }
 }
 
-/** The small (x) that empties a field, with a full 44 dp touch target. */
+/** The small (x) that empties a field, with a full 48 dp touch target. */
 @Composable
 private fun ClearButton(onClick: () -> Unit) {
     val source = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
     Box(
         Modifier
-            .size(44.dp)
+            .size(48.dp)
             .pressDim(source)
             .clip(capsule())
             .clickable(interactionSource = source, indication = null, role = androidx.compose.ui.semantics.Role.Button, onClick = onClick)
             .semantics { contentDescription = "Clear" },
         contentAlignment = Alignment.Center,
     ) {
-        Icon(WIcons.XCircle, null, tint = Wallhop.colors.labelTertiary, modifier = Modifier.size(18.dp))
+        Icon(WIcons.XCircle, null, tint = Wallhop.colors.labelTertiary, modifier = Modifier.size(20.dp))
     }
 }
 
@@ -170,9 +174,9 @@ fun SearchField(value: String, onValueChange: (String) -> Unit, modifier: Modifi
         cursorBrush = SolidColor(colors.tint),
         modifier = modifier.fillMaxWidth().height(48.dp).clip(capsule()).background(colors.fill),
         decorationBox = { inner ->
-            Row(Modifier.padding(start = 12.dp, end = if (value.isNotEmpty()) 2.dp else 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                Icon(WIcons.Search, null, tint = colors.labelSecondary, modifier = Modifier.size(18.dp))
-                Spacer(Modifier.width(6.dp))
+            Row(Modifier.padding(start = Space.m, end = if (value.isNotEmpty()) 0.dp else Space.m), verticalAlignment = Alignment.CenterVertically) {
+                Icon(WIcons.Search, null, tint = colors.labelSecondary, modifier = Modifier.size(20.dp))
+                Spacer(Modifier.width(Space.xs))
                 Box(Modifier.weight(1f)) {
                     if (value.isEmpty()) Text(placeholder, style = Type.body, color = colors.labelSecondary)
                     inner()
@@ -187,17 +191,17 @@ fun SearchField(value: String, onValueChange: (String) -> Unit, modifier: Modifi
 @Composable
 fun EmptyState(icon: ImageVector, title: String, message: String, modifier: Modifier = Modifier) {
     val colors = Wallhop.colors
-    Column(modifier.fillMaxWidth().padding(vertical = 36.dp, horizontal = 24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+    Column(modifier.fillMaxWidth().padding(vertical = Space.xxl, horizontal = Space.l), horizontalAlignment = Alignment.CenterHorizontally) {
         Box(
             // Floats up into place once, the first time it's seen.
             Modifier.floatIn().size(72.dp).clip(capsule()).background(Wallhop.home.pale.copy(alpha = 0.16f)),
             contentAlignment = Alignment.Center,
         ) {
-            Icon(icon, null, tint = Wallhop.home.pale, modifier = Modifier.size(30.dp))
+            Icon(icon, null, tint = Wallhop.home.pale, modifier = Modifier.size(32.dp))
         }
-        Spacer(Modifier.height(16.dp))
+        Spacer(Modifier.height(Space.m))
         Text(title, style = Type.headline, color = colors.label, textAlign = TextAlign.Center)
-        Spacer(Modifier.height(4.dp))
+        Spacer(Modifier.height(Space.xxs))
         Text(message, style = Type.subheadline, color = colors.labelSecondary, textAlign = TextAlign.Center)
     }
 }
@@ -244,11 +248,14 @@ fun HopDots(active: Boolean, modifier: Modifier = Modifier) {
     }
 }
 
+/** A [ThumbnailStack]'s thumbnails, and the tile that stands in for one. */
+val ThumbnailSize = 48.dp
+
 /** Up to three thumbnails fanned out (DESIGN.md §5.17). */
 @Composable
 fun ThumbnailStack(uris: List<Uri>) {
-    val size = 52.dp
-    Box(Modifier.size(size + 12.dp)) {
+    val size = ThumbnailSize
+    Box(Modifier.size(size + Space.s)) {
         uris.take(3).reversed().forEachIndexed { reversedIndex, uri ->
             val index = minOf(uris.size, 3) - 1 - reversedIndex
             Thumbnail(uri, size, Modifier.offset(x = (index * 5).dp).rotate((index - 1) * 6f))

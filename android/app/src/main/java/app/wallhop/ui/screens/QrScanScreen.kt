@@ -58,6 +58,7 @@ import app.wallhop.link.QrInvite
 import app.wallhop.ui.components.ButtonStyle
 import app.wallhop.ui.components.CircleButton
 import app.wallhop.ui.components.WButton
+import app.wallhop.ui.design.Space
 import app.wallhop.ui.design.Haptic
 import app.wallhop.ui.design.Type
 import app.wallhop.ui.design.WIcons
@@ -139,27 +140,27 @@ fun QrScanScreen(onScanned: (QrInvite, androidx.compose.ui.geometry.Rect?) -> Un
             Viewfinder(lock.value)
         }
         val top = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
-        Box(Modifier.padding(top = top + 8.dp, start = 16.dp)) {
+        Box(Modifier.padding(top = top + Space.xs, start = ScreenGutter)) {
             CircleButton(WIcons.ChevronLeft, "Back", onClick = { onClose() })
         }
         Column(
-            Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(horizontal = 32.dp, vertical = 56.dp),
+            Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(horizontal = Space.xl, vertical = Space.xxxl),
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(Space.xxs),
         ) {
             when {
                 allowed && cameraFailed -> {
                     val problem = app.wallhop.core.Problems.CAMERA_FAILED
                     Text(problem.title, style = Type.title3, color = Color.White, textAlign = TextAlign.Center)
                     Text(problem.action, style = Type.subheadline, color = Color.White.copy(alpha = 0.75f), textAlign = TextAlign.Center)
-                    Spacer(Modifier.height(8.dp))
+                    Spacer(Modifier.height(Space.s))
                     WButton("Go back", onClose, style = ButtonStyle.Filled)
                 }
                 allowed && newer -> {
                     val problem = app.wallhop.core.Problems.QR_NEWER
                     Text(problem.title, style = Type.title3, color = Color.White, textAlign = TextAlign.Center)
                     Text(problem.action, style = Type.subheadline, color = Color.White.copy(alpha = 0.75f), textAlign = TextAlign.Center)
-                    Spacer(Modifier.height(8.dp))
+                    Spacer(Modifier.height(Space.s))
                     WButton(app.wallhop.core.Fix.Update.label, { app.wallhop.core.Open.run(context, app.wallhop.core.Fix.Update) }, style = ButtonStyle.Filled)
                 }
                 allowed -> {
@@ -177,7 +178,7 @@ fun QrScanScreen(onScanned: (QrInvite, androidx.compose.ui.geometry.Rect?) -> Un
                         else "Allow the camera to scan the code, or go back and pick your Mac from the list.",
                         style = Type.subheadline, color = Color.White.copy(alpha = 0.75f), textAlign = TextAlign.Center,
                     )
-                    Spacer(Modifier.height(8.dp))
+                    Spacer(Modifier.height(Space.s))
                     if (blocked) {
                         WButton("Open Settings", { app.wallhop.core.Open.appSettings(context) }, style = ButtonStyle.Filled)
                     } else {

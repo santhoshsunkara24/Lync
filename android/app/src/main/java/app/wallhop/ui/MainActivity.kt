@@ -135,6 +135,8 @@ internal object AppNav {
     val ask = kotlinx.coroutines.flow.MutableStateFlow<String?>(null)
     /** Pair a Mac now, from inside the app while looking around without one. */
     val pair = kotlinx.coroutines.flow.MutableStateFlow(false)
+    /** The setup list after pairing is up: the tab bar steps aside. */
+    val setupShowing = kotlinx.coroutines.flow.MutableStateFlow(false)
 }
 
 /** One screen with sample data, for screenshots (test builds and the preview build only). */

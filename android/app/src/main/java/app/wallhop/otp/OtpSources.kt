@@ -68,7 +68,8 @@ class OtpNotificationListener : NotificationListenerService() {
         if (!app.wallhop.core.Features.on(this, app.wallhop.core.Features.Key.AppNotifications)) return
         if (MacStore(this).get() == null) return
         val notification = sbn.notification
-        val (title, text) = content(notification)
+        val style = NotificationCompat.MessagingStyle.extractMessagingStyleFromNotification(notification)
+        val (title, text) = content(notification, style)
         if (text.isBlank()) return
 
         // Apps re-post old notifications (an update, a reboot): a code older than five minutes is no use.
@@ -89,6 +90,12 @@ class OtpNotificationListener : NotificationListenerService() {
         val mirrored = MirroredApps.get(this)
         mirrored.noteSeen(sbn.packageName)
         if (!mirrored.isEnabled(sbn.packageName)) return
+        // Remembered so a reply from the Mac still goes through after the app replaces or clears it.
+        replyAction(notification)?.let {
+            remember(sbn.key, sbn.packageName, notification.extras.getCharSequence(Notification.EXTRA_TITLE)?.toString().orEmpty(), it)
+        }
+        // A chat app adds your own reply to its notification: that's not news, so it isn't mirrored.
+        if (isOwnMessage(sbn.packageName, text, style)) return
 
         LinkManager.get(this).sendNotification(
             key = sbn.key,
@@ -111,12 +118,12 @@ class OtpNotificationListener : NotificationListenerService() {
     }
 
     /** Title and text, using the latest message for chat-style notifications. */
-    private fun content(notification: Notification): Pair<String, String> {
+    private fun content(notification: Notification, style: NotificationCompat.MessagingStyle?): Pair<String, String> {
         val extras = notification.extras
         var title = extras.getCharSequence(Notification.EXTRA_TITLE)?.toString().orEmpty()
         var text = (extras.getCharSequence(Notification.EXTRA_BIG_TEXT) ?: extras.getCharSequence(Notification.EXTRA_TEXT))
             ?.toString().orEmpty()
-        NotificationCompat.MessagingStyle.extractMessagingStyleFromNotification(notification)?.let { style ->
+        style?.let { style ->
             style.messages.lastOrNull()?.let { message ->
                 val sender = message.person?.name?.toString()
                 val conversation = style.conversationTitle?.toString()
@@ -143,6 +150,36 @@ class OtpNotificationListener : NotificationListenerService() {
 
         @Volatile private var active: OtpNotificationListener? = null
 
+        /** A mirrored notification's reply button, kept after the notification itself is gone. */
+        private class Replyable(val key: String, val pkg: String, val title: String, val action: Notification.Action)
+        private val replyables = object : LinkedHashMap<String, Replyable>(64, 0.75f, true) {
+            override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Replyable>) = size > 60
+        }
+        /** Replies just sent from the Mac (package, text, when), to recognise them coming back. */
+        private val sentReplies = ArrayList<Triple<String, String, Long>>()
+        private const val OWN_REPLY_WINDOW_MS = 2 * 60_000L
+
+        private fun remember(key: String, pkg: String, title: String, action: Notification.Action) =
+            synchronized(replyables) { replyables[key] = Replyable(key, pkg, title, action) }
+
+        /**
+         * The latest message is the user's own: the chat app's "you" in the conversation, or a
+         * reply the Mac just sent through this app (the same words, within two minutes).
+         */
+        private fun isOwnMessage(pkg: String, text: String, style: NotificationCompat.MessagingStyle?): Boolean {
+            val now = System.currentTimeMillis()
+            val sentFromMac = synchronized(sentReplies) {
+                sentReplies.removeAll { now - it.third > OWN_REPLY_WINDOW_MS }
+                sentReplies.any { it.first == pkg && it.second.trim() == text.trim() }
+            }
+            if (sentFromMac) return true
+            val last = style?.messages?.lastOrNull() ?: return false
+            val person = last.person ?: return false
+            val me = style.user
+            return (me.key != null && me.key == person.key) ||
+                (me.name != null && me.name.toString() == person.name?.toString())
+        }
+
         private fun replyAction(notification: Notification): Notification.Action? {
             val actions = notification.actions.orEmpty().toList() +
                 Notification.WearableExtender(notification).actions
@@ -155,13 +192,29 @@ class OtpNotificationListener : NotificationListenerService() {
          */
         fun replyErr(context: Context, key: String, text: String): String? {
             val listener = active ?: return accessErr(context)
-            val sbn = runCatching { listener.activeNotifications }.getOrNull()?.firstOrNull { it.key == key } ?: return "gone"
-            val action = replyAction(sbn.notification) ?: return "no_reply_action"
+            val all = runCatching { listener.activeNotifications }.getOrNull().orEmpty()
+            val sbn = all.firstOrNull { it.key == key }
+            val kept = synchronized(replyables) { replyables[key] }
+            // The notification as it is now; else its reply button as it was (chat apps replace and
+            // clear their notifications, but the button usually still works); else the newest
+            // notification from the same conversation.
+            val action = sbn?.let { replyAction(it.notification) }
+                ?: kept?.action
+                ?: kept?.let { k ->
+                    all.filter { it.packageName == k.pkg && it.notification.extras.getCharSequence(Notification.EXTRA_TITLE)?.toString() == k.title }
+                        .maxByOrNull { it.postTime }?.let { replyAction(it.notification) }
+                }
+                ?: return if (sbn != null) "no_reply_action" else "gone"
             val inputs = action.remoteInputs ?: return "no_reply_action"
             val results = Bundle().apply { inputs.forEach { putCharSequence(it.resultKey, text) } }
             val intent = Intent()
             RemoteInput.addResultsToIntent(inputs, intent, results)
-            return if (runCatching { action.actionIntent.send(context, 0, intent) }.isSuccess) null else "failed"
+            val sent = runCatching { action.actionIntent.send(context, 0, intent) }
+            if (sent.isFailure) return if (sent.exceptionOrNull() is android.app.PendingIntent.CanceledException) "gone" else "failed"
+            // So the chat app's updated notification, which now shows this reply, isn't mirrored back.
+            val pkg = sbn?.packageName ?: kept?.pkg
+            if (pkg != null) synchronized(sentReplies) { sentReplies += Triple(pkg, text, System.currentTimeMillis()) }
+            return null
         }
 
         /** Not connected to Android: access is off, or it's on and Android hasn't bound Lync yet. */

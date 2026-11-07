@@ -3,6 +3,7 @@ package app.wallhop.ui
 import androidx.core.content.edit
 import androidx.core.net.toUri
 import app.wallhop.core.Features
+import app.wallhop.ui.design.Space
 import app.wallhop.ui.design.WIcons
 import android.Manifest
 import android.content.Context
@@ -262,6 +263,8 @@ fun WallhopRoot(link: LinkManager, demo: Boolean = false) {
     )
     // One counter per tab, bumped when its button is tapped again (LocalScrollToTop).
     val scrollToTop = remember { mutableStateListOf(0, 0, 0) }
+    // The setup list after pairing fills the screen: no tab bar under it.
+    val setupShowing by AppNav.setupShowing.collectAsStateWithLifecycle()
     // Home under the sending screen is out of sight: it stops updating until it's uncovered.
     val homeCovered by remember { androidx.compose.runtime.derivedStateOf { sendOpenState.value > 0.999f } }
     // Files arriving from the Mac: a small banner at the top, not a takeover.
@@ -357,7 +360,7 @@ fun WallhopRoot(link: LinkManager, demo: Boolean = false) {
         },
         chrome = {
             androidx.compose.animation.AnimatedVisibility(
-                visible = screen == 2,
+                visible = screen == 2 && !setupShowing,
                 modifier = Modifier.align(Alignment.BottomCenter),
                 enter = if (reduceMotionApp) fadeIn(tween(Durations.Quick)) else slideInVertically(Springs.snappy()) { it } + fadeIn(Fades.fadeIn()),
                 exit = fadeOut(Fades.fadeOut()),
@@ -378,7 +381,7 @@ fun WallhopRoot(link: LinkManager, demo: Boolean = false) {
                     modifier = Modifier
                         .navigationBarsPadding()
                         .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal))
-                        .padding(bottom = 12.dp)
+                        .padding(bottom = Space.s)
                         .then(if (overlays.modal) Modifier.clearAndSetSemantics { } else Modifier),
                 )
             }
@@ -417,8 +420,8 @@ fun WallhopRoot(link: LinkManager, demo: Boolean = false) {
                 }
             }
             IncomingBanner(if (screen == 2) incomingNow else null)
-            ReceivedPopup(received, onDismiss = { received = null }, bottom = if (screen == 2) 88.dp else 16.dp)
-            OverlayHost(overlays, toastBottom = if (screen == 2) 88.dp else 16.dp)
+            ReceivedPopup(received, onDismiss = { received = null }, bottom = if (screen == 2) 88.dp else Space.m)
+            OverlayHost(overlays, toastBottom = if (screen == 2) 88.dp else Space.m)
         },
     )
     }
@@ -507,8 +510,7 @@ private fun Tabs(
         }
         asked.edit { (required + optional).forEach { putBoolean(it, true) } }
         currentOnPermissionChange()
-        afterAnswer.value?.invoke(ok)
-        afterAnswer.value = null
+        afterAnswer.value.also { afterAnswer.value = null }?.invoke(ok)
     }
     val multiple = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { answered() }
     fun request(key: Features.Key, required: Array<String>, optional: Array<String> = emptyArray()) {
@@ -517,8 +519,7 @@ private fun Tabs(
         val missingOptional = optional.filterNot(::granted)
         if (missingRequired.isEmpty() && missingOptional.isEmpty()) {
             currentOnPermissionChange()
-            afterAnswer.value?.invoke(true)
-            afterAnswer.value = null
+            afterAnswer.value.also { afterAnswer.value = null }?.invoke(true)
             return
         }
         asking.value = key.name
@@ -534,23 +535,28 @@ private fun Tabs(
     val battery = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
         currentOnPermissionChange()
         // Not allowed: say what that means, with the way to change it.
-        if (!isBackgroundAllowed(context)) overlays.toast(app.wallhop.core.Problems.BACKGROUND_DECLINED, WIcons.Warning,
+        // Android 15+: turning on "Allow background usage" only gives Optimized, which isn't enough.
+        // Say exactly that, rather than looking like the choice was ignored.
+        val optimisedOnly = !isBackgroundAllowed(context) &&
+            context.getSystemService(android.app.ActivityManager::class.java)?.isBackgroundRestricted == false
+        if (optimisedOnly) overlays.toast("Almost: choose Unrestricted", WIcons.Warning,
+            detail = "Tap the words “Allow background usage”, not the switch, then pick Unrestricted.",
             action = ToastAction(app.wallhop.core.Fix.BatterySettings.label) { openAppBatterySettings(context) })
-        afterAnswer.value?.invoke(isBackgroundAllowed(context))
-        afterAnswer.value = null
+        else if (!isBackgroundAllowed(context)) overlays.toast(app.wallhop.core.Problems.BACKGROUND_DECLINED, WIcons.Warning,
+            action = ToastAction(app.wallhop.core.Fix.BatterySettings.label) { openAppBatterySettings(context) })
+        afterAnswer.value.also { afterAnswer.value = null }?.invoke(isBackgroundAllowed(context))
     }
     fun askBackground() {
         Features.set(context, Features.Key.Background, true)
         LinkService.start(context)
         if (isBackgroundAllowed(context)) {
             currentOnPermissionChange()
-            afterAnswer.value?.invoke(true)
-            afterAnswer.value = null
+            afterAnswer.value.also { afterAnswer.value = null }?.invoke(true)
             return
         }
         overlays.showAlert(AlertSpec(
             title = "Let Lync run in the background",
-            message = "On the next screen, tap Battery and choose Unrestricted. Lync then stays connected to your Mac with the app closed.",
+            message = backgroundSteps() + " Lync then stays connected to your Mac with the app closed.",
             actions = listOf(
                 AlertAction("Open settings", default = true) {
                     runCatching {
@@ -558,13 +564,11 @@ private fun Tabs(
                     }.onFailure { openAppBatterySettings(context) }
                 },
                 AlertAction("Not now") {
-                    afterAnswer.value?.invoke(false)
-                    afterAnswer.value = null
+                    afterAnswer.value.also { afterAnswer.value = null }?.invoke(false)
                 },
             ),
             onBack = {
-                afterAnswer.value?.invoke(false)
-                afterAnswer.value = null
+                afterAnswer.value.also { afterAnswer.value = null }?.invoke(false)
             },
         ))
     }
@@ -755,6 +759,8 @@ private fun Tabs(
             onDismiss = {
                 Features.set(context, key, false)
                 currentOnPermissionChange()
+                // The guided setup moves on to its next step.
+                afterAnswer.value?.let { next -> afterAnswer.value = null; next(false) }
             },
         ) {
             AskSheet(
@@ -787,6 +793,8 @@ private fun Tabs(
     // Notification access is a trip to Android's settings. When the user comes back without it on a
     // sideloaded Android 13+ install, Android's "restricted setting" block is the likely reason.
     val accessPending = rememberSaveable { mutableStateOf(false) }
+    // The guided setup sent the user to one of Android's settings pages: it goes on when they're back.
+    val guideResume = rememberSaveable { mutableStateOf(false) }
     fun openAccessList() {
         Features.set(context, Features.Key.AppNotifications, true)
         accessPending.value = true
@@ -794,17 +802,23 @@ private fun Tabs(
     }
     LifecycleResumeEffect(Unit) {
         val granted = NotificationManagerCompat.getEnabledListenerPackages(context).contains(context.packageName)
+        val wasPending = accessPending.value
+        fun moveOn() { afterAnswer.value?.let { next -> afterAnswer.value = null; next(granted) } }
         if (accessPending.value && !granted && app.wallhop.core.KeepAlive.restrictedSettingsLikely(context)) {
             overlays.showAlert(AlertSpec(
                 title = "Allow restricted settings",
                 message = "Android blocks this for apps installed from a file. Open App info, tap ⋮ (top right) › Allow restricted settings, then come back and allow Lync in Notification access.",
                 actions = listOf(
                     AlertAction("Open App info", default = true) { app.wallhop.core.KeepAlive.openAppInfo(context) },
-                    AlertAction("Not now"),
+                    AlertAction("Not now") { moveOn() },
                 ),
             ))
+        } else if (wasPending) {
+            moveOn()
         }
         accessPending.value = false
+        // Back from a settings page the guided setup sent the user to (full-screen ringing).
+        if (guideResume.value) { guideResume.value = false; moveOn() }
         onPauseOrDispose { }
     }
 
@@ -825,19 +839,129 @@ private fun Tabs(
         suggestTick++
     }
 
-    val setupPrefs = remember { context.getSharedPreferences("setup", Context.MODE_PRIVATE) }
-    // After pairing, once: just the codes permission (the others are asked when each is first used).
-    val showAllow = rememberSaveable { mutableStateOf(false) }
-    LaunchedEffect(Unit) {
-        if (demo || setupPrefs.getBoolean("guided_done", false)) return@LaunchedEffect
-        if (Features.Key.Codes in setup.granted) setupPrefs.edit { putBoolean("guided_done", true) } else showAllow.value = true
+    // The setup after pairing a new Mac: a list of everything Lync can do (SetupListScreen), each
+    // with its own Turn on, or "Turn on the rest" to go through them one at a time, each behind its
+    // own explanation. "Not now" on any step moves on; anything Android won't ask about again is
+    // skipped (its Turn on explains where the switch is).
+    val guideOrder = remember {
+        listOf("Codes", "Notifications", "Calls", "Texts", "AppNotifications", "Bluetooth", "Background", "FullScreen")
     }
+    val guideStep = rememberSaveable { mutableIntStateOf(-1) }
+    val hasLe = remember { context.packageManager.hasSystemFeature(PackageManager.FEATURE_BLUETOOTH_LE) }
+    fun setupOn(step: String): Boolean = when (step) {
+        "Codes" -> granted(Manifest.permission.RECEIVE_SMS)
+        "Notifications" -> Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU || granted(Manifest.permission.POST_NOTIFICATIONS)
+        "Calls" -> CallControl.required.all(::granted)
+        "Texts" -> SmsStore.required.all(::granted)
+        "AppNotifications" -> NotificationManagerCompat.getEnabledListenerPackages(context).contains(context.packageName)
+        "Bluetooth" -> !hasLe || app.wallhop.link.BleLink.permitted(context)
+        "Background" -> isBackgroundAllowed(context)
+        "FullScreen" -> Build.VERSION.SDK_INT < 34 ||
+            context.getSystemService(android.app.NotificationManager::class.java).canUseFullScreenIntent()
+        else -> true
+    }
+    fun setupKey(step: String): Features.Key? = when (step) {
+        "Codes" -> Features.Key.Codes
+        "Notifications" -> Features.Key.Notifications
+        "Calls" -> Features.Key.Calls
+        "Texts" -> Features.Key.Texts
+        "AppNotifications" -> Features.Key.AppNotifications
+        "Bluetooth" -> Features.Key.Bluetooth
+        "Background" -> Features.Key.Background
+        else -> null
+    }
+    /** On in the list: Android allows it and Lync's own switch for it is on. */
+    fun setupChecked(step: String): Boolean = setupOn(step) && (setupKey(step)?.let { Features.on(context, it) } ?: true)
+    fun guideNeeds(step: String): Boolean = !setupOn(step) && when (step) {
+        "Codes" -> blocked(listOf(Manifest.permission.RECEIVE_SMS)) == null
+        "Notifications" -> blocked(listOf(Manifest.permission.POST_NOTIFICATIONS)) == null
+        "Calls" -> blocked(CallControl.required.toList()) == null
+        "Texts" -> blocked(SmsStore.required.toList()) == null
+        "Bluetooth" -> blocked(app.wallhop.link.BleLink.required.toList()) == null
+        else -> true
+    }
+    /** One step: its explanation, then Android. [then] runs once it's answered, either way. */
+    fun runStep(step: String, then: () -> Unit) {
+        afterAnswer.value = { _ -> currentOnPermissionChange(); then() }
+        fun skip() { afterAnswer.value.also { afterAnswer.value = null }?.invoke(false) }
+        when (step) {
+            "Codes" -> { suggested(Features.Key.Codes); allowCodes() }
+            "Notifications" -> request(Features.Key.Notifications, arrayOf(Manifest.permission.POST_NOTIFICATIONS))
+            "Calls" -> { suggested(Features.Key.Calls); allowCalls() }
+            "Texts" -> { suggested(Features.Key.Texts); allowTexts() }
+            "AppNotifications" -> { suggested(Features.Key.AppNotifications); requestNotificationAccess() }
+            "Bluetooth" -> ask(Features.Key.Bluetooth, app.wallhop.link.BleLink.required)
+            "Background" -> askBackground()
+            "FullScreen" -> overlays.showAlert(AlertSpec(
+                title = "Find my phone",
+                message = "When you ring this phone from your Mac to find it, Lync rings like an alarm and fills the screen, even when it's locked. On the next screen, turn on Lync.",
+                actions = listOf(
+                    AlertAction("Open settings", default = true) {
+                        guideResume.value = true
+                        runCatching {
+                            context.startActivity(Intent(Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT, "package:${context.packageName}".toUri()))
+                        }.onFailure { guideResume.value = false; skip() }
+                    },
+                    AlertAction("Not now") { skip() },
+                ),
+                onBack = { skip() },
+            ))
+            else -> skip()
+        }
+        // Android won't ask again (or nothing to ask): an alert explains, or it's already on.
+        // Nothing will answer, so don't wait for it.
+        if (step in listOf("Codes", "Calls", "Texts", "Bluetooth") && !guideNeeds(step) && afterAnswer.value != null && !setupOn(step)) {
+            afterAnswer.value = null
+            then()
+        }
+    }
+    /** "Turn on the rest": every step not yet on, one after another. */
+    fun guideNext() {
+        var step = guideStep.intValue + 1
+        while (step < guideOrder.size && !guideNeeds(guideOrder[step])) step++
+        if (step >= guideOrder.size) {
+            guideStep.intValue = -1
+            currentOnPermissionChange()
+            return
+        }
+        guideStep.intValue = step
+        runStep(guideOrder[step]) { guideNext() }
+    }
+    fun startGuide() {
+        guideStep.intValue = -1
+        guideNext()
+    }
+
+    val setupPrefs = remember { context.getSharedPreferences("setup", Context.MODE_PRIVATE) }
+    // Pairing a Mac for the first time (on this install, or a different Mac): codes first, full
+    // screen, then the list of everything else. Reconnecting, or pairing the same Mac again,
+    // never shows it again. Counted as shown the moment it starts, so leaving halfway doesn't
+    // bring it back on the next open.
+    val showAllow = rememberSaveable { mutableStateOf(false) }
+    val showSetupList = rememberSaveable { mutableStateOf(false) }
+    LaunchedEffect(link.pairedMac?.id) {
+        val macId = link.pairedMac?.id ?: return@LaunchedEffect
+        if (demo) return@LaunchedEffect
+        val last = setupPrefs.getString("setup_mac", null)
+        // Set up before this version: remember the Mac, show nothing.
+        if (last == null && setupPrefs.getBoolean("guided_done", false)) {
+            setupPrefs.edit { putString("setup_mac", macId) }
+            return@LaunchedEffect
+        }
+        if (last == macId) return@LaunchedEffect
+        setupPrefs.edit { putString("setup_mac", macId); putBoolean("guided_done", true) }
+        showSetupList.value = true
+    }
+    LaunchedEffect(showSetupList.value) { AppNav.setupShowing.value = showSetupList.value }
+    androidx.compose.runtime.DisposableEffect(Unit) { onDispose { AppNav.setupShowing.value = false } }
     fun closeAllow() {
         showAllow.value = false
         setupPrefs.edit { putBoolean("guided_done", true) }
         // Codes were just asked about: Home doesn't suggest them, or anything else today.
         suggested(Features.Key.Codes)
         currentOnTab(0)
+        // Then the list of everything else Lync can do.
+        showSetupList.value = true
     }
 
     val macActions = remember {
@@ -1000,6 +1124,7 @@ private fun Tabs(
                             onActions = { entry, anchor -> entryActions(entry, anchor) },
                             onDelete = { deleteEntry(it.id) },
                             onClearOld = { clearOlderThanAWeek() },
+                            onClearAll = { entries, message -> deleteEntries(entries.map { it.id }, message) },
                         )
                         else -> SettingsTab(
                             // Advertising that failed to start shows under the switch too.
@@ -1046,6 +1171,55 @@ private fun Tabs(
             LicencesScreen(overlays, onBack = { onShowLicences(false) })
         }
         androidx.compose.animation.AnimatedVisibility(
+            visible = showSetupList.value,
+            // Under the app picker (2f), which "Choose apps" opens over it.
+            modifier = Modifier.zIndex(1.5f),
+            enter = fadeIn(tween(Durations.Fade)),
+            exit = fadeOut(tween(Durations.Quick)),
+        ) {
+            BackHandler { showSetupList.value = false }
+            // Re-read whenever a permission changes (setup is re-read on every answer and resume).
+            val items = remember(setup) {
+                buildList {
+                    add(app.wallhop.ui.screens.SetupItem("Codes", "Codes", "Login codes from texts, ready to paste on your Mac", WIcons.Code, setupChecked("Codes")))
+                    add(app.wallhop.ui.screens.SetupItem("Calls", "Calls", "See who's calling, answer or decline", WIcons.Call, setupChecked("Calls")))
+                    add(app.wallhop.ui.screens.SetupItem("Texts", "Texts", "Read and reply from your Mac", WIcons.Chats, setupChecked("Texts")))
+                    add(app.wallhop.ui.screens.SetupItem("AppNotifications", "App notifications", "Only from the apps you pick", WIcons.BellRinging, setupChecked("AppNotifications"),
+                        extra = "Choose apps".takeIf { setupChecked("AppNotifications") }))
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU)
+                        add(app.wallhop.ui.screens.SetupItem("Notifications", "Alerts on this phone", "When files arrive, or your Mac rings you", WIcons.Bell, setupChecked("Notifications")))
+                    if (hasLe) add(app.wallhop.ui.screens.SetupItem("Bluetooth", "Bluetooth backup", "Codes and calls still arrive off Wi‑Fi", WIcons.Bluetooth, setupChecked("Bluetooth")))
+                    add(app.wallhop.ui.screens.SetupItem("Background", "Stay connected", "Lync keeps working with the app closed", WIcons.BatteryCharging, setupChecked("Background")))
+                    if (Build.VERSION.SDK_INT >= 34)
+                        add(app.wallhop.ui.screens.SetupItem("FullScreen", "Find my phone", "Ring it from your Mac. It rings like an alarm, even when locked", WIcons.BellRinging, setupChecked("FullScreen")))
+                }
+            }
+            app.wallhop.ui.screens.SetupListScreen(
+                items,
+                onToggle = { id, on ->
+                    guideStep.intValue = -1
+                    val key = setupKey(id)
+                    if (on) {
+                        key?.let { Features.set(context, it, true) }
+                        if (key == Features.Key.Background) LinkService.start(context)
+                        if (setupOn(id)) currentOnPermissionChange() else runStep(id) {}
+                    } else if (key != null) {
+                        // Off is Lync's own switch: nothing goes to the Mac. Android's permission stays.
+                        Features.set(context, key, false)
+                        currentOnPermissionChange()
+                    } else if (id == "FullScreen") {
+                        guideResume.value = true
+                        runCatching {
+                            context.startActivity(Intent(Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT, "package:${context.packageName}".toUri()))
+                        }.onFailure { guideResume.value = false }
+                    }
+                },
+                onExtra = { id -> if (id == "AppNotifications") currentOnShowApps(true) },
+                onTurnOnRest = { startGuide() },
+                onDone = { showSetupList.value = false },
+            )
+        }
+        androidx.compose.animation.AnimatedVisibility(
             visible = showAllow.value,
             modifier = Modifier.zIndex(3f),
             enter = fadeIn(tween(Durations.Fade)),
@@ -1054,10 +1228,7 @@ private fun Tabs(
             BackHandler { closeAllow() }
             app.wallhop.ui.screens.AllowCodesScreen(
                 onAllow = {
-                    afterAnswer.value = { ok ->
-                        closeAllow()
-                        if (ok) overlays.toast("Codes are on.", WIcons.CheckCircle, colors.green)
-                    }
+                    afterAnswer.value = { _ -> closeAllow() }
                     request(Features.Key.Codes, arrayOf(Manifest.permission.RECEIVE_SMS))
                 },
                 onLater = {
@@ -1083,7 +1254,7 @@ private fun NotificationAccessSteps(context: Context) {
         }
     })
     if (restricted) {
-        Spacer(Modifier.height(12.dp))
+        Spacer(Modifier.height(Space.s))
         WButton("Open App info", { app.wallhop.core.KeepAlive.openAppInfo(context) },
             style = ButtonStyle.Glass, modifier = Modifier.fillMaxWidth())
     }
@@ -1338,3 +1509,10 @@ private fun subPageExit(reduceMotion: Boolean, drift: Int): androidx.compose.ani
     if (reduceMotion) fadeOut(tween(Durations.Quick))
     else fadeOut(tween(Durations.SubPageOut, easing = Easings.Out)) +
         slideOutHorizontally(androidx.compose.animation.core.spring<androidx.compose.ui.unit.IntOffset>(1f, 450f)) { drift }
+
+
+/** Where Unrestricted lives on this phone's version of Android. */
+private fun backgroundSteps(): String =
+    if (Build.VERSION.SDK_INT >= 35)
+        "On the next screen, tap App battery usage, then tap the words “Allow background usage” (not the switch) and choose Unrestricted."
+    else "On the next screen, tap Battery (or App battery usage) and choose Unrestricted."

@@ -81,7 +81,8 @@ final class Menus: NSObject {
         open.keyEquivalentModifierMask = [.option, .command]
         menu.addItem(open)
         if let code = model.latestCode {
-            menu.addItem(item("Copy latest code (\(spaced(code.code)))", #selector(copyLatestCode)))
+            // Not the digits: like the notch, a menu can be on show to someone else.
+            menu.addItem(item(code.sender.isEmpty ? "Copy latest code" : "Copy latest code from \(code.sender)", #selector(copyLatestCode)))
         }
         menu.addItem(.separator())
         let help = connected ? nil : Problem.disabledHelp(bluetooth: model.bluetoothPhone != nil)
@@ -97,6 +98,7 @@ final class Menus: NSObject {
         menu.addItem(.separator())
         menu.addItem(item("Add a phone…", #selector(addPhone)))
         menu.addItem(item("Settings…", #selector(showSettings), key: ","))
+        menu.addItem(item("Check for Updates…", #selector(checkForUpdates)))
         menu.addItem(item("About Lync", #selector(showAbout)))
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "Quit Lync", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
@@ -124,4 +126,5 @@ final class Menus: NSObject {
     @objc private func ringPhone() { model.ringPhone() }
     @objc private func showSettings() { model.openPanel(.settings) }
     @objc private func showAbout() { model.showAbout() }
+    @objc private func checkForUpdates() { MainActor.assumeIsolated { Updates.check() } }
 }

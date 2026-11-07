@@ -41,7 +41,12 @@ The Glyph feature needs Nothing's Glyph SDK, which can't be redistributed: see
 ```sh
 cd mac
 ./scripts/build-app.sh              # builds build/Lync.app and Lync.dmg
+./scripts/release-mac.sh            # a release: signed DMG plus docs/appcast.xml for in-app updates
 ```
+
+Installed Macs update themselves with [Sparkle](https://sparkle-project.org): they check
+`docs/appcast.xml` (served by GitHub Pages) once a day, and only install updates signed with the
+release key.
 
 ## Docs
 

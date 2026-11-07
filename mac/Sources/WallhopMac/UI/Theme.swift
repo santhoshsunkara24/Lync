@@ -18,6 +18,10 @@ struct WTheme: Equatable {
     var glow: Color
     /// The phone's second (accent) colour, as bright: mixed into the same glow.
     var glowAccent: Color
+    /// One-time codes: a deep card in the phone's colour with bright digits and accents on it.
+    /// Lync's Forest and Mint until a phone connects.
+    var codeCard: Color
+    var codeAccent: Color
 
     static let ink = Color(red: 0.043, green: 0.043, blue: 0.047)
     // With Increase Contrast on (System Settings › Accessibility › Display), quiet text gets
@@ -35,8 +39,8 @@ struct WTheme: Equatable {
     /// Answering a call, codes.
     static let success = Color(red: 0.36, green: 0.84, blue: 0.5)
 
-    /// One-time codes always use Lync's own colours, never the phone's accent (same as Android):
-    /// Forest background, Mint digits and accents, white at 75 % for the rest.
+    /// Lync's own code colours, used before a phone connects: Forest background, Mint digits and
+    /// accents, white at 75 % for the rest.
     static let codeForest = Color(red: 0x0F / 255.0, green: 0x2E / 255.0, blue: 0x24 / 255.0)
     static let codeMint = Color(red: 0x7F / 255.0, green: 0xE3 / 255.0, blue: 0xB0 / 255.0)
     static let codeSecondary = Color.white.opacity(0.75)
@@ -45,7 +49,12 @@ struct WTheme: Equatable {
     /// contrasting accent. From the first connection on, it follows that phone's wallpaper.
     static let defaultSeed: UInt32 = 0xFF2FB57E
     static let defaultAccent: UInt32 = 0xFFE0386A
-    static let brand = WTheme(seed: defaultSeed, accent: defaultAccent)
+    static let brand: WTheme = {
+        var theme = WTheme(seed: defaultSeed, accent: defaultAccent)
+        theme.codeCard = codeForest
+        theme.codeAccent = codeMint
+        return theme
+    }()
 
     init(seed: UInt32, accent: UInt32?) {
         let (hue, saturation, _) = Self.hsl(seed)
@@ -55,6 +64,7 @@ struct WTheme: Equatable {
             pale = Self.color(0, 0, 0.92); onPale = Self.color(0, 0, 0.12)
             peek = Self.color(0, 0, 0.26); peekPale = Self.color(0, 0, 0.92); onPeekPale = Self.color(0, 0, 0.12)
             glow = Self.color(0, 0, 0.9); glowAccent = Self.color(0, 0, 0.75)
+            codeCard = Self.color(0, 0, 0.14); codeAccent = Self.color(0, 0, 0.88)
             return
         }
         let sat = min(max(saturation, 0.45), 0.8)
@@ -63,6 +73,7 @@ struct WTheme: Equatable {
         top = Self.color(p.top); mid = Self.color(p.mid); card = Self.color(p.card)
         pale = Self.color(p.pale); onPale = Self.color(p.onPale)
         peek = Self.color(p.peek); peekPale = Self.color(p.peekPale); onPeekPale = Self.color(p.onPeekPale)
+        codeCard = Self.color(p.codeCard); codeAccent = Self.color(p.codeAccent)
         // Vivid, not pastel. Light only blends cleanly between neighbouring hues (purple into blue);
         // opposite ones (rose and green) average to brown. So a far-off accent is swapped for a
         // neighbour of the main colour, 35° round in the accent's direction.
@@ -79,7 +90,8 @@ struct WTheme: Equatable {
     /// dark enough for white to reach 4.5:1 whatever the hue: yellows and greens are much lighter
     /// than blues at the same HSL lightness, so lightness is chosen by WCAG luminance.
     static func palette(hue: Double, other: Double, sat: Double)
-        -> (top: RGB, mid: RGB, card: RGB, pale: RGB, onPale: RGB, peek: RGB, peekPale: RGB, onPeekPale: RGB) {
+        -> (top: RGB, mid: RGB, card: RGB, pale: RGB, onPale: RGB, peek: RGB, peekPale: RGB, onPeekPale: RGB,
+            codeCard: RGB, codeAccent: RGB) {
         (top: forWhiteText(hue, sat * 0.85, 0.42),
          mid: forWhiteText(hue, sat * 0.7, 0.2),
          card: forWhiteText(hue, sat * 0.5, 0.12),
@@ -87,7 +99,10 @@ struct WTheme: Equatable {
          onPale: rgb(hue, 0.6, 0.22),
          peek: forWhiteText(other, 0.62, 0.44),
          peekPale: rgb(other, 0.9, 0.9),
-         onPeekPale: rgb(other, 0.6, 0.18))
+         onPeekPale: rgb(other, 0.6, 0.18),
+         // Same shape as Forest and Mint (a dark, muted card; light, soft digits) in the phone's hue.
+         codeCard: forWhiteText(hue, sat * 0.55, 0.13),
+         codeAccent: rgb(hue, 0.65, 0.72))
     }
 
     /// `rgb(h, s, l)`, darkened until white text on it is at least 4.5:1.
@@ -131,6 +146,8 @@ struct WTheme: Equatable {
                     let ratio = contrast(white, c)
                     if ratio < 4.5 { problems.append("white on \(name) hue \(Int(hue)) sat \(sat): \(String(format: "%.2f", ratio))") }
                 }
+                let digits = contrast(p.codeAccent, p.codeCard)
+                if digits < 4.5 { problems.append("code digits hue \(Int(hue)): \(String(format: "%.2f", digits))") }
                 let onPale = contrast(p.onPale, p.pale)
                 if onPale < 4.5 { problems.append("onPale on pale hue \(Int(hue)): \(String(format: "%.2f", onPale))") }
             }
@@ -190,13 +207,38 @@ struct WTheme: Equatable {
 }
 
 /// Corner radii (DESIGN.md "Current direction"). Always with `style: .continuous`.
+/// Corner radii on the same 8-point scale as spacing, shared with the phone app (Radius): hover
+/// rows 8, small tiles and focus rings 12, fields 16, cards 24, the panel 32.
 enum WRadius {
-    /// Cards: the latest code, now playing, pairing.
-    static let card: CGFloat = 28
-    /// Grouped lists: notifications, Recent, settings groups.
+    /// Hover highlights on rows.
+    static let row: CGFloat = 8
+    /// Small tiles, popups and keyboard focus rings on rows.
+    static let small: CGFloat = 12
+    /// Text fields, the QR's white tile, artwork, toasts, chat bubbles.
+    static let field: CGFloat = 16
+    /// Grouped lists: notifications, Recent, settings groups; notch cards.
     static let group: CGFloat = 24
-    /// Text fields, the QR's white tile, artwork.
-    static let field: CGFloat = 14
+    /// Cards: the latest code, now playing, pairing.
+    static let card: CGFloat = 24
+    /// The panel itself.
+    static let panel: CGFloat = 32
+}
+
+/// Spacing on an 8-point grid, the same scale as the phone app. 8 is the base; 4 and 12 are
+/// half-steps for the tight insides of small things (icon to label in a pill, title to subtitle).
+/// Gutters and card insides 16, between sections 24.
+enum WSpace {
+    static let xxs: CGFloat = 4, xs: CGFloat = 8, s: CGFloat = 12, m: CGFloat = 16, l: CGFloat = 24,
+               xl: CGFloat = 32, xxl: CGFloat = 40, xxxl: CGFloat = 48, huge: CGFloat = 64
+}
+
+extension VerticalAlignment {
+    private enum TitleRow: AlignmentID {
+        static func defaultValue(in d: ViewDimensions) -> CGFloat { d[VerticalAlignment.center] }
+    }
+    /// The middle of a row's title line. A trailing button lines up with the title, not with the
+    /// middle of everything under it: mark the title with `.alignmentGuide(.titleRow) { $0[VerticalAlignment.center] }`.
+    static let titleRow = VerticalAlignment(TitleRow.self)
 }
 
 /// Motion tokens (DESIGN.md: calm motion, physical response). Every animation in the app uses one
@@ -308,22 +350,23 @@ struct WPill: ButtonStyle {
         configuration.label
             .font(.wh(compact ? 12 : 13, .semibold))
             .foregroundStyle(destructive ? WTheme.ink : prominent ? theme.theme.onPale : Color.white)
-            .padding(.horizontal, compact ? 12 : 16)
-            .frame(height: compact ? 30 : 36)
+            .padding(.horizontal, compact ? WSpace.s : WSpace.m)
+            .frame(height: compact ? 24 : 32)
             .background(Capsule().fill(destructive ? WTheme.danger : prominent ? theme.theme.pale : WTheme.chip))
             .modifier(WInteractive(shape: Capsule(), pressed: configuration.isPressed))
     }
 }
 
-/// The pill on the code card: Mint with Forest text.
+/// The pill on the code card: the code accent with the card colour as text.
 struct CodePill: ButtonStyle {
+    @EnvironmentObject var theme: ThemeStore
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .labelStyle(.titleAndIcon)
             .font(.wh(13, .semibold))
-            .foregroundStyle(WTheme.codeForest)
-            .padding(.horizontal, 16).frame(height: 36)
-            .background(Capsule().fill(WTheme.codeMint))
+            .foregroundStyle(theme.theme.codeCard)
+            .padding(.horizontal, WSpace.m).frame(height: 32)
+            .background(Capsule().fill(theme.theme.codeAccent))
             .modifier(WInteractive(shape: Capsule(), pressed: configuration.isPressed))
     }
 }

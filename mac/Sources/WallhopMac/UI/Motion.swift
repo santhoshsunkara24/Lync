@@ -53,7 +53,7 @@ struct WPlainPress: ButtonStyle {
             .scaleEffect(configuration.isPressed ? 0.96 : 1)
             .opacity(configuration.isPressed ? 0.7 : 1)
             .contentShape(Rectangle())
-            .modifier(WFocusRing(shape: RoundedRectangle(cornerRadius: 6, style: .continuous), inset: -4))
+            .modifier(WFocusRing(shape: RoundedRectangle(cornerRadius: WRadius.row, style: .continuous), inset: -4))
             .animation(WMotion.animation(configuration.isPressed ? WMotion.press : WMotion.release),
                        value: configuration.isPressed)
     }
@@ -79,7 +79,7 @@ extension EnvironmentValues {
     }
 }
 
-/// An SF Symbol that moves very slightly when the pointer arrives on its button or row, after
+/// An icon (by SF Symbol name; see `IconImage`) that moves very slightly when the pointer arrives on its button or row, after
 /// Telegram's menu icons but calmer: one small movement out and a smooth return, no wobble. A
 /// bell or a call tips from its top, arrows and send ease the way they point, a pencil or a
 /// message tilts, refresh and settings turn a little, anything else grows a touch. The media
@@ -92,7 +92,7 @@ struct NudgeImage: View {
     init(_ name: String) { self.name = name }
 
     var body: some View {
-        let image = Image(systemName: name)
+        let image = IconImage(name)
         let motion = IconMotion(symbol: name)
         if WMotion.reduceMotion || motion.isStill {
             image

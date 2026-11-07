@@ -43,6 +43,7 @@ import app.wallhop.core.Features
 import app.wallhop.ui.components.ButtonStyle
 import app.wallhop.ui.components.IconTile
 import app.wallhop.ui.components.WButton
+import app.wallhop.ui.design.Space
 import app.wallhop.ui.design.Type
 import app.wallhop.ui.design.WIcons
 import app.wallhop.ui.design.Wallhop
@@ -99,19 +100,19 @@ fun askFor(key: Features.Key): Ask? = when (key) {
 fun ColumnScope.AskSheet(ask: Ask, onContinue: () -> Unit, onLater: () -> Unit, extra: (@Composable () -> Unit)? = null) {
     val colors = Wallhop.colors
     AskPreview(ask)
-    Spacer(Modifier.height(18.dp))
+    Spacer(Modifier.height(Space.m))
     Text(ask.title, style = Type.pageTitle.copy(fontSize = 26.sp, lineHeight = 32.sp), color = colors.label,
         modifier = Modifier.semantics { heading() })
-    Text(ask.line, style = Type.body, color = colors.labelSecondary, modifier = Modifier.padding(top = 6.dp))
-    Column(Modifier.padding(top = 16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+    Text(ask.line, style = Type.body, color = colors.labelSecondary, modifier = Modifier.padding(top = Space.xs))
+    Column(Modifier.padding(top = Space.m), verticalArrangement = Arrangement.spacedBy(Space.s)) {
         ask.sees.forEach { Fact(WIcons.CheckCircle, colors.tint, it, colors.label) }
         Fact(WIcons.XCircle, colors.labelTertiary, ask.never, colors.labelSecondary)
     }
-    PrivateChip(Modifier.padding(top = 16.dp))
+    PrivateChip(Modifier.padding(top = Space.m))
     extra?.invoke()
-    Spacer(Modifier.height(20.dp))
+    Spacer(Modifier.height(Space.l))
     WButton("Continue", onContinue, style = ButtonStyle.Filled, modifier = Modifier.fillMaxWidth())
-    Spacer(Modifier.height(8.dp))
+    Spacer(Modifier.height(Space.xs))
     WButton("Not now", onLater, style = ButtonStyle.Glass, modifier = Modifier.fillMaxWidth())
 }
 
@@ -120,25 +121,25 @@ fun ColumnScope.AskSheet(ask: Ask, onContinue: () -> Unit, onLater: () -> Unit, 
 fun ColumnScope.BlockedSheet(feature: String, permission: String, onOpen: () -> Unit, onKeepOff: () -> Unit) {
     val colors = Wallhop.colors
     IconTile(WIcons.Lock, colors.orange, size = 56.dp)
-    Spacer(Modifier.height(16.dp))
+    Spacer(Modifier.height(Space.m))
     Text("$feature is off", style = Type.pageTitle.copy(fontSize = 26.sp, lineHeight = 32.sp), color = colors.label,
         modifier = Modifier.semantics { heading() })
     Text("Android won't ask again, so it's a quick switch in Settings.", style = Type.body, color = colors.labelSecondary,
-        modifier = Modifier.padding(top = 6.dp))
-    Column(Modifier.padding(top = 16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        modifier = Modifier.padding(top = Space.xs))
+    Column(Modifier.padding(top = Space.m), verticalArrangement = Arrangement.spacedBy(Space.s)) {
         listOf("Tap Open Settings", "Go to Permissions › $permission", "Choose Allow, then come back").forEachIndexed { i, step ->
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(Modifier.size(26.dp).clip(CircleShape).background(colors.fill), contentAlignment = Alignment.Center) {
+                Box(Modifier.size(24.dp).clip(CircleShape).background(colors.fill), contentAlignment = Alignment.Center) {
                     Text("${i + 1}", style = Type.footnote, color = colors.label)
                 }
-                Spacer(Modifier.width(12.dp))
+                Spacer(Modifier.width(Space.s))
                 Text(step, style = Type.callout, color = colors.label)
             }
         }
     }
-    Spacer(Modifier.height(22.dp))
+    Spacer(Modifier.height(Space.l))
     WButton("Open Settings", onOpen, style = ButtonStyle.Filled, modifier = Modifier.fillMaxWidth())
-    Spacer(Modifier.height(8.dp))
+    Spacer(Modifier.height(Space.xs))
     WButton("Keep it off", onKeepOff, style = ButtonStyle.Glass, modifier = Modifier.fillMaxWidth())
 }
 
@@ -147,11 +148,11 @@ fun ColumnScope.BlockedSheet(feature: String, permission: String, onOpen: () -> 
 fun PrivateChip(modifier: Modifier = Modifier) {
     val colors = Wallhop.colors
     Row(
-        modifier.clip(CircleShape).background(colors.tint.copy(alpha = 0.12f)).padding(horizontal = 12.dp, vertical = 6.dp),
+        modifier.clip(CircleShape).background(colors.tint.copy(alpha = 0.12f)).padding(horizontal = Space.s, vertical = Space.xs),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Icon(WIcons.Lock, null, tint = colors.tint, modifier = Modifier.size(13.dp))
-        Spacer(Modifier.width(6.dp))
+        Icon(WIcons.Lock, null, tint = colors.tint, modifier = Modifier.size(12.dp))
+        Spacer(Modifier.width(Space.xxs))
         Text("Only between your phone and Mac, encrypted", style = Type.footnote, color = colors.tint)
     }
 }
@@ -159,8 +160,9 @@ fun PrivateChip(modifier: Modifier = Modifier) {
 @Composable
 private fun Fact(icon: ImageVector, tint: Color, text: String, color: Color) {
     Row(verticalAlignment = Alignment.Top) {
-        Icon(icon, null, tint = tint, modifier = Modifier.padding(top = 2.dp).size(18.dp))
-        Spacer(Modifier.width(10.dp))
+        // As tall as a line of callout, so it sits centred on the first line.
+        Icon(icon, null, tint = tint, modifier = Modifier.size(20.dp))
+        Spacer(Modifier.width(Space.s))
         Text(text, style = Type.callout, color = color, textAlign = TextAlign.Start)
     }
 }
@@ -199,7 +201,7 @@ private fun AskPreview(ask: Ask) {
         if (ask.preview != null) {
             Image(painterResource(ask.preview), null, layer.width(300.dp))
         } else {
-            Box(layer.padding(top = 20.dp)) { IconTile(ask.icon, tint, size = 56.dp) }
+            Box(layer.padding(top = Space.l)) { IconTile(ask.icon, tint, size = 56.dp) }
         }
     }
 }

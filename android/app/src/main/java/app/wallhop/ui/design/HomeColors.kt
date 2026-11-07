@@ -38,14 +38,18 @@ data class HomeColors(
     val onPeekPale: Color,
     /** Red for destructive text, light enough to read on [card] and on lists over [mid]. */
     val red: Color = Color(0xFFFF453A),
+    /** One-time codes: a deep card in the wallpaper's hue, with bright digits and accents on it
+     *  (shared with the Mac). Lync's Forest and Mint by default. */
+    val codeCard: Color = CodeForest,
+    val codeAccent: Color = CodeMint,
 ) {
     companion object {
-        /** Lync's own deep mint with a rose accent, for phones older than Android 12 (no Material You). */
-        val Default = from(0xFF2FB57E.toInt(), 0xFFE0386A.toInt())
-
-        /** One-time codes always use Lync's own colours, never the wallpaper's (shared with the Mac). */
+        /** Lync's own code colours, used when there are no wallpaper colours. */
         val CodeForest = Color(0xFF0F2E24)
         val CodeMint = Color(0xFF7FE3B0)
+
+        /** Lync's own deep mint with a rose accent, for phones older than Android 12 (no Material You). */
+        val Default = from(0xFF2FB57E.toInt(), 0xFFE0386A.toInt()).copy(codeCard = CodeForest, codeAccent = CodeMint)
         /** Secondary text on [CodeForest]. */
         const val CodeSecondaryAlpha = 0.75f
 
@@ -72,6 +76,8 @@ data class HomeColors(
                 peek = safe(other, 0.62f, 0.44f),
                 peekPale = hsl(other, 0.9f, 0.9f),
                 onPeekPale = hsl(other, 0.6f, 0.18f),
+                codeCard = safe(hue, sat * 0.55f, 0.13f),
+                codeAccent = hsl(hue, 0.65f, 0.72f),
             )
         }
 
@@ -84,16 +90,21 @@ data class HomeColors(
             peek = safe(0f, 0f, 0.26f),
             peekPale = hsl(0f, 0f, 0.92f),
             onPeekPale = hsl(0f, 0f, 0.12f),
+            codeCard = hsl(0f, 0f, 0.14f),
+            codeAccent = hsl(0f, 0f, 0.88f),
         )
 
-        private fun finish(top: Color, mid: Color, card: Color, pale: Color, onPale: Color, peek: Color, peekPale: Color, onPeekPale: Color): HomeColors {
+        private fun finish(
+            top: Color, mid: Color, card: Color, pale: Color, onPale: Color, peek: Color, peekPale: Color, onPeekPale: Color,
+            codeCard: Color, codeAccent: Color,
+        ): HomeColors {
             val cardArgb = card.toArgb()
             // Lists are white 7 % over the card (sheets) or over the gradient's mid tone (pages).
             val red = Contrast.lightenUntil(
                 0xFFFF453A.toInt(),
                 listOf(cardArgb, Contrast.blend(Contrast.WHITE, 0.07f, cardArgb), Contrast.blend(Contrast.WHITE, 0.07f, mid.toArgb())),
             )
-            return HomeColors(top, mid, card, pale, onPale, peek, peekPale, onPeekPale, Color(red))
+            return HomeColors(top, mid, card, pale, onPale, peek, peekPale, onPeekPale, Color(red), codeCard, codeAccent)
         }
 
         /** hsl with the lightness lowered until white (and white at 78 %) text reads on it. */

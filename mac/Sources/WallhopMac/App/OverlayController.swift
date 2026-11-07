@@ -48,9 +48,6 @@ final class OverlayController {
         panel.isMovable = false
         panel.hidesOnDeactivate = false
         panel.becomesKeyOnlyIfNeeded = true
-        // OTPs and messages never show up in screen shares or recordings.
-        // WALLHOP_CAPTURE=1 allows screenshots, for development only.
-        CapturePrivacy.apply(panel)
         panel.ignoresMouseEvents = true
 
         let root = OverlayRoot(model: model, placement: placementState).environmentObject(model.themeStore)
@@ -338,11 +335,11 @@ struct OverlayRoot: View {
     /// that comes and goes without asking for attention.
     @ViewBuilder private func quietView(_ card: LiveCard) -> some View {
         if case .quiet(let symbol, let text) = card {
-            let label = HStack(spacing: 8) {
+            let label = HStack(spacing: WSpace.xs) {
                 if symbol == LinkCatchView.symbol {
-                    LinkCatchView(connected: true, shaded: false, playOnAppear: true).frame(width: 18, height: 18)
+                    LinkCatchView(connected: true, shaded: false, playOnAppear: true).frame(width: 16, height: 16)
                 } else {
-                    NudgeImage(symbol).font(.wh(12, .semibold)).foregroundStyle(WTheme.codeMint)
+                    NudgeImage(symbol).font(.wh(12, .semibold)).foregroundStyle(theme.theme.codeAccent)
                 }
                 Text(text).font(.wh(12, .semibold)).foregroundStyle(.white).lineLimit(1)
             }
@@ -350,15 +347,15 @@ struct OverlayRoot: View {
             switch placement.placement {
             case .notch(let notchHeight):
                 label
-                    .padding(.top, notchHeight + 6).padding(.horizontal, 18).padding(.bottom, 10)
+                    .padding(.top, notchHeight + WSpace.xs).padding(.horizontal, WSpace.m).padding(.bottom, WSpace.xs)
                     .frame(minWidth: placement.notchWidth)
                     .background(NotchShape(cornerRadius: 16).fill(Color.black))
             case .pill, .menuBar:
                 label
-                    .padding(.horizontal, 14).frame(height: 32)
+                    .padding(.horizontal, WSpace.m).frame(height: 32)
                     .background(Capsule().fill(theme.theme.card).shadow(color: .black.opacity(0.3), radius: 8, y: 3))
                     .overlay(Capsule().strokeBorder(WTheme.edge, lineWidth: 1))
-                    .padding(.top, 8)
+                    .padding(.top, WSpace.xs)
             }
         }
     }
@@ -381,46 +378,49 @@ struct OverlayRoot: View {
         // at once so the shape springs straight to the new size.
         let content = ZStack(alignment: .topLeading) {
             LiveCardView(model: model, card: card)
-                .frame(width: OverlayController.cardWidth - 36, alignment: .leading)
+                .frame(width: OverlayController.cardWidth - WSpace.m * 2, alignment: .leading)
                 .id(cardKey(card))
                 .transition(contentSwap)
         }
         // Clip what's fading out to the card, with room for buttons' hover and focus rings.
-        .padding(4).clipped().padding(-4)
+        .padding(WSpace.xxs).clipped().padding(-WSpace.xxs)
 
+        // On a call, the card is one short row: less of the screen under it is covered.
+        let slim = { if case .call = card { return true }; return false }() && model.call?.state == .active && model.callProblem == nil
         switch placement.placement {
         case .notch(let notchHeight):
             content
-                .padding(.top, notchHeight + 10)
-                .padding(.horizontal, 18)
-                .padding(.bottom, 16)
+                .padding(.top, notchHeight + (slim ? WSpace.xs : WSpace.s))
+                .padding(.horizontal, WSpace.m)
+                .padding(.bottom, slim ? WSpace.xs : WSpace.m)
                 // Black at the top to flow out of the notch, the phone's colour at the bottom.
-                .background(NotchShape(cornerRadius: 26).fill(
+                .background(NotchShape(cornerRadius: WRadius.group).fill(
                     LinearGradient(stops: [.init(color: .black, location: 0), .init(color: .black, location: 0.45),
                                            .init(color: theme.theme.card, location: 1)], startPoint: .top, endPoint: .bottom)))
-                .contentShape(NotchShape(cornerRadius: 24))
+                .contentShape(NotchShape(cornerRadius: WRadius.group))
                 .onTapGesture { openPanel(from: card) }
                 .overlay(alignment: .topLeading) {
-                    closeButton(card).padding(.top, notchHeight + 1).padding(.leading, 4)
+                    // Centred on the corner of the card's icon, like a notification's ✕.
+                    closeButton(card).padding(.top, notchHeight).padding(.leading, WSpace.xxs)
                 }
                 .onHover { hover($0) }
         case .pill, .menuBar:
             content
-                .padding(.horizontal, 18)
-                .padding(.vertical, 14)
+                .padding(.horizontal, WSpace.m)
+                .padding(.vertical, slim ? WSpace.xs : WSpace.m)
                 .background(
-                    RoundedRectangle(cornerRadius: 24, style: .continuous)
+                    RoundedRectangle(cornerRadius: WRadius.group, style: .continuous)
                         .fill(LinearGradient(colors: [theme.theme.mid, theme.theme.card], startPoint: .top, endPoint: .bottom))
                         .shadow(color: .black.opacity(0.35), radius: 14, y: 6)
                 )
-                .background(dropGlow(card, RoundedRectangle(cornerRadius: 24, style: .continuous)))
+                .background(dropGlow(card, RoundedRectangle(cornerRadius: WRadius.group, style: .continuous)))
                 .overlay(
-                    RoundedRectangle(cornerRadius: 24, style: .continuous)
+                    RoundedRectangle(cornerRadius: WRadius.group, style: .continuous)
                         .strokeBorder(WTheme.edge, lineWidth: 1)
                 )
-                .overlay(alignment: .topLeading) { closeButton(card).offset(x: -6, y: -6) }
-                .padding(.top, 8)
-                .contentShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+                .overlay(alignment: .topLeading) { closeButton(card).offset(x: -WSpace.xxs, y: -WSpace.xxs) }
+                .padding(.top, WSpace.xs)
+                .contentShape(RoundedRectangle(cornerRadius: WRadius.group, style: .continuous))
                 .onTapGesture { openPanel(from: card) }
                 .onHover { hover($0) }
         }
@@ -479,19 +479,20 @@ struct OverlayRoot: View {
         model.openPanel()
     }
 
-    /// ✕ in the corner while the pointer is over a passive card.
+    /// ✕ in the corner while the pointer is over a passive card, or a call (the call goes on;
+    /// only the card goes).
     @ViewBuilder private func closeButton(_ card: LiveCard) -> some View {
-        if hovering && isPassive(card) {
-            Button { model.hideLive() } label: {
-                Image(systemName: "xmark")
+        let isCall: Bool = { if case .call = card { return true }; return false }()
+        if hovering && (isPassive(card) || isCall) {
+            Button { if isCall { model.dismissCallCard() } else { model.hideLive() } } label: {
+                IconImage("xmark")
                     .font(.wh(11, .bold))
                     .foregroundStyle(.white)
                     .frame(width: 24, height: 24)
                     .background(Circle().fill(Color(white: 0.25)))
                     .overlay(Circle().strokeBorder(Color.white.opacity(0.15), lineWidth: 0.5))
                     // A little more to aim at than it shows.
-                    .padding(2)
-                    .contentShape(Circle())
+                    .contentShape(Circle().inset(by: -WSpace.xxs))
             }
             .buttonStyle(WShapePress(shape: Circle()))
             .help("Dismiss")
@@ -544,17 +545,17 @@ struct DragGlow: View {
         let pill = min(max((approach - 0.4) / 0.4, 0), 1)
         ZStack(alignment: .top) {
             bloom(color, approach: approach, width: max(notchWidth * 1.7, 300), top: top)
-            VStack(spacing: 4) {
-                Image(systemName: "chevron.compact.down")
+            VStack(spacing: WSpace.xxs) {
+                IconImage("chevron.compact.down")
                     .font(.system(size: 20, weight: .semibold))
                     .foregroundStyle(.white.opacity(0.55 + 0.4 * approach))
                     .shadow(color: color, radius: 6)
                     .offset(y: breathe ? 3 : 0)
-                HStack(spacing: 8) {
+                HStack(spacing: WSpace.xs) {
                     if ready, let images = drag?.images, !images.isEmpty {
-                        ThumbnailStack(urls: images, size: 22)
+                        ThumbnailStack(urls: images, size: 24)
                     } else {
-                        Image(systemName: ready ? "arrow.up.doc.fill" : "hand.point.up.left.fill")
+                        IconImage(ready ? "arrow.up.doc.fill" : "hand.point.up.left.fill")
                             .font(.system(size: 13, weight: .semibold))
                             .foregroundStyle(color)
                     }
@@ -563,14 +564,14 @@ struct DragGlow: View {
                         + Text(ready ? drag.map { "  ·  \($0.summary)" } ?? "" : "").foregroundStyle(.white.opacity(0.6)))
                         .font(.wh(13, .semibold)).lineLimit(1)
                 }
-                .padding(.horizontal, 16).frame(height: ready ? 40 : 36)
+                .padding(.horizontal, WSpace.m).frame(height: ready ? 40 : 32)
                 .background(Capsule().fill(Color.black.opacity(0.9)))
                 .overlay(Capsule().strokeBorder(color.opacity(ready ? 0.9 : 0.45), lineWidth: ready ? 1.5 : 1))
                 .shadow(color: color.opacity(ready ? 0.7 : 0.45), radius: ready ? 16 : 12)
                 .opacity(pill)
                 .scaleEffect(0.9 + 0.1 * pill, anchor: .top)
             }
-            .padding(.top, top + 4)
+            .padding(.top, top + WSpace.xxs)
         }
         .frame(maxWidth: .infinity, alignment: .top)
         .animation(WMotion.animation(WMotion.smooth), value: approach)

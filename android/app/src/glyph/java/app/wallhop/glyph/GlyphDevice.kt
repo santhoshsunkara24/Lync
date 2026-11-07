@@ -98,6 +98,9 @@ internal object GlyphDevice {
     /** The last transfer state shown, and the fill it showed (in steps of 1/24). */
     private var shownTransfer: Glyphs.Transfer = Glyphs.Transfer.Idle
     private var shownFill = -1
+    private var shownOutgoing = true
+    /** When the Liftoff on the Matrix started, for its speed lines. */
+    private var liftoffStart = 0L
 
     fun transfer(context: Context, state: Glyphs.Transfer) {
         main.post {
@@ -107,6 +110,7 @@ internal object GlyphDevice {
                     val fill = (state.fraction.coerceIn(0f, 1f) * FILL_STEPS).toInt()
                     if (was is Glyphs.Transfer.Moving && fill == shownFill) return@post
                     shownFill = fill
+                    shownOutgoing = state.outgoing
                     shownTransfer = state
                     if (was !is Glyphs.Transfer.Moving) cancelSteps()
                     session(context) { transferFrame(fill, first = was !is Glyphs.Transfer.Moving) }
@@ -125,7 +129,7 @@ internal object GlyphDevice {
                     cancelSteps()
                     session(context) { if (arrived) transferDone() else transferFade(fill) }
                     main.removeCallbacks(release)
-                    main.postDelayed(release, 1_600)
+                    main.postDelayed(release, 2_000)
                 }
             }
         }
@@ -141,23 +145,51 @@ internal object GlyphDevice {
 
     private fun transferFrame(fill: Int, first: Boolean) {
         when (hardware) {
-            Glyphs.Hardware.Matrix -> matrixLevels(Glyphs.progress(n(), fill.toFloat() / FILL_STEPS))
+            // Liftoff, like the phone and Mac: it runs on its own clock (25 frames a second)
+            // and each frame reads the latest fill, so progress updates need no frame of their own.
+            // It starts with a crouch: back a pixel, then forward into its place.
+            Glyphs.Hardware.Matrix -> if (first) {
+                liftoffStart = android.os.SystemClock.uptimeMillis()
+                val tick = object : Runnable {
+                    override fun run() {
+                        if (shownTransfer !is Glyphs.Transfer.Moving) return
+                        val t = android.os.SystemClock.uptimeMillis() - liftoffStart
+                        safely {
+                            matrixLevels(Glyphs.liftoff(n(), shownFill.coerceAtLeast(0).toFloat() / FILL_STEPS, t,
+                                shift = if (t < 180) -1 else 0, streaks = t >= 180))
+                        }
+                        main.postDelayed(this, LIFTOFF_MS)
+                    }
+                }
+                steps += tick
+                tick.run()
+            }
             // Glyph lights have no picture: a slow breathing for as long as files move.
             Glyphs.Hardware.Lights -> if (first) lightsFrame(period = 1_400, cycles = 400, interval = 200)
             null -> Unit
         }
     }
 
-    /** Arrived: the link squeezes as it catches, lights full, holds, then fades. */
+    /**
+     * Arrived, like the apps' landing: the link blasts off up and to the right, out of sight, then
+     * drops back in from the lower left with a pixel of overshoot, holds lit, and fades.
+     */
     private fun transferDone() {
         when (hardware) {
             Glyphs.Hardware.Matrix -> {
-                val manager = matrixManager ?: return
                 val n = n()
-                fun show(apart: Int, brightness: Int) = safely { manager.setAppMatrixFrame(frameFor(n, apart, brightness)) }
-                show(-1, 255)
-                later(90) { show(0, 255) }
-                listOf(200, 140, 90, 45, 15, 0).forEachIndexed { k, b -> later(700L + 60L * k) { show(0, b) } }
+                val t0 = android.os.SystemClock.uptimeMillis() - liftoffStart
+                fun show(shift: Int, brightness: Int = 255, streaks: Boolean = false, at: Long = 0) {
+                    val levels = Glyphs.liftoff(n, 1f, t0 + at, shift, streaks)
+                    matrixLevels(IntArray(levels.size) { levels[it] * brightness / 255 })
+                }
+                // Blast off (speeding up, speed lines still streaming)…
+                listOf(0L to 1, 60L to 2, 120L to 4, 180L to 7, 240L to n).forEach { (at, s) ->
+                    if (at == 0L) safely { show(s, streaks = true) } else later(at) { show(s, streaks = true, at = at) }
+                }
+                // …and back in from behind, settling with a little overshoot.
+                listOf(420L to -n / 2, 480L to -3, 540L to -1, 600L to 1, 680L to 0).forEach { (at, s) -> later(at) { show(s) } }
+                listOf(200, 140, 90, 45, 15, 0).forEachIndexed { k, b -> later(1_250L + 60L * k) { show(0, b) } }
             }
             Glyphs.Hardware.Lights -> {
                 lightManager?.let { runCatching { it.turnOff() } }
@@ -203,6 +235,8 @@ internal object GlyphDevice {
     }
 
     private const val FILL_STEPS = 24
+    /** 25 frames a second: smooth enough for the speed lines, light on the Matrix. */
+    private const val LIFTOFF_MS = 40L
 
     fun stop(context: Context) {
         main.post {

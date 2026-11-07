@@ -92,6 +92,14 @@ final class LiftoffEngine {
     private var dt: Double = 16
     private var acc: CGFloat = 0
     private var lines: [Streak] = []
+    /// The lane the next speed line takes (see `lanes`).
+    private var nextLane = 0
+    /// Speed lines run in five fixed lanes across the link, taken in this order, so two never
+    /// sit side by side or cross: clean, even streaks rather than a scatter.
+    private static let lanes: [CGFloat] = [0, -0.34, 0.17, -0.17, 0.34]
+    /// How far behind the link a speed line goes before it has faded out (in link heights):
+    /// inside the glow, clear of anything below.
+    private static let reach: CGFloat = 1.1
 
     func step(now: Date, sending: Bool, done: Bool, failed: Bool = false, cancelled: Bool = false) {
         let d = last.map { min(50, now.timeIntervalSince($0) * 1000) } ?? 16
@@ -137,7 +145,7 @@ final class LiftoffEngine {
         case .send:
             back = -10 + 16 * CGFloat(Self.easeOut(tp / 220)); stretch = 1.03
             hover = CGFloat(sin(vt / 70)) * 0.9
-            rate = 26; speed = unit * (2.2 + 1.2 * CGFloat(0.5 + 0.5 * sin(vt / 900)))
+            rate = 9; speed = linkSize * 2.2
         case .fail:
             // A jolt, as if it hit something, then the hooks part and the light goes down.
             hover = CGFloat(sin(tp / 26) * 7 * exp(-tp / 160)) * (unit < 120 ? 0.5 : 1)
@@ -152,25 +160,30 @@ final class LiftoffEngine {
             alpha = CGFloat(1 - Self.clamp((tp - 120) / 320))
         case .done:
             if tp < 420 {
-                let k = CGFloat(Self.easeIn(tp / 420)); back = 6 + k * unit * 1.2; stretch = 1 + 0.4 * k; rate = 40; speed = unit * 4
+                let k = CGFloat(Self.easeIn(tp / 420)); back = 6 + k * unit * 1.2; stretch = 1 + 0.4 * k; rate = 18; speed = linkSize * 3.6
             } else {
                 let r = CGFloat(Self.spring((tp - 420) / 1000, 0.55, 0.32))
                 back = -unit * 0.55 * (1 - r); alpha = CGFloat(Self.clamp((tp - 420) / 160)); glint = (tp - 560) / 520
             }
         }
-        // Speed lines, emitted just behind the link and streaming back.
+        // Speed lines, emitted just behind the link and streaming back, one lane after another,
+        // all the same width and speed so none overtakes or crosses another.
         acc += rate * CGFloat(dt) / 1000
         while acc >= 1 {
             acc -= 1
-            lines.append(Streak(off: CGFloat.random(in: -0.5...0.5) * linkSize * 0.9, d: linkSize * 0.42,
-                                len: linkSize * CGFloat.random(in: 0.18...0.4), w: linkSize * CGFloat.random(in: 0.032...0.052),
-                                v: speed * CGFloat.random(in: 0.8...1.2), life: 1))
+            let lane = Self.lanes[nextLane % Self.lanes.count]
+            nextLane += 1
+            lines.append(Streak(off: lane * linkSize, d: linkSize * 0.42,
+                                len: linkSize * (0.22 + 0.1 * CGFloat(nextLane % 3) / 2), w: linkSize * 0.032,
+                                v: speed, life: 1))
         }
-        // Move the lines on and drop the spent ones in the same pass, in place (no new array).
+        // Move the lines on and drop the spent ones in the same pass, in place (no new array):
+        // gone once they've reached the edge of the glow.
         var kept = 0
         for i in lines.indices {
             var l = lines[i]
-            l.d += l.v * CGFloat(dt) / 1000; l.life -= CGFloat(dt) / 520
+            l.d += l.v * CGFloat(dt) / 1000
+            l.life = min(l.life, 1 - (l.d - linkSize * 0.42) / (linkSize * Self.reach))
             if l.life > 0 { lines[kept] = l; kept += 1 }
         }
         lines.removeLast(lines.count - kept)
@@ -181,7 +194,8 @@ final class LiftoffEngine {
             var line = Path(); line.move(to: CGPoint(x: x, y: y)); line.addLine(to: CGPoint(x: x - u.x * l.len, y: y - u.y * l.len))
             // One stroke at the context's opacity looks the same as the colour at that opacity.
             var c = ctx
-            c.opacity = 0.85 * min(1, l.life * 1.6)
+            // In quickly, then fading the further it gets from the link.
+            c.opacity = 0.7 * min(1, (1 - l.life) * 8) * l.life
             c.stroke(line, with: .color(Self.streakColor), style: StrokeStyle(lineWidth: l.w, lineCap: .round))
         }
         drawLink(ctx, x: bx, y: by, s: linkSize, stretch: stretch, alpha: alpha, glint: glint, sending: bright, apart: apart)
@@ -229,6 +243,7 @@ final class LiftoffEngine {
 /// What's being sent, at a glance: Quick Look thumbnails (a fanned stack for several), with a play
 /// mark and the length on a video.
 struct TransferThumb: View {
+    @EnvironmentObject var theme: ThemeStore
     let urls: [URL]
     var size: CGFloat = 36
 
@@ -251,15 +266,15 @@ struct TransferThumb: View {
                     .overlay(alignment: .bottomTrailing) {
                         if let duration {
                             Text(duration).font(.wh(8, .semibold).monospacedDigit()).foregroundStyle(.white)
-                                .padding(.horizontal, 3).padding(.vertical, 1)
-                                .background(.black.opacity(0.55), in: RoundedRectangle(cornerRadius: 3))
-                                .padding(3)
+                                .padding(.horizontal, WSpace.xxs).padding(.vertical, 1)
+                                .background(.black.opacity(0.55), in: RoundedRectangle(cornerRadius: 4))
+                                .padding(WSpace.xxs)
                         }
                     }
                     .task(id: url) { duration = await Self.length(of: url) }
             } else {
                 RoundedRectangle(cornerRadius: size * 0.25, style: .continuous).fill(Color.white.opacity(0.08))
-                    .overlay(NudgeImage("doc.fill").foregroundStyle(WTheme.codeMint))
+                    .overlay(NudgeImage("doc.fill").foregroundStyle(theme.theme.codeAccent))
                     .frame(width: size, height: size)
             }
         }

@@ -129,12 +129,35 @@ object Type {
     val caption2 = style(11, 13, 600, 0.6f)
 }
 
+/**
+ * Spacing on an 8 dp grid, shared with the Mac app. 8 is the base; [xxs] and [s] are
+ * half-steps for the tight insides of compact things (icon to label, title to subtitle).
+ * Padding, gaps and spacers use only these.
+ */
+object Space {
+    val xxs = 4.dp
+    val xs = 8.dp
+    val s = 12.dp
+    val m = 16.dp
+    val l = 24.dp
+    val xl = 32.dp
+    val xxl = 40.dp
+    val xxxl = 48.dp
+    val huge = 64.dp
+}
+
 /** Continuous corner radii (DESIGN.md §3.2). */
+/**
+ * Corner radii on the same 8-point scale as spacing, shared with the Mac app (WRadius): small
+ * tiles 12, fields and inner tiles 16, cards, banners and menus 24, sheets 32.
+ */
 object Radius {
-    val s = 10.dp
-    val l = 22.dp
-    val xl = 28.dp
-    val sheet = 34.dp
+    val xs = 8.dp
+    val s = 12.dp
+    val m = 16.dp
+    val l = 24.dp
+    val xl = 32.dp
+    val sheet = xl
 }
 
 /** Springs matched to SwiftUI's presets (DESIGN.md §7.1). */

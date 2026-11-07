@@ -25,6 +25,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Shown whenever Lync is the active app (e.g. with the Messages window open): Edit
         // commands for text fields, ⌘, for Settings, ⌘W and ⌘Q.
         menus.installMainMenu()
+        Updates.start()
         statusItem = StatusItemController(model: model) { [weak self] in self?.menus.contextMenu() ?? NSMenu() }
         overlay = OverlayController(model: model) { [weak self] in self?.statusItem.visibleFrame }
         messages = MessagesWindowController(server: server, appModel: model)

@@ -66,15 +66,17 @@ struct Thumbnail: View {
 struct ThumbnailStack: View {
     let urls: [URL]
     var size: CGFloat = 34
+    /// How far each photo behind sits to the right; a list row's tight icon slot uses less.
+    var fan: CGFloat = 5
 
     var body: some View {
         ZStack {
             ForEach(Array(urls.prefix(3).enumerated().reversed()), id: \.element) { index, url in
                 Thumbnail(url: url, size: size)
                     .rotationEffect(.degrees(Double(index) * 7))
-                    .offset(x: CGFloat(index) * 5)
+                    .offset(x: CGFloat(index) * fan)
             }
         }
-        .frame(width: size + 12, height: size + 6)
+        .frame(width: size + fan * 2 + 2, height: size + 6)
     }
 }

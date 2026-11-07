@@ -1,5 +1,18 @@
 package app.wallhop.ui.screens
 
+import app.wallhop.ui.design.tappable
+import app.wallhop.ui.design.pressScale
+import app.wallhop.ui.design.capsule
+import androidx.compose.material3.Icon
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.draw.clip
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.runtime.mutableStateOf
 
 import app.wallhop.ui.components.MenuItem
@@ -10,6 +23,7 @@ import androidx.compose.ui.layout.boundsInRoot
 
 import androidx.compose.ui.layout.onGloballyPositioned
 
+import app.wallhop.ui.design.Space
 import app.wallhop.ui.design.WIcons
 import android.text.format.DateUtils
 import androidx.compose.foundation.layout.Box
@@ -37,7 +51,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.unit.dp
 import app.wallhop.link.ActivityEntry
 import app.wallhop.ui.components.ActionSheetSpec
 import app.wallhop.ui.components.AlertAction
@@ -81,6 +94,8 @@ fun ActivityTab(
     onClearOld: () -> Unit,
     /** A row swiped away: deleted, with Undo. */
     onDelete: (ActivityEntry) -> Unit = {},
+    /** "Clear all" in the ⋯ menu: everything in the filter that's showing, with Undo. */
+    onClearAll: (entries: List<ActivityEntry>, message: String) -> Unit = { _, _ -> },
 ) {
     val haptics = rememberHaptics()
     val scope = rememberCoroutineScope()
@@ -117,12 +132,14 @@ fun ActivityTab(
     Page(
         title = "Activity",
         state = list,
-        // Its only item is "Clear older than a week", so it's there only when that has something to clear.
-        trailing = if (app.wallhop.core.Wording.olderThan(activity, System.currentTimeMillis(), 7) { it.time }.isEmpty()) null else {
+        // "Clear all", red: empties the filter that's showing (All, Codes, Files or Calls), with
+        // Undo. Gone when that filter has nothing to clear.
+        trailing = activity.filter { matches(it, pager.targetPage) }.takeIf { it.isNotEmpty() }?.let { shown ->
             {
-                app.wallhop.ui.components.CircleButton(WIcons.More, "More", onClick = { anchor ->
-                    overlays.showMenu(anchor, listOf(app.wallhop.ui.components.MenuItem("Clear older than a week", destructive = false) { onClearOld() }))
-                })
+                ClearAllButton {
+                    val page = pager.targetPage
+                    onClearAll(shown, if (page == 0) "Cleared Activity" else "Cleared " + listOf("", "codes", "files", "calls")[page])
+                }
             }
         },
     ) {
@@ -134,7 +151,7 @@ fun ActivityTab(
                 onSelect = { scope.launch { pager.animateScrollToPage(it, animationSpec = androidx.compose.animation.core.spring(1f, 500f)) } },
                 position = { pager.currentPage + pager.currentPageOffsetFraction },
             )
-            Spacer(Modifier.height(24.dp))
+            Spacer(Modifier.height(Space.l))
             }
         }
         item(key = "pages") {
@@ -144,17 +161,17 @@ fun ActivityTab(
                 modifier = Modifier
                     .staggerIn(2)
                     .heightIn(min = pagesMin)
-                    // Out past the list's 20 dp margins, so a page slides off the screen's edge
+                    // Out past the list's gutters, so a page slides off the screen's edge
                     // rather than being cut at the margin; the padding puts the content back in line.
                     .layout { measurable, constraints ->
-                        val extra = 40.dp.roundToPx()
+                        val extra = (ScreenGutter * 2).roundToPx()
                         val width = constraints.maxWidth + extra
                         val placeable = measurable.measure(constraints.copy(minWidth = width, maxWidth = width))
                         layout(constraints.maxWidth, placeable.height) { placeable.place(-extra / 2, 0) }
                     },
-                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 20.dp),
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = ScreenGutter),
                 verticalAlignment = Alignment.Top,
-                pageSpacing = 16.dp,
+                pageSpacing = Space.m,
                 beyondViewportPageCount = 1,
             ) { page ->
                 Box(Modifier.fillMaxWidth().heightIn(min = pagesMin)) {
@@ -204,7 +221,7 @@ private fun ActivityPage(
                 SectionHeader(day)
                 // New entries open up into place; deleted ones fold away (DESIGN.md §7.2).
                 val rows = rememberAnimatedRows(items, enterInitially = day !in initialDays) { it.id }
-                InsetSection(dividerInset = 57.dp) {
+                InsetSection(dividerInset = app.wallhop.ui.components.IconRowTextInset) {
                     rows.forEach { entry ->
                         row {
                             // Tied to the entry, not the slot: when a row above leaves, the next one
@@ -219,7 +236,7 @@ private fun ActivityPage(
                         }
                     }
                 }
-                Spacer(Modifier.height(28.dp))
+                Spacer(Modifier.height(Space.l))
             }
         }
     }
@@ -401,5 +418,26 @@ private fun dayLabel(context: android.content.Context, time: Long): String {
         today -> "Today"
         today.minusDays(1) -> "Yesterday"
         else -> DateUtils.formatDateTime(context, time, DateUtils.FORMAT_SHOW_DATE or DateUtils.FORMAT_SHOW_WEEKDAY)
+    }
+}
+
+
+/** The red Clear all pill at the top of Activity. */
+@Composable
+private fun ClearAllButton(onClick: () -> Unit) {
+    val red = Wallhop.home.red
+    val source = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+    Row(
+        Modifier
+            .height(48.dp)
+            .pressScale(source, 0.96f)
+            .clip(capsule())
+            .background(Color.Black.copy(alpha = 0.28f))
+            .border(1.dp, Color.White.copy(alpha = 0.1f), capsule())
+            .tappable(source, onClick = onClick)
+            .padding(horizontal = Space.m),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text("Clear all", style = Type.headline, color = red)
     }
 }

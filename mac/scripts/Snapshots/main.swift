@@ -193,8 +193,8 @@ CTFontManagerRegisterFontsForURL(URL(fileURLWithPath: "Resources/Galindo.ttf") a
                              return Problem(symbol: "iphone.slash", title: text.title, detail: text.detail).with("Try again") {}
                          }()))] {
         let content = LiveCardView(model: model, card: card)
-            .frame(width: 364, alignment: .leading)
-            .padding(.top, 42).padding(.horizontal, 18).padding(.bottom, 16)
+            .frame(width: OverlayController.cardWidth - WSpace.m * 2, alignment: .leading)
+            .padding(.top, 32 + WSpace.s).padding(.horizontal, WSpace.m).padding(.bottom, WSpace.m)
             .background(NotchShape(cornerRadius: 26).fill(LinearGradient(
                 stops: [.init(color: .black, location: 0), .init(color: .black, location: 0.45), .init(color: model.themeStore.theme.card, location: 1)],
                 startPoint: .top, endPoint: .bottom)))

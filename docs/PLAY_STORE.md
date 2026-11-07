@@ -63,11 +63,15 @@ Codes, calls, texts and files from your Android phone, in your Mac's notch.
 >
 > **Ring your phone.** Lost it in the couch? Ring it from your Mac, even on silent.
 >
-> **Private by design.** No accounts, no cloud, no ads, no tracking. Your phone talks only to your own
-> Mac, directly over your Wi-Fi, end-to-end encrypted. Every feature has its own switch.
+> **A widget for your home screen.** See whether your Mac is connected and charging, and send photos
+> or files to it in one tap.
+>
+> **Private by design.** No accounts, no sign-up, no cloud, no ads, no tracking. Your phone talks only
+> to your own Mac, directly over your Wi-Fi, end-to-end encrypted. Away from that Wi-Fi, codes, calls and
+> notifications still arrive over Bluetooth. Every feature has its own switch.
 >
 > Lync is free and open source. You'll need the free Lync app for Mac (macOS 14 or later), on the same
-> Wi-Fi network as your phone.
+> Wi-Fi network as your phone or within Bluetooth range.
 
 **Category:** Tools. **Tags:** productivity, connectivity.
 **Contact email:** santhoshreddy1058@gmail.com.
@@ -145,6 +149,11 @@ companion app only when its connection gives the device internet access, which L
 "Run in background" explains the step, then opens Lync's App info page (Battery › Unrestricted),
 which needs no permission and no declaration; coming back, the switch shows whether it worked.
 
+**Bluetooth** (`BLUETOOTH_ADVERTISE`, `BLUETOOTH_CONNECT`, the "Nearby devices" permission): no form.
+It carries codes, calls and notifications to the paired Mac when the two aren't on the same Wi-Fi.
+The phone advertises only a rotating tag that only the paired Mac can recognise, and never scans, so
+no location permission is needed. Setup explains it before Android asks.
+
 **Notification access:** no form, but the in-app prominent disclosure rule applies (below).
 
 **Prominent disclosure:** Play requires an in-app explanation before the system permission prompt for
@@ -177,17 +186,23 @@ Done in the repo:
 - [x] Release bundle builds signed with the upload key; native libraries 16 KB aligned (Android 15+).
 - [x] In-app disclosure before each permission prompt says what is read and that it goes only to the
       paired Mac, encrypted.
+- [x] Bluetooth fallback and the home screen widget are in the listing text and the permissions above.
 - [x] "Get update" on the phone opens Lync's Play Store page when it was installed from Play
       (Play's rule: an app from Play updates only through Play); the Mac's update shares the Mac
       download link instead of opening it here.
 
 Only you can do:
+- [ ] Retake the phone screenshots: the Home screen and its Mac card changed after the current set,
+      and one should show the widget.
 - [ ] Back up the upload key and its password (`~/Documents/signing/`).
 - [ ] Make the privacy policy reachable at a public URL (make the repo public, or any page host).
 - [ ] Record the two demo videos (above).
 - [ ] Do a trademark search for "Lync" (a former Microsoft product name) in the countries you launch in.
 - [ ] Pay the $25, verify your identity, and run the closed test: 12+ testers for 14 days.
-- [ ] For the Mac app download: an Apple Developer account ($99 a year), then
-      `SIGN_IDENTITY="Developer ID Application: …" NOTARY_PROFILE=<profile> scripts/build-app.sh release dmg`
-      and attach `build/Lync.dmg` to a GitHub release (the phone's "Get Lync for Mac" opens the releases page).
+- [ ] For the Mac app download (no Apple Developer account needed): make the "Lync Local" certificate
+      once (Keychain Access › Certificate Assistant › Create a Certificate: name Lync Local, Self Signed
+      Root, Code Signing), turn on GitHub Pages (Settings › Pages: branch main, folder /docs), then run
+      `mac/scripts/release-mac.sh` and do the two steps it prints. The download page should show the
+      one-time "Open Anyway" step (System Settings › Privacy & Security). Back up "Lync Local" and the
+      Sparkle key (both in the login keychain) with the upload key.
 - [ ] An independent review of the link's cryptography is still worth having before a wide launch.

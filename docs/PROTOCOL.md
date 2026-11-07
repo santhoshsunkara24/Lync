@@ -172,7 +172,7 @@ Android in `core/BleWire.kt` and `link/BleLink.kt`. No other relay of any kind i
 **Path selection.** Wi-Fi always wins. The phone advertises only while it is paired, the Bluetooth
 switch is on, Android allows it, and the TCP session has been down for **5 s**. The Mac scans only
 while no phone is connected to it over TCP, also after **5 s**. A TCP session coming up on either side
-closes the Bluetooth link at once. Codes waiting for the Mac (kept up to five minutes) are sent as soon
+closes the Bluetooth link at once. Codes waiting for the Mac (kept up to ten minutes) are sent as soon
 as the Bluetooth link is ready. Files, text, links, texts (SMS) and everything else stay Wi-Fi only.
 
 **Roles.** The phone is the GATT peripheral, the Mac the central.
@@ -188,9 +188,16 @@ as the Bluetooth link is ready. Files, text, links, texts (SMS) and everything e
 `tagKey = HKDF-SHA256(ss, salt = SHA-256(phonePub ‖ macPub), info "lync ble v1 tag", 32)`,
 `tag = HMAC-SHA256(tagKey, "lync-ble-tag" ‖ window)` first 8 bytes, where `window` is
 `floor(unix seconds / 900)` as a 64-bit big-endian integer. The phone advertises the current window's
-tag (and switches within a minute of a new window); the Mac accepts the current window and either
-neighbour. Only the two paired devices can compute it, and it changes every 15 minutes, so it isn't a
-tracking identifier.
+tag and switches within a minute of a new window while it's awake. In deep sleep its timers stop, so
+it also brings the tag up to date whenever it has something to send and when its screen comes on.
+The Mac accepts a paired phone's tag from the last day (96 windows back, one ahead), so a phone that
+slept for hours with an old tag is still found. Only the two paired devices can compute it, and it
+changes every 15 minutes while the phone is in use, so it isn't a tracking identifier.
+
+When the phone has something to send (a code, a call, a notification) it first drops a Bluetooth
+link the Mac has been silent on for 45 s (a link the Mac slept on can look open) and keeps the CPU
+awake for up to 30 s while the Mac finds it. A notification waits up to 10 s for a link; a code
+waits 20 s and is then kept for ten minutes, as over Wi-Fi.
 
 **Fragments.** Every GATT write or notification is one header byte, `1` on the last piece of a frame
 and `0` when more follow, then up to MTU − 4 bytes of the frame. The receiver joins pieces until a

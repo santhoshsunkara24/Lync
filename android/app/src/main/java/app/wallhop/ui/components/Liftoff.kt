@@ -60,6 +60,14 @@ private val Uy = -R2
 private val Px = R2
 private val Py = R2
 
+/**
+ * Speed lines run in five fixed lanes across the link, taken in this order, so two never sit side
+ * by side or cross: clean, even streaks rather than a scatter. Shared with the Mac.
+ */
+private val Lanes = floatArrayOf(0f, -0.34f, 0.17f, -0.17f, 0.34f)
+/** How far behind the link a speed line goes before it has faded out, in link heights: inside the glow. */
+private const val Reach = 1.1f
+
 private const val LaunchMs = 260f
 private const val DoneMs = 1150f
 /** At most this often a new frame: plenty for the motion, half the work on a 120 Hz screen. */
@@ -82,6 +90,8 @@ private class Engine {
     var dt = 16f
     val lines = ArrayList<Streak>(64)
     val spare = ArrayList<Streak>(64)
+    /** The lane the next speed line takes (see [Lanes]). */
+    var nextLane = 0
     var glow: Brush? = null
     var glowRadius = -1f
 
@@ -232,7 +242,7 @@ private fun DrawScope.drawLiftoff(e: Engine) {
         Stage.Send -> {
             back = -10f + 16f * easeOut(e.tp / 220f); stretch = 1.03f
             hover = sin(e.vt / 70f) * 0.9f
-            rate = 26f; speed = unit * (2.2f + 1.2f * (0.5f + 0.5f * sin(e.vt / 900f)))
+            rate = 9f; speed = linkSize * 2.2f
             glow = 0.9f
         }
         Stage.Fail -> {
@@ -256,28 +266,32 @@ private fun DrawScope.drawLiftoff(e: Engine) {
         Stage.Done -> {
             val t = e.tp
             if (t < 420f) {
-                val k = easeIn(t / 420f); back = 6f + k * unit * 1.2f; stretch = 1f + 0.4f * k; rate = 40f; speed = unit * 4f
+                val k = easeIn(t / 420f); back = 6f + k * unit * 1.2f; stretch = 1f + 0.4f * k; rate = 18f; speed = linkSize * 3.6f
             } else {
                 val r = spring((t - 420f) / 1000f, 0.55f, 0.32f)
                 back = -unit * 0.55f * (1f - r); alpha = clamp((t - 420f) / 160f); glint = (t - 560f) / 520f
             }
         }
     }
-    // Speed lines, emitted just behind the link and streaming back.
+    // Speed lines, emitted just behind the link and streaming back, one lane after another, all
+    // the same width and speed so none overtakes or crosses another.
     e.acc += rate * dt / 1000f
     while (e.acc >= 1f) {
         e.acc -= 1f
         val l = e.streak()
-        l.off = (Random.nextFloat() - 0.5f) * linkSize * 0.9f; l.d = linkSize * 0.42f
-        l.len = linkSize * (0.18f + Random.nextFloat() * 0.22f); l.w = linkSize * (0.032f + Random.nextFloat() * 0.02f)
-        l.v = speed * (0.8f + Random.nextFloat() * 0.4f); l.life = 1f
+        l.off = Lanes[e.nextLane % Lanes.size] * linkSize; l.d = linkSize * 0.42f
+        e.nextLane++
+        l.len = linkSize * (0.22f + 0.05f * (e.nextLane % 3)); l.w = linkSize * 0.032f
+        l.v = speed; l.life = 1f
         e.lines += l
     }
-    // Move them on, recycling the ones that have faded (in place: no iterator, no garbage).
+    // Move them on, recycling the ones that have reached the edge of the glow (in place: no
+    // iterator, no garbage).
     var kept = 0
     for (i in e.lines.indices) {
         val l = e.lines[i]
-        l.d += l.v * dt / 1000f; l.life -= dt / 520f
+        l.d += l.v * dt / 1000f
+        l.life = minOf(l.life, 1f - (l.d - linkSize * 0.42f) / (linkSize * Reach))
         if (l.life > 0f) e.lines[kept++] = l else e.spare += l
     }
     while (e.lines.size > kept) e.lines.removeAt(e.lines.lastIndex)
@@ -289,7 +303,8 @@ private fun DrawScope.drawLiftoff(e: Engine) {
         val y = by - Uy * l.d + Py * l.off
         drawLine(
             StreakColor, Offset(x, y), Offset(x - Ux * l.len, y - Uy * l.len), strokeWidth = l.w, cap = StrokeCap.Round,
-            alpha = 0.85f * minOf(1f, l.life * 1.6f),
+            // In quickly, then fading the further it gets from the link.
+            alpha = 0.7f * minOf(1f, (1f - l.life) * 8f) * l.life,
         )
     }
     drawLinkTube(bx, by, linkSize, stretch, alpha, glint, glow = glow,

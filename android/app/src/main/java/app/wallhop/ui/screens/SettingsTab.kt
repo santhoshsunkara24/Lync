@@ -25,7 +25,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.unit.dp
 import androidx.core.graphics.drawable.toBitmap
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.wallhop.BuildConfig
@@ -33,10 +32,13 @@ import app.wallhop.notify.MirroredApps
 import app.wallhop.ui.components.CircleButton
 import app.wallhop.ui.components.EmptyState
 import app.wallhop.ui.components.IconTile
+import app.wallhop.ui.components.IconRowTextInset
+import app.wallhop.ui.components.IconTileSize
 import app.wallhop.ui.components.insetSectionItems
 import app.wallhop.ui.components.InsetSection
 import app.wallhop.ui.components.ListRow
 import app.wallhop.ui.components.SearchField
+import app.wallhop.ui.design.Space
 import app.wallhop.ui.design.Wallhop
 import app.wallhop.ui.design.flashPulse
 import app.wallhop.ui.design.rounded
@@ -107,7 +109,7 @@ fun SettingsTab(
         item(key = "mac") {
             Column(Modifier.staggerIn(1)) {
                 SectionHeader("On your Mac")
-                InsetSection(dividerInset = 57.dp) {
+                InsetSection(dividerInset = IconRowTextInset) {
                     row {
                         ListRow(
                             title = "Codes",
@@ -136,19 +138,13 @@ fun SettingsTab(
                         )
                     }
                 }
-                Text(
-                    "Turn on only what you want. Everything goes only to your paired Mac, encrypted.",
-                    style = app.wallhop.ui.design.Type.footnote,
-                    color = colors.labelSecondary,
-                    modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 7.dp),
-                )
-                Spacer(Modifier.height(32.dp))
+                Spacer(Modifier.height(Space.l))
             }
         }
         item(key = "notifications") {
             Column(Modifier.staggerIn(2)) {
                 SectionHeader("Notifications")
-                InsetSection(dividerInset = 57.dp) {
+                InsetSection(dividerInset = IconRowTextInset) {
                     row {
                         // Picking apps and granting notification access both live in this one flow.
                         ListRow(
@@ -182,8 +178,8 @@ fun SettingsTab(
                             onPauseOrDispose { }
                         }
                         ListRow(
-                            title = "Ring over the lock screen",
-                            subtitle = "When your Mac rings this phone, it fills the screen like an alarm",
+                            title = "Find my phone",
+                            subtitle = "Ring this phone from your Mac to find it. It rings like an alarm, even when locked or on silent",
                             leading = { IconTile(WIcons.BellRinging, colors.orange) },
                             value = if (fullScreen) "On" else "Off",
                             chevron = true,
@@ -198,14 +194,14 @@ fun SettingsTab(
                         )
                     }
                 }
-                Spacer(Modifier.height(32.dp))
+                Spacer(Modifier.height(Space.l))
             }
         }
         item(key = "connected") {
             Column(Modifier.staggerIn(3)) {
                 SectionHeader("Stay connected")
                 InsetSection(
-                    dividerInset = 57.dp,
+                    dividerInset = IconRowTextInset,
                 ) {
                     row {
                         ListRow(
@@ -256,7 +252,7 @@ fun SettingsTab(
                         )
                     }
                 }
-                Spacer(Modifier.height(32.dp))
+                Spacer(Modifier.height(Space.l))
             }
         }
         app.wallhop.glyph.Glyphs.hardware?.let { hardware ->
@@ -266,7 +262,7 @@ fun SettingsTab(
             item(key = "pairedMac") {
                 Column(Modifier.staggerIn(5)) {
                     SectionHeader("Mac")
-                    InsetSection(dividerInset = 57.dp) {
+                    InsetSection(dividerInset = IconRowTextInset) {
                         row {
                             ListRow(
                                 title = macName,
@@ -285,7 +281,7 @@ fun SettingsTab(
                             )
                         }
                     }
-                    Spacer(Modifier.height(32.dp))
+                    Spacer(Modifier.height(Space.l))
                 }
             }
         }
@@ -293,7 +289,7 @@ fun SettingsTab(
             Column(Modifier.staggerIn(6)) {
                 SectionHeader("About")
                 InsetSection(
-                    dividerInset = 57.dp,
+                    dividerInset = IconRowTextInset,
                     footer = "Everything travels encrypted between your phone and Mac over your own network. No account, no cloud.",
                 ) {
                     row {
@@ -326,9 +322,9 @@ fun SettingsTab(
         if (BuildConfig.STRESS_HOOKS) {
             item(key = "developer") {
                 Column {
-                    Spacer(Modifier.height(32.dp))
+                    Spacer(Modifier.height(Space.l))
                     SectionHeader("Developer")
-                    InsetSection(dividerInset = 57.dp) {
+                    InsetSection(dividerInset = IconRowTextInset) {
                         row {
                             ListRow(
                                 title = "Send a test code",
@@ -349,7 +345,7 @@ private fun app.wallhop.ui.components.SectionScope.fixRow(problem: app.wallhop.c
     row {
         ListRow(
             title = if (fix == app.wallhop.core.Fix.TurnOnBluetooth) "Turn on Bluetooth" else fix.label,
-            leading = { Box(Modifier.size(29.dp)) },
+            leading = { Box(Modifier.size(IconTileSize)) },
             titleColor = Wallhop.colors.tint,
             chevron = true,
             onClick = { runFix(fix) },
@@ -410,7 +406,7 @@ fun AppsScreen(
                         )
                     }
                 }
-                Spacer(Modifier.height(24.dp))
+                Spacer(Modifier.height(Space.l))
             }
         }
         if (!hasNotificationAccess) {
@@ -425,16 +421,16 @@ fun AppsScreen(
                         )
                     }
                 }
-                Spacer(Modifier.height(24.dp))
+                Spacer(Modifier.height(Space.l))
             }
         }
         item(key = "search") {
             SearchField(query, { query = it }, placeholder = "Search apps")
-            Spacer(Modifier.height(24.dp))
+            Spacer(Modifier.height(Space.l))
         }
         val all = apps
         if (all == null) {
-            item(key = "loading") { Box(Modifier.padding(24.dp)) { app.wallhop.ui.components.ActivityIndicator() } }
+            item(key = "loading") { Box(Modifier.padding(Space.l)) { app.wallhop.ui.components.ActivityIndicator() } }
             return@Page
         }
         val filtered = all.filter { query.isBlank() || it.label.contains(query.trim(), ignoreCase = true) }
@@ -451,7 +447,7 @@ fun AppsScreen(
                 item(key = "section-$header") { SectionHeader(header) }
                 // One lazy item per app: only the rows on screen are built and decode icons.
                 // Keyed by app alone, so a new search moves rows rather than blinking them.
-                insetSectionItems(list, key = { it.packageName }, dividerInset = 57.dp) { app ->
+                insetSectionItems(list, key = { it.packageName }, dividerInset = IconRowTextInset) { app ->
                     ListRow(
                         title = app.label,
                         leading = { AppIcon(app.packageName) },
@@ -459,7 +455,7 @@ fun AppsScreen(
                         onCheckedChange = { mirrored.setEnabled(app.packageName, it) },
                     )
                 }
-                item(key = "gap-$header") { Spacer(Modifier.height(28.dp)) }
+                item(key = "gap-$header") { Spacer(Modifier.height(Space.l)) }
             }
         }
     }
@@ -479,8 +475,8 @@ fun trimAppIcons() = iconCache.evictAll()
 @Composable
 private fun AppIcon(packageName: String) {
     val context = LocalContext.current
-    // 29 dp is the size drawn; decoding any bigger only wastes memory.
-    val px = with(androidx.compose.ui.platform.LocalDensity.current) { 29.dp.roundToPx() }
+    // IconTileSize is the size drawn; decoding any bigger only wastes memory.
+    val px = with(androidx.compose.ui.platform.LocalDensity.current) { IconTileSize.roundToPx() }
     // Keyed by package: a reused list row must never keep showing the previous app's icon.
     var icon by remember(packageName) { mutableStateOf(iconCache.get(packageName)) }
     LaunchedEffect(packageName) {
@@ -491,8 +487,8 @@ private fun AppIcon(packageName: String) {
             }.getOrNull()
         }?.also { iconCache.put(packageName, it) }
     }
-    Box(Modifier.size(29.dp).clip(rounded(7.dp))) {
-        icon?.let { Image(it, null, Modifier.size(29.dp)) }
+    Box(Modifier.size(IconTileSize).clip(rounded(app.wallhop.ui.design.Radius.s))) {
+        icon?.let { Image(it, null, Modifier.size(IconTileSize)) }
     }
 }
 
@@ -519,12 +515,14 @@ private fun GlyphSection(hardware: app.wallhop.glyph.Glyphs.Hardware) {
     val matrix = hardware == app.wallhop.glyph.Glyphs.Hardware.Matrix
     SectionHeader(if (matrix) "Glyph Matrix" else "Glyph lights")
     InsetSection(
-        dividerInset = 57.dp,
+        dividerInset = IconRowTextInset,
         footer = if (matrix) "Lync's link lights up on the Glyph Matrix." else "Your Glyph lights pulse.",
     ) {
         row {
             ListRow(
-                title = "When your Mac rings this phone",
+                title = "Finding your phone",
+                subtitle = if (matrix) "When you ring it from your Mac, the link pulses until you find it"
+                    else "When you ring it from your Mac, the lights flash until you find it",
                 leading = { IconTile(WIcons.BellRinging, colors.orange) },
                 checked = ring,
                 onCheckedChange = { on -> ring = on; Features.set(context, Features.Key.GlyphRing, on) },
@@ -533,6 +531,7 @@ private fun GlyphSection(hardware: app.wallhop.glyph.Glyphs.Hardware) {
         row {
             ListRow(
                 title = "When your Mac connects",
+                subtitle = if (matrix) "The link snaps shut" else "Two soft pulses",
                 leading = { IconTile(WIcons.Link, colors.indigo) },
                 checked = connect,
                 onCheckedChange = { on -> connect = on; Features.set(context, Features.Key.GlyphConnect, on) },
@@ -541,7 +540,7 @@ private fun GlyphSection(hardware: app.wallhop.glyph.Glyphs.Hardware) {
         row {
             ListRow(
                 title = "While files send",
-                subtitle = if (matrix) "The link fills up, then flashes when they're there" else "A slow pulse, then two blinks when they're there",
+                subtitle = if (matrix) "The link flies with a trail behind it, then lands when they're there" else "A slow pulse, then two blinks when they're there",
                 leading = { IconTile(WIcons.File, colors.green) },
                 checked = transfer,
                 onCheckedChange = { on -> transfer = on; Features.set(context, Features.Key.GlyphTransfer, on) },
@@ -561,5 +560,5 @@ private fun GlyphSection(hardware: app.wallhop.glyph.Glyphs.Hardware) {
             )
         }
     }
-    Spacer(Modifier.height(32.dp))
+    Spacer(Modifier.height(Space.l))
 }

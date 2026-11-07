@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- WIcons.LinkBreak for the home screen widget, drawn white and tinted in code. Same paths as ui/design/WIcons.kt. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp" android:height="24dp"
+    android:viewportWidth="24" android:viewportHeight="24">
+    <path android:strokeColor="#FFFFFFFF" android:strokeWidth="1.5" android:strokeLineCap="round" android:strokeLineJoin="round" android:pathData="M7.934 11.47L5.99 13.414C4.741 14.686 4.75 16.728 6.011 17.989C7.272 19.25 9.314 19.259 10.586 18.01L12 16.596" />
+    <path android:strokeColor="#FFFFFFFF" android:strokeWidth="1.5" android:strokeLineCap="round" android:strokeLineJoin="round" android:pathData="M16.066 12.53L18.01 10.586C19.259 9.314 19.25 7.272 17.989 6.011C16.728 4.75 14.686 4.741 13.414 5.99L12 7.404" />
+    <path android:strokeColor="#FFFFFFFF" android:strokeWidth="1.5" android:strokeLineCap="round" android:strokeLineJoin="round" android:pathData="M3.5 3.5L20.5 20.5" />
+</vector>

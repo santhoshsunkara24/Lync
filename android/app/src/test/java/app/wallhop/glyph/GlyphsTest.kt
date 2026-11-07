@@ -42,4 +42,73 @@ class GlyphsTest {
             }
         }
     }
+
+    @Test fun liftoffKeepsTheLinkAndAddsSpeedLinesBehindIt() {
+        for (n in listOf(13, 25)) {
+            val link = Glyphs.smallLink(n)
+            val frame = Glyphs.liftoff(n, 0.5f, 600)
+            // Every pixel of the link is lit (dim or bright)…
+            assertTrue(link.indices.filter { link[it] }.all { frame[it] > 0 })
+            // …and some speed lines are lit outside it, all behind it (down and to the left).
+            val extra = frame.indices.filter { frame[it] > 0 && !link[it] }
+            assertTrue(extra.isNotEmpty())
+            val c = n - 1
+            // Behind the link: further down and left than its centre line.
+            val linkMid = link.indices.filter { link[it] }.map { (it % n) - (it / n) }.average()
+            assertTrue(extra.all { i -> (i % n) - (i / n) < linkMid + 1 })
+            assertTrue(c > 0)
+        }
+    }
+
+    @Test fun liftoffShiftMovesTheLinkForward() {
+        val n = 13
+        val base = Glyphs.liftoff(n, 1f, 0, shift = 0, streaks = false)
+        val ahead = Glyphs.liftoff(n, 1f, 0, shift = 1, streaks = false)
+        for (i in base.indices) if (base[i] > 0) {
+            val x = i % n + 1; val y = i / n - 1
+            if (x in 0 until n && y in 0 until n) assertEquals(base[i], ahead[y * n + x])
+        }
+        // Shifted right out of sight, nothing is left.
+        assertTrue(Glyphs.liftoff(n, 1f, 0, shift = n, streaks = false).all { it == 0 })
+    }
+
+    @Test fun smallLinkLeavesRoomBehind() {
+        val n = 13
+        val link = Glyphs.smallLink(n)
+        assertTrue(link.count { it } in 12..20)
+        // The lower-left corner (where the trail goes) is clear.
+        for (y in n - 4 until n) for (x in 0 until 3) assertTrue(!link[y * n + x])
+    }
+
+    @Test fun exhaustGlidesAndNeverTouchesTheLink() {
+        val n = 13
+        val link = Glyphs.smallLink(n)
+        fun exhaust(t: Long) = Glyphs.liftoff(n, 1f, t).let { f -> IntArray(f.size) { if (link[it]) 0 else f[it] } }
+        // Smooth: from one frame to the next (40 ms) no light jumps by more than a quarter.
+        for (t in 0L..2000L step 40) {
+            val a = exhaust(t); val b = exhaust(t + 40)
+            for (i in a.indices) assertTrue(kotlin.math.abs(a[i] - b[i]) < 64)
+        }
+        // A pixel of dark all round the link.
+        val f = exhaust(300)
+        for (i in f.indices) if (f[i] > 0) {
+            val x = i % n; val y = i / n
+            for (dy in -1..1) for (dx in -1..1) {
+                val nx = x + dx; val ny = y + dy
+                if (nx in 0 until n && ny in 0 until n) assertTrue(!link[ny * n + nx])
+            }
+        }
+    }
+
+    @Test fun smallLinkStaysInsideTheRoundMatrix() {
+        for (n in listOf(13, 25)) {
+            val link = Glyphs.smallLink(n)
+            val c = (n - 1) / 2.0
+            val r = n / 2.0 // the round display's lights: 137 of them on the 13 x 13 Matrix
+            for (i in link.indices) if (link[i]) {
+                val dx = i % n - c; val dy = i / n - c
+                assertTrue("pixel ${i % n},${i / n} on $n", kotlin.math.sqrt(dx * dx + dy * dy) <= r)
+            }
+        }
+    }
 }

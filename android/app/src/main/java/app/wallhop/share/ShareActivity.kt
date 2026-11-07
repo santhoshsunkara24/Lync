@@ -10,6 +10,7 @@ import androidx.compose.foundation.gestures.rememberDraggableState
 
 import androidx.compose.foundation.gestures.draggable
 
+import app.wallhop.ui.design.Space
 import app.wallhop.ui.design.WIcons
 import android.content.Intent
 import android.net.Uri
@@ -73,6 +74,7 @@ import app.wallhop.ui.components.ButtonStyle
 import app.wallhop.ui.components.HopDots
 import app.wallhop.ui.components.ProgressBar
 import app.wallhop.ui.components.TextAction
+import app.wallhop.ui.components.ThumbnailSize
 import app.wallhop.ui.components.ThumbnailStack
 import app.wallhop.ui.components.WButton
 import app.wallhop.ui.components.formatBytes
@@ -259,7 +261,7 @@ private fun ShareSheet(
                 Modifier
                     .fillMaxWidth()
                     .navigationBarsPadding()
-                    .padding(8.dp)
+                    .padding(Space.xs)
                     .offset { androidx.compose.ui.unit.IntOffset(0, drag.offset.toInt()) }
                     .onSizeChanged { drag.extent = it.height.toFloat() }
                     .draggable(
@@ -270,15 +272,15 @@ private fun ShareSheet(
                     )
                     .clip(rounded(Radius.sheet))
                     .background(colors.backgroundElevated.copy(alpha = if (frosted) 0.84f else 1f))
-                    .padding(horizontal = 20.dp)
-                    .padding(bottom = 20.dp),
+                    .padding(horizontal = Space.m)
+                    .padding(bottom = Space.l),
             ) {
                 // The grabber says it can be pulled down; Cancel, Hide, back and a tap outside close it too.
                 Box(
-                    Modifier.padding(top = 6.dp).align(Alignment.CenterHorizontally).size(36.dp, 5.dp)
+                    Modifier.padding(top = Space.xs).align(Alignment.CenterHorizontally).size(36.dp, 5.dp)
                         .clip(app.wallhop.ui.design.capsule()).background(colors.labelTertiary),
                 )
-                Box(Modifier.fillMaxWidth().height(48.dp)) {
+                Box(Modifier.fillMaxWidth().height(56.dp)) {
                     val sendingText = shared is ShareActivity.Shared.Text && transfer?.phase == TransferPhase.Sending
                     Box(Modifier.align(Alignment.CenterStart)) {
                         // A text that's on its way can't be called back, so it just carries on;
@@ -291,7 +293,7 @@ private fun ShareSheet(
                     Text(
                         macName ?: "Send to Mac", style = Type.headline, color = colors.label,
                         maxLines = 1, overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.align(Alignment.Center).padding(horizontal = 76.dp),
+                        modifier = Modifier.align(Alignment.Center).padding(horizontal = Space.huge),
                     )
                     Box(Modifier.align(Alignment.CenterEnd)) {
                         if (outcome == Outcome.Working && shared !is ShareActivity.Shared.Nothing) {
@@ -301,10 +303,10 @@ private fun ShareSheet(
                 }
 
                 if (macName == null) {
-                    Spacer(Modifier.height(8.dp))
+                    Spacer(Modifier.height(Space.xs))
                     Text("Pair a Mac first", style = Type.title3, color = colors.label)
                     Text("Open Lync, pair it with your Mac, then share again.", style = Type.subheadline,
-                        color = colors.labelSecondary, modifier = Modifier.padding(top = 4.dp, bottom = 20.dp))
+                        color = colors.labelSecondary, modifier = Modifier.padding(top = Space.xxs, bottom = Space.l))
                     WButton("Open Lync", onClick = {
                         context.startActivity(Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
                         close()
@@ -312,18 +314,18 @@ private fun ShareSheet(
                     return@Column
                 }
 
-                Spacer(Modifier.height(8.dp))
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                Spacer(Modifier.height(Space.xs))
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Space.s)) {
                     when (shared) {
                         is ShareActivity.Shared.Files -> ThumbnailStack(shared.uris)
                         else -> Box(
-                            Modifier.size(52.dp).clip(rounded(Radius.s)).background(colors.backgroundElevated2),
+                            Modifier.size(ThumbnailSize).clip(rounded(Radius.s)).background(colors.backgroundElevated2),
                             contentAlignment = Alignment.Center,
                         ) {
                             Icon(if (isLink) WIcons.Link else WIcons.File, null, tint = colors.tint)
                         }
                     }
-                    Column(Modifier.weight(1f)) {
+                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(Space.xxs)) {
                         Text(
                             when (shared) {
                                 is ShareActivity.Shared.Files -> transfer?.takeIf { it.items.isNotEmpty() }?.let { LinkManager.summary(it.items) }
@@ -348,7 +350,7 @@ private fun ShareSheet(
                     }
                 }
 
-                Spacer(Modifier.height(22.dp))
+                Spacer(Modifier.height(Space.l))
                 AnimatedContent(
                     targetState = outcome,
                     // A failure shakes once, with the error haptic.
@@ -361,7 +363,7 @@ private fun ShareSheet(
                             val done = if (isLink) "Opened on your Mac" else app.wallhop.core.Wording.READY
                             // Dark ink on green: white on #30D158 is only 2:1.
                             Row(
-                                Modifier.fillMaxWidth().height(50.dp).clip(capsule()).background(colors.green)
+                                Modifier.fillMaxWidth().height(48.dp).clip(capsule()).background(colors.green)
                                     .semantics {
                                         liveRegion = LiveRegionMode.Assertive
                                         contentDescription = done
@@ -370,11 +372,11 @@ private fun ShareSheet(
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
                                 Icon(WIcons.CheckCircle, null, tint = app.wallhop.ui.design.Ink, modifier = Modifier.size(20.dp))
-                                Spacer(Modifier.size(8.dp))
+                                Spacer(Modifier.size(Space.xs))
                                 Text(done, style = Type.headline, color = app.wallhop.ui.design.Ink)
                             }
                             if (partial != null) {
-                                Text(partial, style = Type.footnote, color = colors.orange, modifier = Modifier.padding(top = 10.dp))
+                                Text(partial, style = Type.footnote, color = colors.orange, modifier = Modifier.padding(top = Space.xs))
                             }
                         }
                         Outcome.Failed -> Column {
@@ -390,10 +392,10 @@ private fun ShareSheet(
                                 problem?.action ?: "There's nothing here Lync can send.",
                                 style = Type.footnote,
                                 color = colors.labelSecondary,
-                                modifier = Modifier.padding(top = 2.dp),
+                                modifier = Modifier.padding(top = Space.xxs),
                             )
                             if (problem != null) {
-                                Spacer(Modifier.height(12.dp))
+                                Spacer(Modifier.height(Space.s))
                                 when (val fix = problem.fix) {
                                     // Files from another app can't be picked here: Try again resends what was shared.
                                     null, app.wallhop.core.Fix.TryAgain, app.wallhop.core.Fix.ChooseAgain ->
@@ -404,7 +406,7 @@ private fun ShareSheet(
                                     }, style = ButtonStyle.Filled, modifier = Modifier.fillMaxWidth())
                                     else -> {
                                         WButton(fix.label, onClick = { app.wallhop.core.Open.run(context, fix) }, style = ButtonStyle.Filled, modifier = Modifier.fillMaxWidth())
-                                        Spacer(Modifier.height(8.dp))
+                                        Spacer(Modifier.height(Space.xs))
                                         WButton("Try again", onClick = onRetry, style = ButtonStyle.Glass, modifier = Modifier.fillMaxWidth())
                                     }
                                 }
@@ -423,10 +425,10 @@ private fun ShareSheet(
                                         ?.let { "Waiting · ${it.sentence}" }
                                         ?: "Waiting for your Mac. It sends as soon as both are on the same Wi‑Fi."
                                 },
-                                style = Type.footnote,
+                                style = Type.footnote.copy(fontFeatureSettings = "tnum"),
                                 color = colors.labelSecondary,
                             )
-                            Spacer(Modifier.height(12.dp))
+                            Spacer(Modifier.height(Space.s))
                             if (sending && shared is ShareActivity.Shared.Files) ProgressBar(transfer.progress) else HopDots(active = true, modifier = Modifier.fillMaxWidth())
                         }
                     }

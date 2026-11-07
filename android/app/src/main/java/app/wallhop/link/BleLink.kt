@@ -195,6 +195,34 @@ class BleLink(
         }
     }
 
+    /**
+     * Makes sure the Mac can find this phone right now. Timers stop while the phone is in deep
+     * sleep, so after hours asleep the advertised tag is hours old (the Mac no longer recognises
+     * it) and a link the Mac slept on can still look open. Called whenever something has to go to
+     * the Mac and when the screen comes on: a silent link is dropped and the tag is brought up to
+     * date at once, instead of waiting for timers that haven't run.
+     */
+    @Synchronized
+    fun refresh() {
+        if (!wanted) return
+        val conn = connection
+        if (conn != null && conn.ready &&
+            android.os.SystemClock.elapsedRealtime() - conn.lastHeard > DEAD_AFTER_MS) {
+            if (BuildConfig.STRESS_HOOKS) Log.d(TAG, "refresh: silent link, closing")
+            closeConnection(conn)
+        }
+        if (server == null) {
+            openServer()
+            return
+        }
+        if (connection?.ready == true) return
+        if (!advertising || BleWire.window(System.currentTimeMillis()) != advertisedWindow) {
+            if (BuildConfig.STRESS_HOOKS) Log.d(TAG, "refresh: advertising afresh")
+            stopAdvertising()
+            startAdvertising()
+        }
+    }
+
     @Synchronized
     private fun stopAdvertising() {
         // Always ask Android, even when we think it already stopped: on some phones a set can
@@ -322,8 +350,8 @@ class BleLink(
         private val pending = ConcurrentHashMap<String, CompletableDeferred<Message>>()
         private var timeout: Job? = null
         private var heartbeat: Job? = null
-        /** When the Mac last sent anything (elapsedRealtime). */
-        @Volatile private var lastHeard = android.os.SystemClock.elapsedRealtime()
+        /** When the Mac last sent anything (elapsedRealtime, which keeps counting through deep sleep). */
+        @Volatile var lastHeard = android.os.SystemClock.elapsedRealtime()
 
         fun startTimeout() {
             // Connecting isn't enough: the handshake has to finish, or the slot is freed.
@@ -479,10 +507,19 @@ class BleLink(
         }
     }
 
+    /** The phone woke up (screen on, or unlocked): be findable with a current tag straight away. */
+    private val wakeReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) = refresh()
+    }
+
     private fun registerReceiver() {
         if (receiverRegistered) return
         receiverRegistered = runCatching {
             ContextCompat.registerReceiver(context, stateReceiver, IntentFilter(BluetoothAdapter.ACTION_STATE_CHANGED),
+                ContextCompat.RECEIVER_NOT_EXPORTED)
+            // System broadcasts: delivered to a not-exported receiver too.
+            ContextCompat.registerReceiver(context, wakeReceiver,
+                IntentFilter(Intent.ACTION_SCREEN_ON).apply { addAction(Intent.ACTION_USER_PRESENT) },
                 ContextCompat.RECEIVER_NOT_EXPORTED)
         }.isSuccess
     }
@@ -491,6 +528,7 @@ class BleLink(
         if (!receiverRegistered) return
         receiverRegistered = false
         runCatching { context.unregisterReceiver(stateReceiver) }
+        runCatching { context.unregisterReceiver(wakeReceiver) }
     }
 
     companion object {

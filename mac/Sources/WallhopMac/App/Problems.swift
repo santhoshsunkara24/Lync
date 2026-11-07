@@ -350,7 +350,7 @@ extension Problem {
     }
     static let updateMac = Problem(symbol: "arrow.down.app", title: "Update Lync on this Mac",
                                    detail: "Your phone has a newer version.", actionTitle: "Get update") {
-        NSWorkspace.shared.open(lyncReleasesURL)
+        MainActor.assumeIsolated { Updates.check() }
     }
 
     // MARK: Settings

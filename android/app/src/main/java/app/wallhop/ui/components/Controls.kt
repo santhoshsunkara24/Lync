@@ -46,6 +46,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import app.wallhop.ui.design.Haptic
+import app.wallhop.ui.design.Space
 import app.wallhop.ui.design.Springs
 import app.wallhop.ui.design.Type
 import app.wallhop.ui.design.Wallhop
@@ -148,7 +149,7 @@ fun SegmentedControl(
     // 48 dp at the default font, taller as the font grows so labels never clip.
     val fontScale = androidx.compose.ui.platform.LocalDensity.current.fontScale
     BoxWithConstraints(modifier.fillMaxWidth().height(48.dp * fontScale.coerceAtLeast(1f))) {
-        val gap = 8.dp
+        val gap = Space.xs
         val segment = (maxWidth - gap * (options.size - 1)) / options.size
         val stepPx = with(androidx.compose.ui.platform.LocalDensity.current) { (segment + gap).toPx() }
         Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(gap)) {
@@ -181,7 +182,7 @@ fun SegmentedControl(
                     val tint by animateColorAsState(if (on) home.onPale else colors.label, Springs.snappy(), label = "chipText")
                     Text(label, style = Type.footnote.copy(fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold),
                         color = tint, maxLines = 2, textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                        modifier = Modifier.padding(horizontal = 4.dp))
+                        modifier = Modifier.padding(horizontal = Space.xxs))
                 }
             }
         }

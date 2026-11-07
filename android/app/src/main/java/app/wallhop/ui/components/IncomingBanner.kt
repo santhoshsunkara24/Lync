@@ -46,6 +46,8 @@ import androidx.compose.ui.unit.dp
 import app.wallhop.link.IncomingTransfer
 import app.wallhop.ui.design.Durations
 import app.wallhop.ui.design.Easings
+import app.wallhop.ui.design.Radius
+import app.wallhop.ui.design.Space
 import app.wallhop.ui.design.Springs
 import app.wallhop.ui.design.Type
 import app.wallhop.ui.design.Wallhop
@@ -78,20 +80,20 @@ fun BoxScope.IncomingBanner(incoming: IncomingTransfer?) {
             else slideOutVertically(Springs.dematerialize()) { -it } + fadeOut(tween(Durations.Exit, easing = Easings.Out)),
     ) {
         val t = last ?: return@AnimatedVisibility
-        val shape = RoundedCornerShape(22.dp)
+        val shape = RoundedCornerShape(Radius.l)
         Row(
             Modifier
                 .statusBarsPadding()
-                .padding(horizontal = 14.dp, vertical = 8.dp)
+                .padding(horizontal = Space.m, vertical = Space.xs)
                 .widthIn(max = 480.dp)
                 .fillMaxWidth()
                 .clip(shape)
                 .background(Color(0xFF0E1612))
                 .border(1.dp, Color(0xFF5FD9A0).copy(alpha = 0.18f), shape)
-                .padding(12.dp)
+                .padding(Space.s)
                 .semantics { liveRegion = LiveRegionMode.Polite },
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            horizontalArrangement = Arrangement.spacedBy(Space.s),
         ) {
             FileThumb(t.uris, t.mimes, 40.dp)
             Column(Modifier.weight(1f)) {
@@ -103,7 +105,7 @@ fun BoxScope.IncomingBanner(incoming: IncomingTransfer?) {
                     )
                 }
                 Box(
-                    Modifier.padding(top = 8.dp).fillMaxWidth().height(3.dp).drawBehind {
+                    Modifier.padding(top = Space.xs).fillMaxWidth().height(3.dp).drawBehind {
                         val r = CornerRadius(size.height / 2)
                         drawRoundRect(BannerTrack, cornerRadius = r)
                         val w = size.width * progress.value.coerceIn(0f, 1f)

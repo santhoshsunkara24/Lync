@@ -36,6 +36,12 @@
     </array>
     <key>NSHumanReadableCopyright</key>
     <string>© 2026 Santhosh Sunkara. Free and open source.</string>
+    <key>SUFeedURL</key>
+    <string>https://santhoshsunkara24.github.io/Lync/appcast.xml</string>
+    <key>SUPublicEDKey</key>
+    <string>dLT1ZwJN1hmYTvm04VyLPwF42m6TMAuBWQDEduHIxqA=</string>
+    <key>SUEnableAutomaticChecks</key>
+    <true/>
     <key>LSFileQuarantineEnabled</key>
     <true/>
 </dict>

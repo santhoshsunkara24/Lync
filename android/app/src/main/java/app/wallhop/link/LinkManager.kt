@@ -268,6 +268,8 @@ class LinkManager private constructor(private val context: Context) {
     // MARK: - Lifecycle
 
     init {
+        // The home screen widget follows the link and the Mac's battery.
+        app.wallhop.widget.MacWidget.follow(context, this, scope)
         // When the Mac reappears on the network (for example after it wakes), reconnect right away.
         discovery.onFound = { found ->
             val mac = store.get()
@@ -277,8 +279,8 @@ class LinkManager private constructor(private val context: Context) {
         scope.launch {
             kotlinx.coroutines.flow.combine(transfer, incomingTransfer) { out, incoming ->
                 when {
-                    out != null && out.phase == TransferPhase.Sending -> app.wallhop.glyph.Glyphs.Transfer.Moving(out.progress)
-                    incoming != null -> app.wallhop.glyph.Glyphs.Transfer.Moving(incoming.progress)
+                    out != null && out.phase == TransferPhase.Sending -> app.wallhop.glyph.Glyphs.Transfer.Moving(out.progress, outgoing = true)
+                    incoming != null -> app.wallhop.glyph.Glyphs.Transfer.Moving(incoming.progress, outgoing = false)
                     out?.phase == TransferPhase.Done -> app.wallhop.glyph.Glyphs.Transfer.Done
                     out?.phase == TransferPhase.Failed -> app.wallhop.glyph.Glyphs.Transfer.Stopped
                     else -> app.wallhop.glyph.Glyphs.Transfer.Idle
@@ -546,7 +548,7 @@ class LinkManager private constructor(private val context: Context) {
         lastBatterySent = -1
         sendStatus()
         sendTheme(session)
-        // Codes that waited while the Mac was away go across now, if still under five minutes old.
+        // Codes that waited while the Mac was away go across now, if still under ten minutes old.
         pendingCodes.drain(System.currentTimeMillis()).forEach { sendOtp(it.code, it.sender, it.app) }
         mainHandler.post { startWatchers(); media.resend() }
 
@@ -620,11 +622,12 @@ class LinkManager private constructor(private val context: Context) {
             // Replies, actions and dismissals only while notification mirroring is on in Lync. The
             // ack says why one didn't work (PROTOCOL.md, notif_reply ack codes).
             "notif_reply" -> {
+                // replyErr returns null when the reply went: that's success, not a missing key.
+                val key = message.string("key")
                 val err = when {
                     !notificationsOn -> "mirroring_off"
-                    else -> message.string("key")?.let {
-                        app.wallhop.otp.OtpNotificationListener.replyErr(context, it, message.bodyText)
-                    } ?: "gone"
+                    key == null -> "gone"
+                    else -> app.wallhop.otp.OtpNotificationListener.replyErr(context, key, message.bodyText)
                 }
                 message.string("id")?.let { session.send(ack(it, err)) }
             }
@@ -1024,6 +1027,9 @@ class LinkManager private constructor(private val context: Context) {
      */
     private suspend fun awaitPath(timeoutMs: Long): MacPath? {
         fun open(): MacPath? = session?.takeIf { !it.closed } ?: blePath?.takeIf { !it.closed }
+        // Woken from deep sleep by this very code or notification: bring Bluetooth up to date now
+        // (a stale tag, or a link the Mac slept on), rather than when its timers next run.
+        if (session?.closed != false) ble.refresh()
         open()?.let { return it }
         start()
         return withTimeoutOrNull(timeoutMs) {
@@ -1078,6 +1084,9 @@ class LinkManager private constructor(private val context: Context) {
         if (recentCodes.putIfAbsent(code, now) != null) return null
 
         return scope.launch {
+            // The phone may go back to deep sleep the moment the SMS is handled; stay awake while
+            // the Mac finds it (over Bluetooth that's a scan, a connection and a handshake).
+            val wake = keepAwake(30_000)
             val path = awaitPath(20_000)
             val id = UUID.randomUUID().toString()
             val ack = path?.let {
@@ -1093,7 +1102,7 @@ class LinkManager private constructor(private val context: Context) {
             } else {
                 // Not delivered: forget it, so the same code from another source (or the inbox
                 // scan after reconnecting) can still go across, and keep it with its time to send
-                // when the Mac comes back (if that's within five minutes of the code arriving).
+                // when the Mac comes back (if that's within ten minutes of the code arriving).
                 recentCodes.remove(code, now)
                 pendingCodes.add(PendingCodes.Code(code, sender, app, now))
                 // Activity says so, and a tap copies it here instead.
@@ -1106,7 +1115,19 @@ class LinkManager private constructor(private val context: Context) {
                     }
                 }
             }
+            release(wake)
         }
+    }
+
+    /** Keeps the CPU on for up to [ms] (a partial wake lock, never the screen), or null if it can't. */
+    private fun keepAwake(ms: Long): android.os.PowerManager.WakeLock? = runCatching {
+        context.getSystemService(android.os.PowerManager::class.java)
+            .newWakeLock(android.os.PowerManager.PARTIAL_WAKE_LOCK, "Lync:send")
+            .apply { setReferenceCounted(false); acquire(ms) }
+    }.getOrNull()
+
+    private fun release(wake: android.os.PowerManager.WakeLock?) {
+        runCatching { if (wake?.isHeld == true) wake.release() }
     }
 
     /** Mirrors a notification to the Mac. Dropped if the Mac isn't connected; notifications aren't queued. */
@@ -1120,8 +1141,15 @@ class LinkManager private constructor(private val context: Context) {
         canReply: Boolean,
         actions: List<Pair<String, Boolean>> = emptyList(),
     ) {
-        val path: MacPath = session?.takeIf { !it.closed } ?: blePath?.takeIf { !it.closed } ?: return
         scope.launch {
+            // Not kept for later, but given a moment: after deep sleep the Bluetooth link takes a
+            // few seconds to come back (see awaitPath), and this notification is why we woke.
+            val wake = keepAwake(15_000)
+            val path = awaitPath(10_000)
+            if (path == null) {
+                release(wake)
+                return@launch
+            }
             // Icons only over Wi-Fi: Bluetooth is kept to small messages.
             val icon = if (path is Session && iconsSent.add(packageName)) appIconPng(packageName) else null
             val message = Message.of(
@@ -1137,13 +1165,19 @@ class LinkManager private constructor(private val context: Context) {
                 body = icon ?: ByteArray(0),
             )
             runCatching { path.send(message) }.onFailure { if (icon != null) iconsSent.remove(packageName) }
+            release(wake)
         }
     }
 
     /** Tells the Mac about a call. Waits briefly for the link so a ringing call still shows. */
     fun sendCall(call: app.wallhop.calls.CallInfo) {
         scope.launch {
-            val path = awaitPath(if (call.state == "ringing") 6_000 else 2_000) ?: return@launch
+            val wake = keepAwake(10_000)
+            val path = awaitPath(if (call.state == "ringing") 8_000 else 2_000)
+            if (path == null) {
+                release(wake)
+                return@launch
+            }
             runCatching {
                 path.send(Message.of("call", "id" to call.id, "state" to call.state,
                     "number" to call.number, "name" to call.name, "sim" to call.sim))
@@ -1152,6 +1186,7 @@ class LinkManager private constructor(private val context: Context) {
                 record(ActivityEntry(UUID.randomUUID().toString(), ActivityEntry.Kind.Call,
                     "Missed call", call.name ?: call.number ?: "Unknown number"))
             }
+            release(wake)
         }
     }
 

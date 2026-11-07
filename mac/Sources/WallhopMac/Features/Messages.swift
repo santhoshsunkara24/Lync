@@ -392,7 +392,6 @@ final class MessagesWindowController: NSObject, NSWindowDelegate {
                 defer: false
             )
             window.title = "Lync — Texts"
-            CapturePrivacy.apply(window)
             window.titlebarAppearsTransparent = true
             // Same dark, phone-coloured style as the panel.
             window.appearance = NSAppearance(named: .darkAqua)
@@ -512,35 +511,37 @@ private struct ThreadRow: View {
     @EnvironmentObject var theme: ThemeStore
 
     var body: some View {
-        HStack(alignment: .top, spacing: 10) {
-            Avatar(name: thread.name, size: 34)
-            VStack(alignment: .leading, spacing: 2) {
-                HStack {
+        HStack(alignment: .top, spacing: WSpace.s) {
+            Avatar(name: thread.name, size: 32)
+            VStack(alignment: .leading, spacing: WSpace.xxs) {
+                HStack(spacing: WSpace.xs) {
                     Text(thread.title)
                         .font(.wh(13, thread.unread > 0 ? .semibold : .medium))
                         .lineLimit(1)
-                    Spacer(minLength: 4)
+                    Spacer(minLength: WSpace.xs)
                     Text(shortDate(thread.date))
-                        .font(.wh(11, .medium))
+                        .font(.wh(11, .medium).monospacedDigit())
                         .foregroundStyle(.secondary)
+                        .fixedSize()
                 }
-                HStack(alignment: .top) {
+                HStack(alignment: .top, spacing: WSpace.xs) {
                     Text(thread.snippet)
                         .font(.wh(12, .medium))
                         .foregroundStyle(.secondary)
                         .lineLimit(2)
-                    Spacer(minLength: 4)
+                    Spacer(minLength: WSpace.xs)
                     if thread.unread > 0 {
-                        Circle().fill(theme.theme.pale).frame(width: 8, height: 8).padding(.top, 4)
+                        Circle().fill(theme.theme.pale).frame(width: 8, height: 8).padding(.top, WSpace.xxs)
                             .accessibilityLabel("Unread")
                     }
                 }
             }
         }
-        .padding(.vertical, 4)
-        .padding(.horizontal, 6)
-        .rowHover(RoundedRectangle(cornerRadius: 8, style: .continuous))
-        .padding(.horizontal, -6)
+        .padding(.vertical, WSpace.xxs)
+        // The hover highlight reaches a little past the text, which stays on the list's edge.
+        .padding(.horizontal, WSpace.xs)
+        .rowHover(RoundedRectangle(cornerRadius: WRadius.row, style: .continuous))
+        .padding(.horizontal, -WSpace.xs)
     }
 }
 
@@ -572,13 +573,13 @@ private struct ConversationView: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     VStack(spacing: 0) {
-                    LazyVStack(spacing: 4) {
+                    LazyVStack(spacing: WSpace.xxs) {
                         ForEach(Array(model.messages.enumerated()), id: \.element.id) { index, message in
                             if showsDay(at: index) {
                                 Text(dayLabel(message.date))
                                     .font(.wh(11, .medium))
                                     .foregroundStyle(.secondary)
-                                    .padding(.vertical, 8)
+                                    .padding(.vertical, WSpace.xs)
                             }
                             Bubble(message: message, sender: model.currentThread?.title ?? model.recipientName ?? "Them",
                                    showSim: model.sims.count > 1, connected: connected) {
@@ -588,7 +589,7 @@ private struct ConversationView: View {
                             .transition(WMotion.transition(.offset(y: 16).combined(with: .opacity)))
                         }
                     }
-                    .padding(16)
+                    .padding(WSpace.m)
                     .animation(appending ? WMotion.animation(WMotion.smooth) : nil, value: model.messages.count)
                     // Where the end of the conversation is, compared with the bottom of the view.
                     Color.clear.frame(height: 1).id("end")
@@ -612,10 +613,10 @@ private struct ConversationView: View {
                             withMotion(WMotion.smooth) { proxy.scrollTo("end", anchor: .bottom) }
                             unseen = 0
                         } label: {
-                            Label(unseen == 1 ? "New message" : "\(unseen) new messages", systemImage: "arrow.down")
+                            Label { Text(unseen == 1 ? "New message" : "\(unseen) new messages") } icon: { IconImage("arrow.down") }
                         }
                         .buttonStyle(WPill(compact: true))
-                        .padding(.bottom, 10)
+                        .padding(.bottom, WSpace.xs)
                         .transition(WMotion.transition(.move(edge: .bottom).combined(with: .opacity)))
                     }
                 }
@@ -623,16 +624,16 @@ private struct ConversationView: View {
                     if model.loadingThread && model.messages.isEmpty {
                         ProgressView().controlSize(.small)
                     } else if let problem = model.threadProblem, model.messages.isEmpty, connected {
-                        VStack(spacing: 8) {
+                        VStack(spacing: WSpace.xs) {
                             Text(problem.title).font(.wh(13, .semibold))
                             if let detail = problem.detail {
                                 Text(detail).font(.wh(12, .medium)).foregroundStyle(.secondary).multilineTextAlignment(.center)
                             }
                             Button("Try again") { model.loadMessages() }
                                 .buttonStyle(WPill(prominent: false, compact: true))
-                                .padding(.top, 4)
+                                .padding(.top, WSpace.xxs)
                         }
-                        .padding(20)
+                        .padding(WSpace.l)
                     } else if model.selectedThread == nil && model.newRecipient == nil {
                         Text(model.threads.isEmpty ? "No conversation open" : "Choose a conversation")
                             .font(.wh(13, .medium)).foregroundStyle(.secondary)
@@ -668,8 +669,8 @@ private struct ConversationView: View {
                     .font(.wh(12, .medium))
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
-                    .padding(.top, 8)
-                    .padding(.horizontal, 16)
+                    .padding(.top, WSpace.xs)
+                    .padding(.horizontal, WSpace.m)
             }
             composer
         }
@@ -692,7 +693,7 @@ private struct ConversationView: View {
     }
 
     @ViewBuilder private var headerRow: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: WSpace.s) {
             if model.newRecipient != nil {
                 Text("To:").foregroundStyle(.secondary)
                 TextField("Name or phone number", text: Binding(
@@ -730,9 +731,9 @@ private struct ConversationView: View {
                     .buttonStyle(WPill(prominent: false, compact: true))
                     .help("Cancel the new message (Esc)")
             } else if let thread = model.currentThread {
-                Avatar(name: thread.name, size: 30)
-                VStack(alignment: .leading, spacing: 0) {
-                    Text(thread.title).font(.wh(14, .semibold))
+                Avatar(name: thread.name, size: 32)
+                VStack(alignment: .leading, spacing: WSpace.xxs) {
+                    Text(thread.title).font(.wh(14, .semibold)).lineLimit(1)
                     if thread.name != nil {
                         Text(thread.address).font(.wh(11, .medium)).foregroundStyle(.secondary)
                     }
@@ -740,12 +741,12 @@ private struct ConversationView: View {
             }
             Spacer()
         }
-        .padding(.horizontal, 16)
-        .frame(height: 52)
+        .padding(.horizontal, WSpace.m)
+        .frame(height: 56)
     }
 
     private var composer: some View {
-        HStack(alignment: .bottom, spacing: 8) {
+        HStack(alignment: .bottom, spacing: WSpace.xs) {
             if model.sims.count > 1 {
                 Picker("SIM", selection: Binding(
                     get: { model.selectedSim ?? model.sims[0].id },
@@ -760,8 +761,8 @@ private struct ConversationView: View {
             TextField("Text message", text: $draft, axis: .vertical)
                 .textFieldStyle(.plain)
                 .lineLimit(1...6)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
+                .padding(.horizontal, WSpace.s)
+                .padding(.vertical, WSpace.xs)
                 .background(Capsule().fill(Color.white.opacity(0.1)))
                 .focused($composerFocused)
                 .onSubmit(send)
@@ -770,7 +771,7 @@ private struct ConversationView: View {
                 NudgeImage("arrow.up")
                     .font(.wh(13, .bold))
                     .foregroundStyle(canSend ? theme.theme.onPale : Color.white.opacity(0.5))
-                    .frame(width: 34, height: 34)
+                    .frame(width: 32, height: 32)
                     .background(Circle().fill(canSend ? theme.theme.pale : Color.white.opacity(0.12)))
             }
             .buttonStyle(WShapePress(shape: Circle()))
@@ -779,7 +780,7 @@ private struct ConversationView: View {
             .accessibilityLabel("Send")
             .keyboardShortcut(.return, modifiers: .command)
         }
-        .padding(12)
+        .padding(WSpace.s)
         .disabled(!connected)
     }
 
@@ -813,15 +814,15 @@ private struct Bubble: View {
     var body: some View {
         HStack {
             if message.outgoing { Spacer(minLength: 80) }
-            VStack(alignment: message.outgoing ? .trailing : .leading, spacing: 2) {
+            VStack(alignment: message.outgoing ? .trailing : .leading, spacing: WSpace.xxs) {
                 Text(message.body)
                     .font(.wh(13, .medium))
                     .textSelection(.enabled)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
+                    .padding(.horizontal, WSpace.s)
+                    .padding(.vertical, WSpace.xs)
                     .foregroundStyle(message.outgoing ? theme.theme.onPale : Color.white)
                     .background(
-                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        RoundedRectangle(cornerRadius: WRadius.field, style: .continuous)
                             .fill(message.outgoing ? theme.theme.pale : Color.white.opacity(0.1))
                     )
                     // Sending: a little smaller and paler until the phone confirms it, then settles.
@@ -840,7 +841,7 @@ private struct Bubble: View {
                         if message.failed && message.outgoing && connected { Button("Try again", action: retry) }
                         Button("Copy") { Clipboard.copy(message.body) }
                     }
-                HStack(spacing: 6) {
+                HStack(spacing: WSpace.xxs) {
                     if message.failed {
                         // A text that wasn't confirmed may have gone: "Send again", after checking.
                         Label { Text(message.unconfirmed ? (message.error?.title ?? "Not confirmed")
@@ -901,6 +902,7 @@ private struct Avatar: View {
 
 /// Matches from the phone's contacts under the "To:" field: name and number, ↑/↓ to choose.
 struct ContactResults: View {
+    private static let rowHeight: CGFloat = 32
     @ObservedObject var model: MessagesModel
     @Binding var highlighted: Int?
     let pick: (ContactMatch) -> Void
@@ -908,42 +910,43 @@ struct ContactResults: View {
 
     var body: some View {
         if let note = model.contactsNote, model.contactResults.isEmpty {
-            HStack(spacing: 8) {
+            HStack(spacing: WSpace.xs) {
                 NudgeImage("person.crop.circle.badge.exclamationmark").foregroundStyle(WTheme.secondary)
                 Text([note.title, note.detail].compactMap { $0 }.joined(separator: " · "))
                     .font(.wh(12, .medium)).foregroundStyle(WTheme.secondary)
                 Spacer()
             }
-            .padding(.horizontal, 16).padding(.bottom, 10)
+            .padding(.horizontal, WSpace.m).padding(.bottom, WSpace.xs)
         } else if !model.contactResults.isEmpty {
             ScrollViewReader { proxy in
                 ScrollView {
                     VStack(spacing: 0) {
                         ForEach(Array(model.contactResults.enumerated()), id: \.element.id) { index, contact in
                             Button { pick(contact) } label: {
-                                HStack(spacing: 10) {
+                                HStack(spacing: WSpace.xs) {
                                     Text(contact.name).font(.wh(13, .semibold)).lineLimit(1)
-                                    Spacer(minLength: 8)
-                                    Text(contact.number).font(.wh(12, .medium)).foregroundStyle(WTheme.secondary).lineLimit(1)
+                                    Spacer(minLength: WSpace.xs)
+                                    Text(contact.number).font(.wh(12, .medium).monospacedDigit()).foregroundStyle(WTheme.secondary).lineLimit(1)
+                                        .layoutPriority(1)
                                 }
-                                .padding(.horizontal, 12).frame(height: 34)
-                                .background(RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .padding(.horizontal, WSpace.s).frame(height: Self.rowHeight)
+                                .background(RoundedRectangle(cornerRadius: WRadius.row, style: .continuous)
                                     .fill(highlighted == index ? Color.white.opacity(0.14) : Color.clear))
                                 .contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)
-                            .rowHover(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                            .rowHover(RoundedRectangle(cornerRadius: WRadius.row, style: .continuous))
                             .id(index)
                             .accessibilityLabel("\(contact.name), \(contact.number)")
                             .accessibilityAddTraits(highlighted == index ? .isSelected : [])
                         }
                     }
-                    .padding(6)
+                    .padding(WSpace.xxs)
                 }
-                .frame(maxHeight: min(CGFloat(model.contactResults.count) * 34 + 12, 220))
-                .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(theme.theme.card))
-                .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(WTheme.edge, lineWidth: 1))
-                .padding(.horizontal, 12).padding(.bottom, 10)
+                .frame(maxHeight: min(CGFloat(model.contactResults.count) * Self.rowHeight + WSpace.xxs * 2, 220))
+                .background(RoundedRectangle(cornerRadius: WRadius.small, style: .continuous).fill(theme.theme.card))
+                .overlay(RoundedRectangle(cornerRadius: WRadius.small, style: .continuous).strokeBorder(WTheme.edge, lineWidth: 1))
+                .padding(.horizontal, WSpace.s).padding(.bottom, WSpace.xs)
                 .onChange(of: highlighted) { _, index in if let index { proxy.scrollTo(index) } }
                 .accessibilityElement(children: .contain)
                 .accessibilityLabel("Contacts")
@@ -959,13 +962,13 @@ struct MessagesEmptyState: View {
     let text: String
 
     var body: some View {
-        VStack(spacing: 8) {
+        VStack(spacing: WSpace.xs) {
             NudgeImage(symbol).font(.wh(22, .medium)).foregroundStyle(WTheme.secondary)
-                .frame(width: 52, height: 52).background(Circle().fill(WTheme.chip))
+                .frame(width: 48, height: 48).background(Circle().fill(WTheme.chip))
             Text(title).font(.wh(13, .semibold))
             Text(text).font(.wh(12, .medium)).foregroundStyle(WTheme.secondary).multilineTextAlignment(.center)
         }
-        .padding(20)
+        .padding(WSpace.l)
         .frame(maxWidth: .infinity)
     }
 }
@@ -978,17 +981,17 @@ private struct StatusNote: View {
     var prominent = false
 
     var body: some View {
-        VStack(spacing: 8) {
+        VStack(spacing: WSpace.xs) {
             Spacer()
             NudgeImage(symbol).font(.wh(24, .medium)).foregroundStyle(.secondary)
             Text(title).font(.wh(13, .semibold)).multilineTextAlignment(.center)
             Text(text).font(.wh(12, .medium)).foregroundStyle(.secondary).multilineTextAlignment(.center)
             if let action {
-                Button(action.0, action: action.1).buttonStyle(WPill(prominent: prominent, compact: true)).padding(.top, 4)
+                Button(action.0, action: action.1).buttonStyle(WPill(prominent: prominent, compact: true)).padding(.top, WSpace.xxs)
             }
             Spacer()
         }
-        .padding(20)
+        .padding(WSpace.l)
         .frame(maxWidth: .infinity)
     }
 }

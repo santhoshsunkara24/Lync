@@ -195,18 +195,29 @@ final class BluetoothLink: NSObject {
         queue.asyncAfter(deadline: .now() + 1) { [weak self] in self?.scan() }
     }
 
-    /// The paired phone whose tag this is, for the current 15-minute window or either neighbour.
+    /// The paired phone whose tag this is. A phone's tag changes every 15 minutes, but only while
+    /// it's awake: after hours in deep sleep it still advertises the tag it had when it dozed off.
+    /// So any tag from the last day counts, not just the current window and its neighbours. Still
+    /// only the paired phones' tags: everything else is ignored. The valid tags are worked out
+    /// once per window, not per sighting.
     private func phone(forTag tag: Data) -> PairedPhone? {
         guard tag.count == BleWire.tagSize else { return nil }
         let window = BleWire.window(Date())
-        for phone in paired.all {
-            guard let key = tagKey(for: phone) else { continue }
-            for w in [window, window - 1, window + 1] where Handshake.constantTimeEqual(BleWire.tag(key: key, window: w), tag) {
-                return phone
+        let phones = paired.all
+        if validTags.window != window || validTags.phones != phones.map(\.publicKey) {
+            var tags: [Data: PairedPhone] = [:]
+            for phone in phones {
+                guard let key = tagKey(for: phone) else { continue }
+                for w in (window - Self.tagLookback)...(window + 1) { tags[BleWire.tag(key: key, window: w)] = phone }
             }
+            validTags = (window, phones.map(\.publicKey), tags)
         }
-        return nil
+        return validTags.tags[tag]
     }
+
+    /// How many 15-minute windows back a tag still counts: a day.
+    private static let tagLookback: Int64 = 96
+    private var validTags: (window: Int64, phones: [Data], tags: [Data: PairedPhone]) = (-1, [], [:])
 
     private func tagKey(for phone: PairedPhone) -> SymmetricKey? {
         if let key = tagKeys[phone.publicKey] { return key }

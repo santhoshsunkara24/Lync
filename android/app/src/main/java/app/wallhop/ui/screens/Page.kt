@@ -49,6 +49,7 @@ import androidx.compose.ui.unit.dp
 import app.wallhop.ui.design.LocalStagger
 import app.wallhop.ui.design.rememberStaggerClock
 import app.wallhop.ui.design.staggerIn
+import app.wallhop.ui.design.Space
 import app.wallhop.ui.design.Springs
 import app.wallhop.ui.design.Type
 import app.wallhop.ui.design.Wallhop
@@ -56,8 +57,11 @@ import app.wallhop.ui.design.Wallhop
 /** Widest the content column gets on tablets and in landscape. */
 val MaxContentWidth: Dp = 640.dp
 
+/** Space between the screen's edges and its content. */
+val ScreenGutter: Dp = Space.m
+
 /** Height of the floating tab bar plus its gap, so the last row can scroll clear of it. */
-val TabBarClearance: Dp = 64.dp + 12.dp + 24.dp
+val TabBarClearance: Dp = 64.dp + Space.s + Space.l
 
 /**
  * A scrolling page in the approved style (DESIGN.md §5.1): the Material You colour at the top
@@ -104,7 +108,7 @@ fun Page(
         LazyColumn(
             state = state,
             modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(start = start + extra + 20.dp, end = end + extra + 20.dp, top = statusBar + 14.dp, bottom = navBar + TabBarClearance),
+            contentPadding = PaddingValues(start = start + extra + ScreenGutter, end = end + extra + ScreenGutter, top = statusBar + Space.m, bottom = navBar + TabBarClearance),
         ) {
             item(key = "title") {
                 Column(
@@ -116,10 +120,10 @@ fun Page(
                                 else 1f - (state.firstVisibleItemScrollOffset / (collapseAt * 0.7f)).coerceIn(0f, 1f)
                         }
                         .fillMaxWidth()
-                        .padding(bottom = 22.dp),
+                        .padding(bottom = Space.l),
                 ) {
                     if (leading != null) {
-                        Spacer(Modifier.height(with(density) { pinnedHeight.toDp() } + 18.dp))
+                        Spacer(Modifier.height(with(density) { pinnedHeight.toDp() } + Space.m))
                     }
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(title, style = Type.pageTitle, color = colors.label, modifier = Modifier.weight(1f).semantics { heading() })
@@ -127,7 +131,7 @@ fun Page(
                     }
                     if (subtitle != null) {
                         // White at 78 %: the subtitle sits on the brightest part of the gradient.
-                        Text(subtitle, style = Type.subheadline, color = Color.White.copy(alpha = 0.78f), modifier = Modifier.padding(top = 6.dp))
+                        Text(subtitle, style = Type.subheadline, color = Color.White.copy(alpha = 0.78f), modifier = Modifier.padding(top = Space.xxs))
                     }
                 }
             }
@@ -151,11 +155,11 @@ fun Page(
             val scope = androidx.compose.runtime.rememberCoroutineScope()
             val reduceMotion = Wallhop.a11y.reduceMotion
             Text(title, style = Type.headline, color = colors.label, maxLines = 1, overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.align(Alignment.TopCenter).padding(top = statusBar + 6.dp)
+                modifier = Modifier.align(Alignment.TopCenter).padding(top = statusBar + Space.xs)
                     .then(if (collapsed) Modifier.clickable(
                         interactionSource = null, indication = null, onClickLabel = "Scroll to top",
                     ) { scope.launch { if (reduceMotion) state.scrollToItem(0) else state.animateScrollToItem(0) } } else Modifier)
-                    .padding(horizontal = 16.dp, vertical = 12.dp))
+                    .padding(horizontal = Space.m, vertical = Space.s))
         }
         // The page's buttons stay where the thumb expects them while the content scrolls under:
         // Back (and its partner) always; a lone button beside the large title joins the small one.
@@ -163,7 +167,7 @@ fun Page(
             Row(
                 Modifier
                     .fillMaxWidth()
-                    .padding(start = start + extra + 20.dp, end = end + extra + 20.dp, top = statusBar + 14.dp)
+                    .padding(start = start + extra + ScreenGutter, end = end + extra + ScreenGutter, top = statusBar + Space.m)
                     .onSizeChanged { pinnedHeight = it.height },
                 verticalAlignment = Alignment.CenterVertically,
             ) {
@@ -175,7 +179,7 @@ fun Page(
             Box(
                 Modifier
                     .align(Alignment.TopEnd)
-                    .padding(end = end + extra + 20.dp, top = statusBar + 10.dp)
+                    .padding(end = end + extra + ScreenGutter, top = statusBar + Space.xs)
                     .graphicsLayer { alpha = fade },
             ) { trailing() }
         }
@@ -196,9 +200,9 @@ fun Page(
 @Composable
 fun SectionHeader(text: String) {
     Row(
-        Modifier.fillMaxWidth().padding(start = 4.dp, end = 4.dp, bottom = 10.dp),
+        Modifier.fillMaxWidth().padding(bottom = Space.xs),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        horizontalArrangement = Arrangement.spacedBy(Space.xs),
     ) {
         Text(text, style = Type.sectionTitle, color = Wallhop.colors.label, modifier = Modifier.semantics { heading() })
     }

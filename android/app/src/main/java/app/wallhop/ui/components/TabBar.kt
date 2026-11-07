@@ -31,6 +31,7 @@ import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import app.wallhop.ui.design.Space
 import app.wallhop.ui.design.Springs
 import app.wallhop.ui.design.Wallhop
 import app.wallhop.ui.design.capsule
@@ -62,11 +63,11 @@ fun PillNavBar(
             // Not stretched across a tablet: the same 640 dp column as the content.
             .widthIn(max = app.wallhop.ui.screens.MaxContentWidth)
             .fillMaxWidth()
-            .padding(horizontal = 16.dp)
+            .padding(horizontal = Space.m)
             .height(64.dp)
             .clip(capsule())
             .background(lerp(Wallhop.home.card, Color.White, 0.06f))
-            .padding(6.dp),
+            .padding(Space.xs),
     ) {
         val slot = maxWidth / tabs.size
         val slotPx = with(LocalDensity.current) { slot.toPx() }

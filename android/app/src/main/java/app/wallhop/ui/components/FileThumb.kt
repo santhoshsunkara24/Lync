@@ -30,6 +30,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import app.wallhop.ui.design.Space
 import app.wallhop.ui.design.Type
 import app.wallhop.ui.design.WIcons
 import kotlinx.coroutines.Dispatchers
@@ -110,8 +111,8 @@ private fun SingleThumb(uri: Uri?, mime: String, size: Dp, modifier: Modifier = 
                 Text(
                     it, color = Color.White,
                     style = Type.caption2.copy(fontSize = (size.value * 0.17f).coerceAtLeast(8f).sp, fontWeight = FontWeight.SemiBold),
-                    modifier = Modifier.align(Alignment.BottomEnd).padding(3.dp)
-                        .clip(RoundedCornerShape(3.dp)).background(Color.Black.copy(alpha = 0.55f)).padding(horizontal = 3.dp, vertical = 1.dp),
+                    modifier = Modifier.align(Alignment.BottomEnd).padding(Space.xxs)
+                        .clip(RoundedCornerShape(4.dp)).background(Color.Black.copy(alpha = 0.55f)).padding(horizontal = Space.xxs, vertical = 1.dp),
                 )
             }
         }

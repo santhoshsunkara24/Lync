@@ -32,12 +32,12 @@ object TransferQueue {
 
 /**
  * Codes that couldn't reach the Mac (it was away for more than 20 s). Kept with their time and
- * sent on reconnect while under five minutes old; older ones are dropped, a code that late is no use.
+ * sent on reconnect while under ten minutes old; older ones are dropped, a code that late is no use.
  */
 class PendingCodes(private val maxAgeMs: Long = MAX_AGE_MS) {
     companion object {
         /** A code older than this is no use any more. */
-        const val MAX_AGE_MS = 5 * 60_000L
+        const val MAX_AGE_MS = 10 * 60_000L
     }
 
     data class Code(val code: String, val sender: String, val app: String, val time: Long)

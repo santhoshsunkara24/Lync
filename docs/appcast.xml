@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The Mac app's update feed, read by Sparkle once a day. Written by mac/scripts/release-mac.sh. -->
+<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
+  <channel>
+    <title>Lync for Mac</title>
+    <link>https://santhoshsunkara24.github.io/Lync/appcast.xml</link>
+  </channel>
+</rss>

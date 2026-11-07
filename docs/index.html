@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lync</title>
+<meta name="description" content="Codes, calls, texts and files from your Android phone, in your Mac's notch. No account, no cloud.">
+<link rel="icon" href="assets/lync-icon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Figtree:wght@400;500;600&family=Galindo&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --top: #2f6b4e; --mid: #183a2b; --ink: #0b0b0c;
+    --card: rgba(255, 255, 255, 0.07); --line: rgba(255, 255, 255, 0.1);
+    --text: #ffffff; --soft: rgba(255, 255, 255, 0.72); --faint: rgba(255, 255, 255, 0.5);
+    --pale: #cfe9d9; --on-pale: #1b3a2a; --mint: #7fe3b0;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; color: var(--text); font: 400 16px/1.6 Figtree, system-ui, sans-serif;
+    background: var(--ink) linear-gradient(180deg, var(--top) 0, var(--mid) 520px, var(--ink) 980px) no-repeat;
+    -webkit-font-smoothing: antialiased;
+  }
+  main { max-width: 880px; margin: 0 auto; padding: 56px 20px 64px; }
+  a { color: var(--mint); }
+  h1, h2 { font-family: Galindo, Figtree, sans-serif; font-weight: 400; margin: 0; }
+  h1 { font-size: clamp(44px, 9vw, 64px); line-height: 1.05; }
+  h2 { font-size: 28px; line-height: 1.2; margin-bottom: 16px; }
+  .hero { display: flex; flex-direction: column; align-items: flex-start; gap: 20px; }
+  .hero img { width: 88px; height: 88px; border-radius: 22px; }
+  .lead { font-size: 20px; line-height: 1.5; color: var(--soft); max-width: 560px; margin: 0; }
+  .lead strong { color: var(--text); font-weight: 600; }
+  .downloads { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; margin-top: 36px; }
+  .download { background: var(--card); border-radius: 28px; padding: 22px; display: flex; flex-direction: column; gap: 6px; }
+  .download .label { font-size: 13px; font-weight: 600; color: var(--faint); }
+  .download .name { font-size: 22px; font-weight: 600; }
+  .download .note { font-size: 14px; color: var(--soft); margin: 0 0 12px; }
+  .button {
+    display: inline-flex; align-items: center; justify-content: center; height: 48px; padding: 0 22px;
+    border-radius: 999px; font-weight: 600; font-size: 15px; text-decoration: none; margin-top: auto;
+    background: var(--pale); color: var(--on-pale);
+  }
+  .button.quiet { background: rgba(255, 255, 255, 0.13); color: var(--text); }
+  section { margin-top: 64px; }
+  .features { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
+  .feature { background: var(--card); border-radius: 24px; padding: 20px; }
+  .feature h3 { font-size: 16px; font-weight: 600; margin: 0 0 4px; }
+  .feature p { margin: 0; color: var(--soft); font-size: 15px; }
+  ol.steps { list-style: none; counter-reset: step; padding: 0; margin: 0; display: grid; gap: 12px; }
+  ol.steps li {
+    counter-increment: step; background: var(--card); border-radius: 24px; padding: 18px 20px 18px 64px;
+    position: relative; color: var(--soft);
+  }
+  ol.steps li strong { color: var(--text); font-weight: 600; }
+  ol.steps li::before {
+    content: counter(step); position: absolute; left: 20px; top: 18px; width: 28px; height: 28px;
+    border-radius: 50%; background: var(--pale); color: var(--on-pale); font-weight: 600; font-size: 14px;
+    display: flex; align-items: center; justify-content: center;
+  }
+  /* A drawing of the Privacy & Security row, since the real one only shows after a first try. */
+  .settings {
+    margin-top: 14px; background: #1e1e20; border: 1px solid var(--line); border-radius: 16px;
+    padding: 14px 16px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; font-size: 14px;
+  }
+  .settings span { flex: 1 1 220px; color: var(--soft); }
+  .settings b {
+    flex: none; background: #3a3a3d; color: #fff; font-weight: 500; border-radius: 8px; padding: 5px 12px;
+  }
+  footer { margin-top: 72px; color: var(--faint); font-size: 14px; display: flex; gap: 20px; flex-wrap: wrap; }
+  footer a { color: var(--soft); }
+</style>
+</head>
+<body>
+<main>
+  <div class="hero">
+    <img src="assets/lync-icon.png" alt="">
+    <h1>Lync</h1>
+    <p class="lead">Your Android phone and your Mac, together. <strong>Codes already copied, calls, texts and files</strong>, right in your Mac's notch. No account, no sign-up, no cloud.</p>
+  </div>
+
+  <div class="downloads">
+    <div class="download">
+      <span class="label">For your Mac</span>
+      <span class="name">Lync for Mac</span>
+      <p class="note">macOS 14 or later. Free. Updates itself after you install it once.</p>
+      <a class="button" href="https://github.com/santhoshsunkara24/Lync/releases/latest">Download for Mac</a>
+    </div>
+    <div class="download">
+      <span class="label">For your phone</span>
+      <span class="name">Lync for Android</span>
+      <p class="note">Android 10 or later. Free, on Google Play.</p>
+      <a class="button quiet" href="https://play.google.com/store/apps/details?id=com.santhoshsunkara.lync">Get it on Google Play</a>
+    </div>
+  </div>
+
+  <section>
+    <h2>What it does</h2>
+    <div class="features">
+      <div class="feature"><h3>One-time codes, already copied</h3><p>A login code arrives on your phone, and it's on your Mac's clipboard before you pick the phone up.</p></div>
+      <div class="feature"><h3>Calls in the notch</h3><p>See who's calling and answer or decline without reaching for your phone.</p></div>
+      <div class="feature"><h3>Texts and notifications</h3><p>Read and reply from your Mac, for the apps you choose.</p></div>
+      <div class="feature"><h3>Send anything</h3><p>Photos, files and links both ways: share from your phone, or drop on the notch.</p></div>
+      <div class="feature"><h3>Away from Wi-Fi too</h3><p>Not on the same Wi-Fi? Codes, calls and notifications still arrive over Bluetooth.</p></div>
+      <div class="feature"><h3>Private by design</h3><p>Your phone talks only to your own Mac, end-to-end encrypted. Nothing goes to a server.</p></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Install on your Mac</h2>
+    <ol class="steps">
+      <li><strong>Download Lync.</strong> Open the DMG and drag Lync into Applications.</li>
+      <li><strong>Open it once from Settings.</strong> Lync is free and isn't sold through Apple, so the first time you open it macOS says it can't check it. Click <strong>Done</strong>, then open System Settings › Privacy &amp; Security, scroll down and click <strong>Open Anyway</strong>.
+        <div class="settings" aria-hidden="true"><span>"Lync" was blocked to protect your Mac.</span><b>Open Anyway</b></div>
+      </li>
+      <li><strong>Pair your phone.</strong> Install Lync on your phone and scan the code your Mac shows. That's it: no account to make.</li>
+      <li><strong>Updates come by themselves.</strong> Lync checks for new versions once a day and installs them in one click. You never download it again.</li>
+    </ol>
+  </section>
+
+  <footer>
+    <span>Free and open source</span>
+    <a href="PRIVACY">Privacy policy</a>
+    <a href="https://github.com/santhoshsunkara24/Lync">Source code</a>
+  </footer>
+</main>
+</body>
+</html>

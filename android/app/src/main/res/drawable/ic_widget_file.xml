@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- WIcons.File for the home screen widget, drawn white and tinted in code. Same paths as ui/design/WIcons.kt. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp" android:height="24dp"
+    android:viewportWidth="24" android:viewportHeight="24">
+    <path android:fillColor="#FFFFFFFF" android:fillType="evenOdd" android:pathData="M20 16.9C19.991 18.618 19.615 19.967 18.791 20.791C17.967 21.615 16.618 21.991 14.9 22L9.1 22C7.382 21.991 6.033 21.615 5.209 20.791C4.385 19.967 4.009 18.618 4 16.9L4 7.1C4.009 5.382 4.385 4.033 5.209 3.209C6.033 2.385 7.382 2.009 9.1 2L12.941 2C12.822 2.133 12.75 2.308 12.75 2.5L12.75 5.1C12.771 6.325 13.155 7.466 13.845 8.155C14.534 8.845 15.675 9.229 16.9 9.25L19.5 9.25C19.692 9.25 19.867 9.178 20 9.059ZM16.9 7.75C15.925 7.771 15.366 7.555 14.905 7.095C14.445 6.634 14.229 6.075 14.25 5.1L14.25 2.543L19.457 7.75Z" />
+</vector>

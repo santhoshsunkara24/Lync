@@ -22,6 +22,7 @@ import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
+import app.wallhop.ui.design.Space
 import app.wallhop.ui.design.Type
 import app.wallhop.ui.design.Wallhop
 import app.wallhop.ui.design.capsule
@@ -63,8 +64,8 @@ fun WButton(
         modifier = modifier
             .then(surface)
             .tappable(source, onClick = onClick)
-            .defaultMinSize(minHeight = 52.dp)
-            .padding(horizontal = 22.dp),
+            .defaultMinSize(minHeight = 48.dp)
+            .padding(horizontal = Space.l),
         contentAlignment = Alignment.Center,
     ) {
         Text(
@@ -117,6 +118,6 @@ fun TextAction(text: String, onClick: () -> Unit, bold: Boolean = false, enabled
         modifier = Modifier
             .tappable(source, enabled = enabled, onClick = onClick)
             .defaultMinSize(minWidth = 48.dp, minHeight = 48.dp)
-            .padding(horizontal = 4.dp, vertical = 13.dp),
+            .padding(horizontal = Space.xxs, vertical = Space.s),
     )
 }

@@ -1,6 +1,7 @@
 package app.wallhop.ui.screens
 
 import android.content.Context
+import app.wallhop.ui.design.Space
 import app.wallhop.ui.design.predictiveBack
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -34,7 +35,6 @@ private fun hasGlyphSdk(): Boolean = runCatching { Class.forName("com.nothing.ke
 private fun credits(): List<Credit> = buildList {
     add(Credit("Figtree", "SIL Open Font License 1.1", text = R.raw.license_figtree))
     add(Credit("Galindo", "SIL Open Font License 1.1", text = R.raw.license_galindo))
-    add(Credit("Phosphor Icons", "MIT License", text = R.raw.license_phosphor))
     add(Credit("AndroidX and Jetpack Compose", "Apache License 2.0", url = APACHE))
     add(Credit("ZXing", "Apache License 2.0", url = APACHE))
     add(Credit("Tink", "Apache License 2.0", url = APACHE))
@@ -87,7 +87,7 @@ private fun showLicence(overlays: Overlays, context: Context, name: String, res:
             color = Wallhop.colors.labelSecondary,
             modifier = Modifier.fillMaxWidth().heightIn(max = 520.dp).verticalScroll(rememberScrollState()),
         )
-        Spacer(Modifier.height(8.dp))
+        Spacer(Modifier.height(Space.xs))
     }
 }
 

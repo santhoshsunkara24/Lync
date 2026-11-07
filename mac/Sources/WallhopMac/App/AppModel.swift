@@ -108,6 +108,33 @@ struct FileDragInfo: Equatable {
     }
 }
 
+/// How long a toast's button has left: full at 1, empty at 0. Stopped at `paused` while the
+/// pointer rests on the toast.
+/// A call in the Notifications list.
+struct CallLogEntry: Identifiable, Equatable {
+    enum Outcome: Equatable {
+        case ringing, onCall, answered, declined, missed
+        /// Still happening: Clear all leaves it.
+        var isLive: Bool { self == .ringing || self == .onCall }
+    }
+
+    let id: String
+    let caller: String
+    let sim: String?
+    let date: Date
+    var outcome: Outcome
+}
+
+struct ToastClock: Equatable {
+    var ends: Date
+    var length: TimeInterval
+    var paused: Double?
+
+    func left(at now: Date) -> Double {
+        paused ?? min(max(ends.timeIntervalSince(now) / length, 0), 1)
+    }
+}
+
 /// A short message at the bottom of the open panel, optionally with a button (Undo, Try again…).
 /// A problem has a second line saying what to do.
 struct Toast: Equatable {
@@ -199,7 +226,12 @@ final class AppModel: ObservableObject {
     /// problem replaces it.
     @Published private(set) var outgoingFailed: String?
     @Published private(set) var notifications: [PhoneNotification] = []
+    /// Calls for the Notifications list, newest first: ringing, on a call, answered, declined or
+    /// missed. On this Mac only, like the notifications it sits with; not kept across restarts.
+    @Published private(set) var callLog: [CallLogEntry] = []
     @Published private(set) var call: PhoneCall?
+    /// The call whose card was closed with ✕: it doesn't come back for the same call and state.
+    private var dismissedCall: (id: String, state: PhoneCall.State)?
     @Published private(set) var nowPlaying: NowPlaying?
     @Published private(set) var ringing = false
     private var lowBatteryWarned = false
@@ -230,6 +262,8 @@ final class AppModel: ObservableObject {
     @Published private(set) var dragApproach: Double = 0
     /// Feedback shown inside the panel while it's open (the overlay is hidden then).
     @Published private(set) var toast: Toast?
+    /// The time left to press the toast's button (Undo), drawn as a ring that runs down on it.
+    @Published private(set) var toastClock: ToastClock?
     /// The paired phone (id) whose Forget button is waiting for confirmation in Settings.
     @Published var confirmingForget: String?
     /// Bumped when files are dropped on the notch or icon: the drop card pulses before it goes.
@@ -244,10 +278,6 @@ final class AppModel: ObservableObject {
 
     @Published var showNotifications: Bool {
         didSet { UserDefaults.standard.set(showNotifications, forKey: "showNotifications") }
-    }
-    /// Keeps Lync out of screenshots, screen recordings and screen sharing (on by default).
-    @Published var hideFromCapture: Bool = CapturePrivacy.hidden {
-        didSet { CapturePrivacy.hidden = hideFromCapture }
     }
     /// Also hides notification titles and text previews in Recent.
     @Published var hideNotificationText: Bool {
@@ -319,7 +349,7 @@ final class AppModel: ObservableObject {
         expiryTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
             guard let self else { return }
             // Something else was copied since the code: it's no longer on the clipboard.
-            if let count = self.codeChangeCount, NSPasteboard.general.changeCount != count { self.forgetClipboardCode() }
+            if let count = self.codeChangeCount, Clipboard.general.changeCount != count { self.forgetClipboardCode() }
             self.objectWillChange.send() // Re-render so expired codes get masked.
         }
     }
@@ -419,15 +449,15 @@ final class AppModel: ObservableObject {
     /// Restarts the "waited a while" clock: ~30 s without a Wi‑Fi connection adds the likely cause.
     private func restartWaitClock() {
         waitedLong = false
+        waitWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, self.connectedPhone == nil else { return }
+            self.waitedLong = true
             // Only a firewall that's really on and blocking gets named as the cause.
             DispatchQueue.global(qos: .utility).async {
                 let blocks = Firewall.blocksLync()
                 DispatchQueue.main.async { [weak self] in self?.firewallBlocks = blocks }
             }
-        waitWork?.cancel()
-        let work = DispatchWorkItem { [weak self] in
-            guard let self, self.connectedPhone == nil else { return }
-            self.waitedLong = true
         }
         waitWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 30, execute: work)
@@ -620,6 +650,8 @@ final class AppModel: ObservableObject {
             if let phone, was == nil, connectedPhone == nil {
                 show(.quiet(symbol: "dot.radiowaves.left.and.right", text: "\(phone.name) · over Bluetooth"), for: 1.8)
             }
+            // Over Bluetooth it's still your phone: keep its colours (the last ones it sent).
+            if phone != nil { themeStore.phoneConnected() } else if connectedPhone == nil { themeStore.phoneDisconnected() }
             if (phone == nil) != (was == nil), connectedPhone == nil { restartWaitClock() }
 
         case .ringStopped:
@@ -631,7 +663,7 @@ final class AppModel: ObservableObject {
                 macInfo.phoneDisconnected()
                 connectedPhone = nil
                 connectedAt = nil
-                themeStore.phoneDisconnected()
+                if bluetoothPhone == nil { themeStore.phoneDisconnected() }
                 battery = nil
                 nowPlaying = nil
                 ringing = false
@@ -665,6 +697,12 @@ final class AppModel: ObservableObject {
             show(.text(text), for: copyTextAutomatically ? 4 : 6)
 
         case .otp(let code, let sender, _):
+            // The same code again within two minutes (sent twice when its first ack was lost, e.g.
+            // across sleep): it's already on the clipboard and in Recent, so no second card.
+            if activity.contains(where: { item in
+                if case .otp(let seen, _, _) = item.payload { return seen == code && Date().timeIntervalSince(item.date) < 120 }
+                return false
+            }) { break }
             let item = ActivityItem(id: UUID().uuidString, date: Date(),
                                     payload: .otp(code: code, sender: sender,
                                                   expiresAt: Date().addingTimeInterval(Self.otpLifetime)))
@@ -772,21 +810,19 @@ final class AppModel: ObservableObject {
 
         case .call(let call):
             if self.call?.id != call.id || call.state == .ended { callProblem = nil }
+            logCall(call)
             switch call.state {
-            case .ringing:
+            case .ringing, .active:
                 self.call = call
-                show(.call(call.id), for: nil)
-            case .active:
-                self.call = call
-                show(.call(call.id), for: nil) // Stays with an End button until the call ends.
+                // Stays (with Answer, or End) until the call ends or the card is closed with ✕.
+                if dismissedCall?.id != call.id || dismissedCall?.state != call.state { show(.call(call.id), for: nil) }
             case .ended:
                 if self.call?.id == call.id { self.call = nil }
                 queued.removeAll { $0.card == .call(call.id) }
                 if live == .call(call.id) { hideLive() }
             case .missed:
                 self.call = call
-                insert(ActivityItem(id: call.id, date: Date(), payload: .missedCall(caller: call.displayName, sim: call.sim)))
-                show(.call(call.id), for: 5)
+                show(.call(call.id), for: nil) // Until it's closed with ✕.
             }
 
         case .smsChanged:
@@ -1138,18 +1174,34 @@ final class AppModel: ObservableObject {
         let spoken = [toast.message, toast.detail].compactMap { $0 }.joined(separator: ". ")
         NSAccessibility.post(element: NSApp as Any, notification: .announcementRequested,
                              userInfo: [.announcement: spoken, .priority: NSAccessibilityPriorityLevel.high.rawValue])
-        expireToast(token, after: toast.action == nil && toast.detail == nil ? 2 : 6)
+        // Undo and other buttons: long enough to reach, not so long it's in the way. A problem
+        // with a second line to read stays longest.
+        let length: TimeInterval = toast.action != nil ? 3.5 : toast.detail == nil ? 2 : 6
+        toastClock = toast.actionTitle == nil ? nil : ToastClock(ends: Date().addingTimeInterval(length), length: length)
+        expireToast(token, after: length)
     }
 
-    /// The pointer is on the toast: it waits, then stays a moment after the pointer leaves.
+    /// The pointer is on the toast: it waits (the ring stops), then stays a moment after the
+    /// pointer leaves, the ring running out from where it stopped.
     var toastHovered = false {
-        didSet { if !toastHovered, toast != nil { expireToast(toastToken, after: 1.5) } }
+        didSet {
+            guard toastHovered != oldValue else { return }
+            if toastHovered {
+                toastClock?.paused = toastClock?.left(at: Date())
+            } else if toast != nil {
+                if let left = toastClock?.paused {
+                    toastClock = ToastClock(ends: Date().addingTimeInterval(1.5), length: 1.5 / max(left, 0.01))
+                }
+                expireToast(toastToken, after: 1.5)
+            }
+        }
     }
 
     private func expireToast(_ token: Int, after delay: TimeInterval) {
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
             guard let self, self.toastToken == token, !self.toastHovered else { return }
             self.toast = nil
+            self.toastClock = nil
         }
     }
 
@@ -1162,6 +1214,7 @@ final class AppModel: ObservableObject {
     func runToastAction() {
         let action = toast?.action
         toast = nil
+        toastClock = nil
         action?()
     }
 
@@ -1205,7 +1258,7 @@ final class AppModel: ObservableObject {
     /// unless something else was copied in the meantime.
     func copyOTP(_ code: String) {
         // Our own earlier code isn't worth keeping; whatever the user had before it is.
-        if codeChangeCount != NSPasteboard.general.changeCount { clipboardBeforeCode = Clipboard.snapshot() }
+        if codeChangeCount != Clipboard.general.changeCount { clipboardBeforeCode = Clipboard.snapshot() }
         codeChangeCount = Clipboard.copySecret(code)
         codeOnClipboard = code
         otpClearTimer?.invalidate()
@@ -1215,7 +1268,7 @@ final class AppModel: ObservableObject {
     }
 
     private func clearCodeFromClipboard() {
-        if let count = codeChangeCount, NSPasteboard.general.changeCount == count {
+        if let count = codeChangeCount, Clipboard.general.changeCount == count {
             Clipboard.restore(clipboardBeforeCode ?? [])
         }
         forgetClipboardCode()
@@ -1340,7 +1393,7 @@ final class AppModel: ObservableObject {
             report(.notConnected(bluetooth: bluetoothPhone != nil, wifiTitle: "Clipboard needs Wi‑Fi"))
             return
         }
-        let board = NSPasteboard.general
+        let board = Clipboard.general
         // Copied files (Finder) go as files; folders can't be sent.
         let urls = board.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL] ?? []
         if !urls.isEmpty {
@@ -1363,7 +1416,7 @@ final class AppModel: ObservableObject {
             sendLinkToPhone(url)
             return
         }
-        guard let text = NSPasteboard.general.string(forType: .string), !text.isEmpty else {
+        guard let text = Clipboard.general.string(forType: .string), !text.isEmpty else {
             report(.nothingToSend)
             return
         }
@@ -1408,7 +1461,7 @@ final class AppModel: ObservableObject {
     }
 
     private func sendClipboardImage() {
-        guard let image = NSImage(pasteboard: NSPasteboard.general), let tiff = image.tiffRepresentation,
+        guard let image = NSImage(pasteboard: Clipboard.general), let tiff = image.tiffRepresentation,
               let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]) else {
             report(.imageNotSupported)
             return
@@ -1650,6 +1703,8 @@ final class AppModel: ObservableObject {
         server.replyToNotification(key: key, text: trimmed) { [weak self] result in
             guard let self else { return }
             guard !result.ok else {
+                // Answered: it leaves the list, like a notification you reply to on the phone.
+                self.notifications.removeAll { $0.key == key }
                 self.feedback("Reply sent")
                 return
             }
@@ -1689,6 +1744,12 @@ final class AppModel: ObservableObject {
         if action == "toggle", let now = nowPlaying {
             nowPlaying = NowPlaying(app: now.app, title: now.title, artist: now.artist, playing: !now.playing)
         }
+    }
+
+    /// ✕ on the call card: the card goes, the call doesn't.
+    func dismissCallCard() {
+        if let call, live == .call(call.id) { dismissedCall = (call.id, call.state) }
+        hideLive()
     }
 
     func answerCall() { callCommand("answer") }
@@ -1735,7 +1796,45 @@ final class AppModel: ObservableObject {
     }
 
     /// Clears every notification here at once and on the phone after 5 s, unless Undo is pressed.
-    func dismissAllNotifications() { clearWithUndo(notifications) }
+    /// Clear all on the Notifications tab: the phone's notifications (cleared there too) and the
+    /// finished calls, with one Undo for both. A call still ringing or under way stays.
+    func dismissAllNotifications() {
+        let calls = callLog.filter { !$0.outcome.isLive }
+        callLog.removeAll { !$0.outcome.isLive }
+        if notifications.isEmpty {
+            guard !calls.isEmpty else { return }
+            showToast(Toast(symbol: "bell.slash", message: calls.count == 1 ? "Cleared 1 call" : "Cleared \(calls.count) calls",
+                            actionTitle: "Undo") { [weak self] in self?.restoreCalls(calls) })
+        } else {
+            clearWithUndo(notifications, calls: calls)
+        }
+    }
+
+    /// Records a call's step in the Notifications list. A call that ends without being answered
+    /// on the phone is declined (a missed one arrives as missed).
+    private func logCall(_ call: PhoneCall) {
+        let index = callLog.firstIndex { $0.id == call.id }
+        let outcome: CallLogEntry.Outcome
+        switch call.state {
+        case .ringing: outcome = .ringing
+        case .active: outcome = .onCall
+        case .missed: outcome = .missed
+        case .ended:
+            guard let index else { return }
+            outcome = callLog[index].outcome == .ringing ? .declined : .answered
+        }
+        if let index {
+            callLog[index].outcome = outcome
+        } else {
+            callLog.insert(CallLogEntry(id: call.id, caller: call.displayName, sim: call.sim, date: Date(), outcome: outcome), at: 0)
+            if callLog.count > 30 { callLog.removeLast(callLog.count - 30) }
+        }
+    }
+
+    private func restoreCalls(_ calls: [CallLogEntry]) {
+        let ids = Set(callLog.map(\.id))
+        callLog = (callLog + calls.filter { !ids.contains($0.id) }).sorted { $0.date > $1.date }
+    }
 
     /// One notification's Clear in the panel: gone here at once, cleared on the phone after 5 s,
     /// with Undo meanwhile, like Clear all.
@@ -1744,18 +1843,29 @@ final class AppModel: ObservableObject {
         if live == .notification(key: key) { hideLive() }
     }
 
-    private func clearWithUndo(_ items: [PhoneNotification]) {
+    private func clearWithUndo(_ items: [PhoneNotification], calls: [CallLogEntry] = []) {
         flushPendingClear()
         let cleared = items
         guard !cleared.isEmpty else { return }
         let gone = Set(cleared.map(\.key))
         notifications.removeAll { gone.contains($0.key) }
+        // Cleared on the phone once Undo has gone (a little after the toast's 3.5 s, or later
+        // while the pointer holds it).
+        func flushWhenUndoGone() {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 4) { [weak self] in
+                guard let self, let pending = self.pendingClear, pending.notifications.map(\.key) == cleared.map(\.key) else { return }
+                guard !pending.work.isCancelled else { return }
+                if self.toast != nil, self.toastHovered { flushWhenUndoGone() } else { pending.work.perform() }
+            }
+        }
         let work = DispatchWorkItem { [weak self] in self?.flushPendingClear() }
         pendingClear = (cleared, work)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 5, execute: work)
-        let what = cleared.count == 1 ? "1 notification" : "\(cleared.count) notifications"
+        flushWhenUndoGone()
+        let total = cleared.count + calls.count
+        let what = total == 1 ? "1 notification" : "\(total) notifications"
         showToast(Toast(symbol: "bell.slash", message: "Cleared \(what)", actionTitle: "Undo") { [weak self] in
             guard let self, let pending = self.pendingClear else { return }
+            self.restoreCalls(calls)
             pending.work.cancel()
             self.pendingClear = nil
             let keys = Set(self.notifications.map(\.key))
@@ -1868,9 +1978,14 @@ extension Notification.Name {
 }
 
 enum Clipboard {
+    /// The system clipboard. A debug test copy run with WALLHOP_NO_CLIPBOARD=1 (stress tests)
+    /// uses a private one instead, so it never touches what the person has copied.
+    static let general: NSPasteboard = DevEnv.on("WALLHOP_NO_CLIPBOARD")
+        ? NSPasteboard(name: NSPasteboard.Name("app.wallhop.test-clipboard")) : .general
+
     @discardableResult
     static func copy(_ text: String) -> Int {
-        let board = NSPasteboard.general
+        let board = Self.general
         board.clearContents()
         board.setString(text, forType: .string)
         return board.changeCount
@@ -1880,7 +1995,7 @@ enum Clipboard {
     /// managers neither show nor keep it.
     @discardableResult
     static func copySecret(_ text: String) -> Int {
-        let board = NSPasteboard.general
+        let board = Self.general
         board.prepareForNewContents(with: .currentHostOnly)
         board.setString(text, forType: .string)
         board.setData(Data(), forType: NSPasteboard.PasteboardType("org.nspasteboard.ConcealedType"))
@@ -1891,7 +2006,7 @@ enum Clipboard {
     /// Files as both images (when they are) and file references, so they paste into chat apps,
     /// documents and Finder alike.
     static func copyFiles(_ urls: [URL]) {
-        let board = NSPasteboard.general
+        let board = Self.general
         board.clearContents()
         var objects: [NSPasteboardWriting] = []
         if urls.count == 1, urls[0].isImage, let image = NSImage(contentsOf: urls[0]) { objects.append(image) }
@@ -1901,7 +2016,7 @@ enum Clipboard {
 
     /// A copy of everything on the clipboard, to put back later.
     static func snapshot() -> [NSPasteboardItem] {
-        (NSPasteboard.general.pasteboardItems ?? []).map { item in
+        (Self.general.pasteboardItems ?? []).map { item in
             let copy = NSPasteboardItem()
             for type in item.types { if let data = item.data(forType: type) { copy.setData(data, forType: type) } }
             return copy
@@ -1910,7 +2025,7 @@ enum Clipboard {
 
     /// Replaces the clipboard with `items` (from `snapshot()`), or just clears it.
     static func restore(_ items: [NSPasteboardItem]) {
-        let board = NSPasteboard.general
+        let board = Self.general
         board.clearContents()
         if !items.isEmpty { board.writeObjects(items) }
     }

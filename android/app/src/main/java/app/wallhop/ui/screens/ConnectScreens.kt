@@ -2,6 +2,7 @@ package app.wallhop.ui.screens
 
 
 
+import app.wallhop.ui.design.Space
 import app.wallhop.ui.design.WIcons
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
@@ -129,9 +130,9 @@ fun ConnectScreen(
                 // A Mac found on this Wi‑Fi: pair with it without the QR (both show the same code).
                 // A real button (fill, edge, verb, chevron), not a status chip.
                 Column(
-                    Modifier.align(Alignment.BottomCenter).padding(bottom = 8.dp),
+                    Modifier.align(Alignment.BottomCenter).padding(start = Space.m, end = Space.m, bottom = Space.xs),
                     horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(Space.xs),
                 ) {
                     macs.take(2).forEach { mac ->
                         val source = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
@@ -144,16 +145,16 @@ fun ConnectScreen(
                                 .border(1.dp, androidx.compose.ui.graphics.Color.White.copy(alpha = 0.18f), capsule())
                                 .tappable(source) { onPair(mac.host, mac.port, mac.name, false) }
                                 .semantics { role = androidx.compose.ui.semantics.Role.Button }
-                                .padding(start = 16.dp, end = 12.dp),
+                                .padding(start = Space.m, end = Space.s),
                             verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            horizontalArrangement = Arrangement.spacedBy(Space.xs),
                         ) {
-                            Icon(WIcons.Laptop, null, tint = androidx.compose.ui.graphics.Color.White, modifier = Modifier.size(18.dp))
+                            Icon(WIcons.Laptop, null, tint = androidx.compose.ui.graphics.Color.White, modifier = Modifier.size(20.dp))
                             Text("Pair with ${mac.name}", style = Type.subheadline.copy(fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold),
                                 color = androidx.compose.ui.graphics.Color.White, maxLines = 1,
                                 overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                                 modifier = Modifier.weight(1f, fill = false))
-                            Icon(WIcons.ChevronRight, null, tint = androidx.compose.ui.graphics.Color.White.copy(alpha = 0.7f), modifier = Modifier.size(14.dp))
+                            Icon(WIcons.ChevronRight, null, tint = androidx.compose.ui.graphics.Color.White.copy(alpha = 0.7f), modifier = Modifier.size(16.dp))
                         }
                     }
                 }
@@ -165,7 +166,7 @@ fun ConnectScreen(
             } else {
                 OnboardingPill("Scan", onScan, Modifier.fillMaxWidth())
             }
-            QuietButton("Get Lync for Mac", { shareMacLink(context) }, Modifier.align(Alignment.CenterHorizontally).padding(top = 6.dp))
+            QuietButton("Get Lync for Mac", { shareMacLink(context) }, Modifier.align(Alignment.CenterHorizontally).padding(top = Space.xs))
         },
     )
 }
@@ -206,7 +207,7 @@ fun PairingScreen(
                     Column(Modifier.align(Alignment.Center), horizontalAlignment = Alignment.CenterHorizontally) {
                         if (code != null) {
                             CodeTiles(code)
-                            Spacer(Modifier.height(22.dp))
+                            Spacer(Modifier.height(Space.l))
                             // The Mac has two minutes to say yes; show what's left.
                             val left by produceState(PairingWindowMs, code) {
                                 val start = android.os.SystemClock.elapsedRealtime()
@@ -217,15 +218,15 @@ fun PairingScreen(
                             }
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                horizontalArrangement = Arrangement.spacedBy(Space.xs),
                                 modifier = Modifier.semantics {
                                     contentDescription = "Waiting for your Mac, about ${(left + 59_999) / 60_000} minute${if (left > 60_000) "s" else ""} left"
                                 },
                             ) {
-                                ActivityIndicator(size = 14.dp)
+                                ActivityIndicator(size = 16.dp)
                                 Text(
                                     "Waiting for your Mac · ${app.wallhop.core.Wording.countdown(left)}",
-                                    style = Type.subheadline, color = androidx.compose.ui.graphics.Color.White.copy(alpha = 0.56f),
+                                    style = Type.subheadline.copy(fontFeatureSettings = "tnum"), color = androidx.compose.ui.graphics.Color.White.copy(alpha = 0.56f),
                                 )
                             }
                         } else {
