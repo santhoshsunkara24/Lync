@@ -2,8 +2,11 @@
 # Makes a Mac release that installed copies pick up on their own (Sparkle, App/Updates.swift).
 #
 #   1. Raise CFBundleShortVersionString and CFBundleVersion in mac/Info.plist.
-#   2. scripts/release-mac.sh
-#   3. Do the two steps it prints: attach the DMG to a GitHub release, then push docs/appcast.xml.
+#   2. scripts/release-mac.sh ["What's new, one line"]
+#
+# With the GitHub CLI signed in (brew install gh; gh auth login, once), it does the rest itself:
+# creates the GitHub release with the DMG, then commits and pushes docs/appcast.xml, in that order,
+# so the feed never points at a DMG that isn't online yet. Without it, it prints those two steps.
 #
 # Signs with the "Lync Local" certificate (or SIGN_IDENTITY): every release must use the same one,
 # or macOS treats the update as a different app and asks for its permissions again. The update
@@ -64,7 +67,33 @@ XML
 
 echo
 echo "Built $DMG and updated docs/appcast.xml for Lync $VERSION (build $BUILD)."
-echo "Now, in this order (the DMG has to be online before the appcast points to it):"
-echo "  1. On GitHub, create release $TAG and attach $DMG (keep its name: Lync-$VERSION.dmg)."
-echo "  2. Commit and push docs/appcast.xml. Installed copies see the update within a day,"
-echo "     or straight away from Check for Updates."
+
+WHATSNEW=""
+[ -n "${1:-}" ] && WHATSNEW="
+What is new: $1
+"
+BODY="Lync for Mac: your Android phone's codes, calls, texts and files, in your Mac's notch or menu bar.
+$WHATSNEW
+Requires macOS $MIN_OS or later, and the Lync app on your Android phone.
+
+First time opening: macOS will say it can't check the app. Open System Settings › Privacy & Security, scroll down, and click \"Open Anyway\" next to Lync. You only need to do this once; updates install by themselves."
+
+if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
+  # 1. The DMG goes online first…
+  if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+    gh release upload "$TAG" "$DMG" --repo "$REPO" --clobber
+  else
+    gh release create "$TAG" "$DMG" --repo "$REPO" --target main --title "Lync for Mac $VERSION" --notes "$BODY" --latest
+  fi
+  curl -sfIL "$URL" >/dev/null || { echo "The DMG isn't downloadable at $URL yet; not pushing the appcast." >&2; exit 1; }
+  # 2. …then the feed that points to it. Only the appcast: nothing else that's waiting is committed.
+  git -C .. add docs/appcast.xml
+  git -C .. commit -q -m "Mac $VERSION (build $BUILD): update feed" -- docs/appcast.xml
+  git -C .. push -q origin HEAD
+  echo "Released: https://github.com/$REPO/releases/tag/$TAG"
+  echo "Installed copies see it within a day, or straight away from Check for Updates."
+else
+  echo "The GitHub CLI isn't signed in (brew install gh; gh auth login), so do these two, in order:"
+  echo "  1. On GitHub, create release $TAG and attach $DMG (keep its name: Lync-$VERSION.dmg)."
+  echo "  2. Commit and push docs/appcast.xml."
+fi
