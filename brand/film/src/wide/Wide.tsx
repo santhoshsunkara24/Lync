@@ -25,7 +25,7 @@ const W = 1920;
 const H = 1080;
 const BEAT = 60 / 135;
 const b = (n: number) => n * BEAT;
-export const WIDE_SECONDS = b(120);
+export const WIDE_SECONDS = b(128);
 
 /** The top edge of the "screen", the notch's centre, and the scale the notch's cards are drawn at. */
 const LINE = 300;
@@ -47,15 +47,16 @@ const LINK_ICON: [number, number] = [1530, LINE + 31];
 const LOGO = b(12);
 const NOTCH_SCENE = b(18);
 const FEATURES = b(22);
-const FEATURE_BEATS = [6, 6, 6, 8, 6, 6, 6, 8, 6, 8, 6];
+/** Codes is long: a whole checkout on the Mac, the code arriving and pasted. The music repeats a bar to make room. */
+const FEATURE_BEATS = [14, 6, 6, 8, 6, 6, 6, 8, 6, 8, 6];
 const FEATURE_NAMES = ['Codes', 'Calls', 'Replies', 'Files', 'Drop', 'Panel', 'Music', 'Menu bar', 'Android app', 'Your colors', 'Off Wi‑Fi'];
 const FEATURE_ICONS = ['lock', 'phone.fill', 'message', 'photo', 'arrow.up.doc.fill', 'menubar.rectangle', 'music.note', 'menubar.rectangle', 'iphone.gen3', 'photo', 'wifi.slash'];
 const F: number[] = [];
 FEATURE_BEATS.reduce((at, n) => (F.push(b(at)), at + n), 22);
-const FEND = (i: number) => (i + 1 < F.length ? F[i + 1] : b(94));
-const PROMISES = b(94);
-const DEVICES = b(102);
-const END = b(108);
+const PROMISES = b(102);
+const FEND = (i: number) => (i + 1 < F.length ? F[i + 1] : PROMISES);
+const DEVICES = b(110);
+const END = b(116);
 
 // ---------------------------------------------------------------------------------------------
 // Pieces
@@ -392,6 +393,120 @@ const SidePhone: React.FC<{ t: number }> = ({ t }) => {
   );
 };
 
+/** Where the checkout window sits: right of the words, under the notch's card. */
+const SHOP = { left: 730, top: 590, w: 880, h: 400 };
+
+/**
+ * Codes, told as a checkout: paying on the Mac, the bank's code lands in the notch already
+ * copied, ⌘V fills the boxes, and the order goes through. The phone never comes out.
+ */
+const CheckoutStory: React.FC<{ t: number; at: number; end: number; close: number }> = ({ t, at, end, close }) => {
+  const k = (s: number) => at + s;
+  const show = springAt(sec(t), k(0.1), 'smooth') * close;
+  const payAt = k(0.95);
+  const focusAt = k(1.85);
+  const pasteAt = k(2.7);
+  const verifyAt = k(3.25);
+  const verify = ramp(sec(t), payAt + 0.15, payAt + 0.4);
+  const done = ramp(sec(t), verifyAt + 0.1, verifyAt + 0.35);
+  const filled = (j: number) => clamp((t - pasteAt - 0.05 - j * 0.035) / 0.14);
+  const focused = t > focusAt && t < pasteAt + 0.05;
+  const keys = ramp(sec(t), focusAt + 0.25, focusAt + 0.5) * (1 - ramp(sec(t), pasteAt + 0.35, pasteAt + 0.6));
+  const pay: [number, number] = [SHOP.left + SHOP.w / 2, SHOP.top + 334];
+  const box: [number, number] = [SHOP.left + 78, SHOP.top + 216];
+  const ver: [number, number] = [SHOP.left + SHOP.w / 2, SHOP.top + 334];
+  const page = (o: number, dy: number): React.CSSProperties => ({ position: 'absolute', left: 40, right: 40, top: 76, bottom: 32, opacity: o, transform: `translateY(${dy}px)` });
+  const button = (label: string, live: number, pressed: number): React.ReactNode => (
+    <div style={{ position: 'absolute', left: 0, right: 0, bottom: 0, height: 68, borderRadius: 99, background: live > 0.5 ? color.pale : 'rgba(255,255,255,0.12)', color: live > 0.5 ? color.onPale : 'rgba(255,255,255,0.5)', display: 'grid', placeItems: 'center', fontSize: 26, fontWeight: 700, transform: `scale(${1 - pressed * 0.04})` }}>{label}</div>
+  );
+  return (
+    <>
+      <Sweep t={t} at={k(0.25)} out={k(1.9)} y={780} left={40} right={1260} size={60} lines={[[['Checking out']], [['on your Mac?']]]} />
+      <Sweep t={t} at={k(2.0)} out={k(3.35)} y={780} left={40} right={1260} size={60} lines={[[['No reaching for']], [['your phone.', true]]]} />
+      <Sweep t={t} at={k(3.45)} out={end - 0.25} y={780} left={40} right={1260} size={60} lines={[[['The code is']], [['already copied.']], [['Just ⌘V.', true]]]} />
+      {/* The checkout, in a browser window on the Mac. */}
+      {show > 0.001 && (
+        <div style={{ position: 'absolute', left: SHOP.left, top: SHOP.top, width: SHOP.w, height: SHOP.h, borderRadius: 26, background: '#121614', border: '1.5px solid rgba(255,255,255,0.12)', boxShadow: '0 30px 70px rgba(0,0,0,0.55)', overflow: 'hidden', fontFamily: font.body, color: color.white, opacity: clamp(show * 2), transform: `translateY(${(1 - show) * 60}px) scale(${0.94 + 0.06 * show})` }}>
+          <div style={{ position: 'absolute', left: 0, right: 0, top: 0, height: 52, display: 'flex', alignItems: 'center', gap: 10, padding: '0 20px', borderBottom: '1.5px solid rgba(255,255,255,0.07)' }}>
+            {['#ff5f57', '#febc2e', '#28c840'].map((c) => <div key={c} style={{ width: 13, height: 13, borderRadius: 99, background: c }} />)}
+            <div style={{ marginLeft: 120, flex: 1, maxWidth: 420, height: 32, borderRadius: 10, background: 'rgba(255,255,255,0.07)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, fontSize: 17, fontWeight: 500, color: 'rgba(255,255,255,0.6)' }}>
+              <Icon name="lock" size={14} color="rgba(255,255,255,0.6)" />
+              kettleandco.shop/checkout
+            </div>
+          </div>
+          {/* 1: the cart. */}
+          {verify < 1 && (
+            <div style={page(1 - verify, -verify * 20)}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 22, marginTop: 14 }}>
+                <div style={{ width: 92, height: 92, borderRadius: 18, background: 'linear-gradient(135deg, #e9b98a, #a05a32)' }} />
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 28, fontWeight: 700 }}>Pour‑over coffee set</div>
+                  <div style={{ fontSize: 20, fontWeight: 500, color: color.secondary, marginTop: 6 }}>Ceramic · Qty 1</div>
+                </div>
+                <div style={{ fontSize: 30, fontWeight: 700 }}>₹2,499</div>
+              </div>
+              <div style={{ height: 1.5, background: 'rgba(255,255,255,0.08)', margin: '28px 0 0' }} />
+              {button('Pay ₹2,499', 1, press(t, payAt).press)}
+            </div>
+          )}
+          {/* 2: the bank asks for the code. */}
+          {verify > 0 && done < 1 && (
+            <div style={page(verify * (1 - done), (1 - verify) * 24 - done * 20)}>
+              <div style={{ fontSize: 30, fontWeight: 700, marginTop: 6 }}>Verify it’s you</div>
+              <div style={{ fontSize: 20, fontWeight: 500, color: color.secondary, marginTop: 6 }}>Enter the code Halo Bank sent to your phone</div>
+              <div style={{ display: 'flex', gap: 14, marginTop: 26 }}>
+                {'482913'.split('').map((d, j) => {
+                  const p = filled(j);
+                  const ring = (focused && j === 0) || p > 0;
+                  return (
+                    <div key={j} style={{ width: 70, height: 84, borderRadius: 16, background: 'rgba(255,255,255,0.07)', border: `2px solid ${ring ? 'rgba(127,227,176,0.85)' : 'rgba(255,255,255,0.14)'}`, display: 'grid', placeItems: 'center', fontSize: 42, fontWeight: 700, marginLeft: j === 3 ? 14 : 0 }}>
+                      {p > 0 ? <span style={{ opacity: p, transform: `translateY(${(1 - p) * 14}px)` }}>{d}</span> : focused && j === 0 && Math.floor((t - focusAt) * 2.4) % 2 === 0 ? <div style={{ width: 3, height: 40, background: color.mint }} /> : null}
+                    </div>
+                  );
+                })}
+                {/* ⌘V, pressed. */}
+                <div style={{ display: 'flex', gap: 8, marginLeft: 26, alignSelf: 'center', opacity: keys, transform: `translateY(${(1 - keys) * 10}px)` }}>
+                  {['⌘', 'V'].map((c) => (
+                    <div key={c} style={{ width: 58, height: 58, borderRadius: 12, background: 'rgba(255,255,255,0.1)', border: '2px solid rgba(255,255,255,0.2)', display: 'grid', placeItems: 'center', fontSize: 28, fontWeight: 700, transform: `translateY(${press(t, pasteAt - 0.04).press * 5}px)` }}>{c}</div>
+                  ))}
+                </div>
+              </div>
+              {button('Verify', filled(5), press(t, verifyAt).press)}
+            </div>
+          )}
+          {/* 3: done. */}
+          {done > 0 && (
+            <div style={{ ...page(done, (1 - done) * 24), display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 14 }}>
+              <div style={{ transform: `scale(${0.6 + 0.4 * springAt(sec(t), verifyAt + 0.1, 'bouncy')})` }}>
+                <Icon name="checkmark.circle.fill" size={96} color={color.success} />
+              </div>
+              <div style={{ fontSize: 34, fontWeight: 700 }}>Order placed</div>
+              <div style={{ fontSize: 22, fontWeight: 500, color: color.secondary }}>Arriving Thursday</div>
+            </div>
+          )}
+        </div>
+      )}
+      {/* The bank's code, out of the notch, already copied. */}
+      <FromNotch open={springAt(sec(t), k(1.35), 'bouncy') * (1 - ramp(sec(t), verifyAt + 0.4, verifyAt + 0.75))}>
+        <CodeCard sender="Halo Bank · for Kettle & Co." dots={linear(sec(t), k(1.55), k(1.95))} copied={ramp(sec(t), k(2.05), k(2.2))} />
+      </FromNotch>
+      <Cursor
+        t={t}
+        path={[
+          [k(0.35), pay[0] + 260, pay[1] + 190],
+          [k(0.85), pay[0], pay[1]],
+          [k(1.4), pay[0], pay[1]],
+          [k(1.75), box[0], box[1]],
+          [k(2.85), box[0], box[1]],
+          [k(3.15), ver[0], ver[1]],
+        ]}
+        clicks={[payAt, focusAt, verifyAt]}
+        show={ramp(sec(t), k(0.35), k(0.5)) * (1 - ramp(sec(t), verifyAt + 0.3, verifyAt + 0.5)) * close}
+      />
+    </>
+  );
+};
+
 /** One feature: its neon word, and whatever happens at the notch. */
 const Feature: React.FC<{ t: number; i: number }> = ({ t, i }) => {
   const at = F[i];
@@ -404,35 +519,7 @@ const Feature: React.FC<{ t: number; i: number }> = ({ t, i }) => {
   let body: React.ReactNode = null;
 
   if (name === 'Codes') {
-    const pasted = t > at + 1.45;
-    const field = ramp(sec(t), at + 0.85, at + 1.1) * close;
-    body = (
-      <>
-        <FromNotch open={spring(at + 0.08) * close}>
-          <CodeCard sender="Halo Bank" dots={linear(sec(t), at + 0.3, at + 0.7)} copied={ramp(sec(t), at + 0.8, at + 0.95)} />
-        </FromNotch>
-        {field > 0 && (
-          <div style={{ position: 'absolute', left: 0, right: 0, top: 640, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 40, opacity: field, transform: `translateY(${(1 - field) * 24}px)` }}>
-            <div style={{ fontFamily: font.body, fontSize: 30, fontWeight: 600, color: color.secondary }}>Verification code</div>
-            <div style={{ display: 'flex', gap: 12 }}>
-              {'482913'.split('').map((d, j) => {
-                const p = pasted ? clamp((t - at - 1.45 - j * 0.03) / 0.15) : 0;
-                return (
-                  <div key={j} style={{ width: 74, height: 92, borderRadius: 18, background: 'rgba(255,255,255,0.08)', border: `2px solid ${p > 0 ? 'rgba(127,227,176,0.8)' : 'rgba(255,255,255,0.16)'}`, display: 'grid', placeItems: 'center', fontFamily: font.body, fontSize: 50, fontWeight: 600, color: color.white, marginLeft: j === 3 ? 16 : 0 }}>
-                    <span style={{ opacity: p, transform: `translateY(${(1 - p) * 16}px)` }}>{d}</span>
-                  </div>
-                );
-              })}
-            </div>
-            <div style={{ display: 'flex', gap: 10, opacity: pasted ? 0.4 : 1 }}>
-              {['⌘', 'V'].map((c) => (
-                <div key={c} style={{ width: 66, height: 66, borderRadius: 14, background: 'rgba(255,255,255,0.1)', border: '2px solid rgba(255,255,255,0.18)', display: 'grid', placeItems: 'center', fontFamily: font.body, fontSize: 32, fontWeight: 600, color: color.white, transform: `translateY(${press(t, at + 1.32).press * 5}px)` }}>{c}</div>
-              ))}
-            </div>
-          </div>
-        )}
-      </>
-    );
+    body = <CheckoutStory t={t} at={at} end={end} close={close} />;
   } else if (name === 'Calls') {
     const clickAt = at + 1.0;
     const [ax, ay] = onCard(250, 112);
@@ -756,7 +843,7 @@ const EndCard: React.FC<{ t: number }> = ({ t }) => {
 // Sound: the same music and effects as the short.
 
 const SOUNDS: [number, string, number][] = [
-  [0, 'wide-music', 1],
+  [0, 'wide-music-otp', 1],
   [0, 'swish', 0.3],
   [b(1.5) - 0.15, 'swish', 0.28],
   [b(4) - 0.15, 'whoosh', 0.42],
@@ -766,9 +853,13 @@ const SOUNDS: [number, string, number][] = [
   [NOTCH_SCENE - 0.15, 'whoosh', 0.38],
   [NOTCH_SCENE + b(1.5), 'pop', 0.45],
   ...[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((i): [number, string, number] => [F[i] - 0.15, 'swish', 0.22]),
-  // Codes
-  [F[0] + 0.08, 'notify', 0.45],
-  [F[0] + 1.32, 'paste', 0.55],
+  // Codes: pay, the code arrives and is copied, pasted, the order goes through
+  [F[0] + 0.95, 'click', 0.55],
+  [F[0] + 1.4, 'notify', 0.45],
+  [F[0] + 1.85, 'click', 0.45],
+  [F[0] + 2.7, 'paste', 0.55],
+  [F[0] + 3.25, 'click', 0.55],
+  [F[0] + 3.35, 'pop', 0.45],
   // Calls
   [F[1] + 0.08, 'notify', 0.45],
   [F[1] + 1.0, 'click', 0.55],
