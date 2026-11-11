@@ -57,7 +57,11 @@ def render(svg_path, png_path, size):
 # 1. The icon as a tile (store graphics, previews).
 tile_svg = write('lync-icon.svg', svg(TILE + LINK, 1024))
 render(tile_svg, os.path.join(OUT, 'lync-icon-1024.png'), 1024)
-render(tile_svg, os.path.join(OUT, 'play-icon-512.png'), 512)
+# Play rounds the corners itself and wants the whole square filled: no corners, no margin, no
+# shadow of our own (a rounded tile came out as a tile inside a white frame).
+PLAY_TILE = '<rect width="256" height="256" fill="url(#tile)"/><rect width="256" height="256" fill="url(#sheen)"/>'
+play_svg = write('play-icon.svg', svg(PLAY_TILE + LINK, 512))
+render(play_svg, os.path.join(OUT, 'play-icon-512.png'), 512)
 
 # 2. Mac: Apple's grid puts an 824 px tile with a soft shadow inside the 1024 canvas.
 k = 824 / 240; t = 100 - 8 * k

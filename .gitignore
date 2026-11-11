@@ -40,3 +40,6 @@ brand/film/sounds/
 brand/film/public/sfx/
 brand/film/public/sfx-real/
 brand/film/public/short/
+
+# Play review recordings: private screens, never committed
+brand/film/public/review/

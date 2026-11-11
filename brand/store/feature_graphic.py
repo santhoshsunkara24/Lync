@@ -1,5 +1,5 @@
-"""Play Store feature graphic, 1024 × 500: the link forming out of mint dots (the pairing moment),
-the wordmark and one line. Rendered with headless Chrome like the icon (brand/icon/final.py).
+"""Play Store feature graphic, 1024 × 500: the link, whole and glowing, beside the wordmark and one
+line. Everything inside the frame (Play crops and overlays the edges in places). Rendered with headless Chrome like the icon (brand/icon/final.py).
 
 Run from brand/store:  python3 feature_graphic.py   → out/feature-graphic.png"""
 import math, os, random, subprocess, tempfile
@@ -24,17 +24,16 @@ html = f'''<html><head><style>
 @font-face {{ font-family: Galindo; src: url("file://{FONTS}/Galindo.ttf"); }}
 @font-face {{ font-family: Figtree; src: url("file://{FONTS}/Figtree.ttf"); font-weight: 100 900; }}
 html, body {{ margin: 0; width: 1024px; height: 500px; overflow: hidden; background: #050807; }}
-.glow {{ position: absolute; left: 560px; top: -70px; width: 640px; height: 640px; border-radius: 50%;
+.glow {{ position: absolute; left: 500px; top: -70px; width: 600px; height: 640px; border-radius: 50%;
         background: radial-gradient(closest-side, rgba(95,217,160,.30), rgba(95,217,160,.08) 55%, transparent); }}
 .dots {{ position: absolute; left: 0; top: 0; }}
-.link {{ position: absolute; left: 520px; top: -110px; width: 720px; height: 720px; }}
+.link {{ position: absolute; left: 520px; top: -30px; width: 560px; height: 560px; }}
 .text {{ position: absolute; left: 72px; top: 132px; width: 470px; color: #fff; }}
 .word {{ font: 128px/1 Galindo; letter-spacing: -1px; }}
 .line {{ margin-top: 22px; font: 500 30px/1.28 Figtree; color: rgba(255,255,255,.74); }}
 .line b {{ color: #7FE3B0; font-weight: 600; }}
 </style></head><body>
 <div class="glow"></div>
-<svg class="dots" width="1024" height="500" viewBox="0 0 1024 500">{''.join(dots)}</svg>
 <img class="link" src="file://{LINK}">
 <div class="text"><div class="word">Lync</div>
 <div class="line">Codes, calls and texts from your Android, <b>on your Mac.</b></div></div>
