@@ -1748,7 +1748,9 @@ private struct SettingsPage: View {
 
                 group("Phones") {
                     let reachable = model.pairedPhones.count > 1 ? model.reachablePhoneIds() : []
-                    ForEach(model.pairedPhones) { phone in
+                    // One phone: it's on the Home card, with its own Forget. The list only earns its
+                    // place with two or more, to see them all, pick the active one or forget another.
+                    ForEach(model.pairedPhones.count > 1 ? model.pairedPhones : []) { phone in
                         Group {
                             if model.confirmingForget == phone.id {
                                 forgetConfirmation(phone)
