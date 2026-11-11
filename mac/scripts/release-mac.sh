@@ -16,6 +16,8 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 REPO="santhoshsunkara24/Lync"
+# The website serves the DMG (scripts/site.sh); GitHub keeps a copy of each release too.
+SITE="https://lync-theta.vercel.app"
 APPCAST="../docs/appcast.xml"
 SPARKLE_BIN=".build/artifacts/sparkle/Sparkle/bin"
 
@@ -42,7 +44,7 @@ mv build/Lync.dmg "$DMG"
 
 # sparkle:edSignature="…" length="…", for the enclosure.
 SIGNATURE=$("$SPARKLE_BIN/sign_update" --account lync "$DMG")
-URL="https://github.com/$REPO/releases/download/$TAG/Lync-$VERSION.dmg"
+URL="$SITE/download/Lync-$VERSION.dmg"
 MIN_OS=$(/usr/libexec/PlistBuddy -c "Print :LSMinimumSystemVersion" Info.plist)
 
 cat > "$APPCAST" <<XML
@@ -51,7 +53,7 @@ cat > "$APPCAST" <<XML
 <rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
   <channel>
     <title>Lync for Mac</title>
-    <link>https://santhoshsunkara24.github.io/Lync/appcast.xml</link>
+    <link>$SITE/appcast.xml</link>
     <item>
       <title>Lync $VERSION</title>
       <pubDate>$(LC_ALL=C date -u "+%a, %d %b %Y %H:%M:%S +0000")</pubDate>
@@ -85,12 +87,14 @@ if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
   else
     gh release create "$TAG" "$DMG" --repo "$REPO" --target main --title "Lync for Mac $VERSION" --notes "$BODY" --latest
   fi
+  # The website: the DMG, and the new feed with it, in one deploy.
+  ../scripts/site.sh
   curl -sfIL "$URL" >/dev/null || { echo "The DMG isn't downloadable at $URL yet; not pushing the appcast." >&2; exit 1; }
   # 2. …then the feed that points to it. Only the appcast: nothing else that's waiting is committed.
   git -C .. add docs/appcast.xml
   git -C .. commit -q -m "Mac $VERSION (build $BUILD): update feed" -- docs/appcast.xml
   git -C .. push -q origin HEAD
-  echo "Released: https://github.com/$REPO/releases/tag/$TAG"
+  echo "Released: $SITE (download: $SITE/download/Lync.dmg), copy at https://github.com/$REPO/releases/tag/$TAG"
   echo "Installed copies see it within a day, or straight away from Check for Updates."
 else
   echo "The GitHub CLI isn't signed in (brew install gh; gh auth login), so do these two, in order:"

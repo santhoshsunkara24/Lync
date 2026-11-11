@@ -832,7 +832,7 @@ const EndCard: React.FC<{ t: number }> = ({ t }) => {
           <div style={{ ...pill, background: color.pale, color: color.onPale }}>Get it on Google Play</div>
           <div style={{ ...pill, background: 'rgba(255,255,255,0.13)', color: '#fff' }}>Download for Mac</div>
         </div>
-        <div style={{ fontFamily: font.body, fontSize: 20, fontWeight: 500, color: 'rgba(255,255,255,0.5)', opacity: fade(1.5) }}>santhoshsunkara24.github.io/Lync</div>
+        <div style={{ fontFamily: font.body, fontSize: 20, fontWeight: 500, color: 'rgba(255,255,255,0.5)', opacity: fade(1.5) }}>lync-theta.vercel.app</div>
       </div>
       <Flash t={t} at={END} strength={0.5} />
     </>

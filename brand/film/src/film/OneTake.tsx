@@ -783,7 +783,7 @@ export const OneTake: React.FC = () => {
               <div style={{ height: 60, padding: '0 28px', borderRadius: 99, background: color.pale, color: color.onPale, display: 'flex', alignItems: 'center', fontFamily: font.body, fontSize: 22, fontWeight: 600 }}>Get it on Google Play</div>
               <div style={{ height: 60, padding: '0 28px', borderRadius: 99, background: 'rgba(255,255,255,0.13)', color: '#fff', display: 'flex', alignItems: 'center', fontFamily: font.body, fontSize: 22, fontWeight: 600 }}>Download for Mac</div>
             </div>
-            <div style={{ fontFamily: font.body, fontSize: 20, fontWeight: 500, color: 'rgba(255,255,255,0.46)', opacity: endIn(79.0) }}>santhoshsunkara24.github.io/Lync</div>
+            <div style={{ fontFamily: font.body, fontSize: 20, fontWeight: 500, color: 'rgba(255,255,255,0.46)', opacity: endIn(79.0) }}>lync-theta.vercel.app</div>
           </div>
         )}
       </Camera>

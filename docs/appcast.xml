@@ -3,7 +3,7 @@
 <rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
   <channel>
     <title>Lync for Mac</title>
-    <link>https://santhoshsunkara24.github.io/Lync/appcast.xml</link>
+    <link>https://lync-theta.vercel.app/appcast.xml</link>
     <item>
       <title>Lync 1.0.0</title>
       <pubDate>Wed, 11 Nov 2026 17:40:17 +0000</pubDate>
@@ -11,7 +11,7 @@
       <sparkle:shortVersionString>1.0.0</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
       <link>https://github.com/santhoshsunkara24/Lync/releases/tag/mac-v1.0.0</link>
-      <enclosure url="https://github.com/santhoshsunkara24/Lync/releases/download/mac-v1.0.0/Lync-1.0.0.dmg" type="application/octet-stream" sparkle:edSignature="Pu1vwsYK8We6D7PQ4LS5Zlg0n+CTzW7/jXnFxijpk7PJbKy0Wgkh1uxn4KpzfggFlbYao0L7iJg+9Ym8ycJWDw==" length="5782711" />
+      <enclosure url="https://lync-theta.vercel.app/download/Lync-1.0.0.dmg" type="application/octet-stream" sparkle:edSignature="Pu1vwsYK8We6D7PQ4LS5Zlg0n+CTzW7/jXnFxijpk7PJbKy0Wgkh1uxn4KpzfggFlbYao0L7iJg+9Ym8ycJWDw==" length="5782711" />
     </item>
   </channel>
 </rss>
