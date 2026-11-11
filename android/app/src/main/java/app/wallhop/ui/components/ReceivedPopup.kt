@@ -119,6 +119,7 @@ fun BoxScope.ReceivedPopup(batch: ReceivedBatch?, onDismiss: () -> Unit, bottom:
                 }
                 .draggable(
                     dragState, Orientation.Vertical,
+                    startDragImmediately = drag.isSettling,
                     onDragStarted = { drag.grab() },
                     onDragStopped = { velocity -> drag.release(velocity, onDismiss, commitAt = 0.35f) },
                 )

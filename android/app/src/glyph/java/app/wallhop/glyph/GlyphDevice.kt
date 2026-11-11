@@ -25,18 +25,26 @@ internal object GlyphDevice {
     private const val TAG = "LyncGlyph"
     private val main = Handler(Looper.getMainLooper())
 
-    /** A phone with Glyph lights: its SDK target and how many channels it has. */
-    private class Lights(val target: String, val channels: Int)
+    /**
+     * A phone with Glyph lights: its SDK target, how many channels it has, and the first light of
+     * the one strip Nothing's SDK can fill as a progress bar on it (displayProgress names it).
+     */
+    private class Lights(val target: String, val channels: Int, val progressStrip: Int)
 
     private val lights: Lights? by lazy {
         when {
-            Common.is20111() -> Lights(Glyph.DEVICE_20111, 15)
-            Common.is22111() -> Lights(Glyph.DEVICE_22111, 33)
-            Common.is23111() -> Lights(Glyph.DEVICE_23111, 26)
-            Common.is23113() -> Lights(Glyph.DEVICE_23113, 26)
-            Common.is24111() -> Lights(Glyph.DEVICE_24111, 36)
-            Common.is25111() -> Lights(Glyph.DEVICE_25111, 6)
-            Common.is25131() -> Lights(Glyph.DEVICE_25131, 4)
+            // (1): the strip under the ring, 8 lights.
+            Common.is20111() -> Lights(Glyph.DEVICE_20111, 15, Glyph.Code_20111.D1_1)
+            // (2): the ring's top-right arc, 16 lights.
+            Common.is22111() -> Lights(Glyph.DEVICE_22111, 33, Glyph.Code_22111.C1_1)
+            // (2a) and (2a) Plus: the long arc round the camera, 24 lights.
+            Common.is23111() -> Lights(Glyph.DEVICE_23111, 26, Glyph.Code_23111.C_1)
+            Common.is23113() -> Lights(Glyph.DEVICE_23113, 26, Glyph.Code_23111.C_1)
+            // (3a) and (3a) Pro: the long strip, 20 lights.
+            Common.is24111() -> Lights(Glyph.DEVICE_24111, 36, Glyph.Code_24111.C_1)
+            // (4a): all 6 lights. (4b): all 4.
+            Common.is25111() -> Lights(Glyph.DEVICE_25111, 6, Glyph.Code_25111.A_1)
+            Common.is25131() -> Lights(Glyph.DEVICE_25131, 4, Glyph.Code_25131.A_1)
             else -> null
         }
     }
@@ -164,8 +172,9 @@ internal object GlyphDevice {
                 steps += tick
                 tick.run()
             }
-            // Glyph lights have no picture: a slow breathing for as long as files move.
-            Glyphs.Hardware.Lights -> if (first) lightsFrame(period = 1_400, cycles = 400, interval = 200)
+            // Glyph lights: the phone's progress strip fills with the transfer, from the other
+            // end for files coming in. If the SDK won't, a slow breathing while files move.
+            Glyphs.Hardware.Lights -> if (!lightsProgress(fill) && first) lightsFrame(period = 1_400, cycles = 400, interval = 200)
             null -> Unit
         }
     }
@@ -217,6 +226,19 @@ internal object GlyphDevice {
     private fun matrixLevels(levels: IntArray) {
         val manager = matrixManager ?: return
         manager.setAppMatrixFrame(IntArray(levels.size) { levels[it].coerceIn(0, 255) * 4095 / 255 })
+    }
+
+    /** Shows [fill] (of [FILL_STEPS]) on the progress strip. False when the phone can't. */
+    private var progressFailed = false
+    private fun lightsProgress(fill: Int): Boolean {
+        if (progressFailed) return false
+        val manager = lightManager ?: return false
+        val model = lights ?: return false
+        val percent = (fill.coerceIn(0, FILL_STEPS) * 100) / FILL_STEPS
+        val frame = manager.glyphFrameBuilder.buildChannel(model.progressStrip).build()
+        return runCatching { manager.displayProgress(frame, percent, !shownOutgoing) }
+            .onFailure { progressFailed = true; trace("progress failed: $it") }
+            .isSuccess
     }
 
     private fun lightsFrame(period: Int, cycles: Int, interval: Int) {

@@ -21,6 +21,9 @@
     <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
     <uses-feature android:name="android.hardware.bluetooth_le" android:required="false" />
+    <!-- Linking Lync to the Mac as its companion app (core/Companion.kt), so Android 17 lets
+         code texts through at once. Phones without it still install. -->
+    <uses-feature android:name="android.software.companion_device_setup" android:required="false" />
 
     <!-- Stay connected in the background. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />

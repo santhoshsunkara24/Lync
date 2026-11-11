@@ -24,13 +24,15 @@ import kotlinx.coroutines.withTimeoutOrNull
 class SmsReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         if (intent.action != Telephony.Sms.Intents.SMS_RECEIVED_ACTION) return
-        if (!app.wallhop.core.Features.on(context, app.wallhop.core.Features.Key.Codes)) return
-        if (MacStore(context).get() == null) return
-        val messages = Telephony.Sms.Intents.getMessagesFromIntent(intent) ?: return
-        if (messages.isEmpty()) return
+        fun why(reason: String) { if (BuildConfig.STRESS_HOOKS) Log.d("WallhopOtp", "sms: $reason") }
+        if (!app.wallhop.core.Features.on(context, app.wallhop.core.Features.Key.Codes)) return why("codes off")
+        if (MacStore(context).get() == null) return why("no Mac paired")
+        val messages = Telephony.Sms.Intents.getMessagesFromIntent(intent) ?: return why("no messages")
+        if (messages.isEmpty()) return why("no messages")
 
         val body = messages.joinToString("") { it.displayMessageBody.orEmpty() }
-        val code = OtpExtractor.extract(body) ?: return
+        val code = OtpExtractor.extract(body) ?: return why("no code in the text")
+        why("code found, sending")
         val sender = messages.first().displayOriginatingAddress.orEmpty()
 
         // Keep the process alive long enough to reconnect and deliver.
@@ -65,6 +67,12 @@ class OtpNotificationListener : NotificationListenerService() {
 
     override fun onNotificationPosted(sbn: StatusBarNotification) {
         if (sbn.packageName == packageName) return
+        // A new text in the SMS app: check the inbox as well, a second chance for its code if the
+        // SMS broadcast missed it (Android hides codes in the notification itself from us).
+        if (sbn.packageName == Telephony.Sms.getDefaultSmsPackage(this) && !sbn.isOngoing &&
+            System.currentTimeMillis() - sbn.postTime < CODE_MAX_AGE_MS) {
+            LinkManager.get(this).checkInboxSoon()
+        }
         if (!app.wallhop.core.Features.on(this, app.wallhop.core.Features.Key.AppNotifications)) return
         if (MacStore(this).get() == null) return
         val notification = sbn.notification

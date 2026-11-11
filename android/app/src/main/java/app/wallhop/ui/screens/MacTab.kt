@@ -202,6 +202,10 @@ fun MacTab(
     ringing: Boolean = false,
     /** Wi-Fi can't reach the Mac but the Bluetooth backup can: codes, calls and notifications still go. */
     bluetooth: Boolean = false,
+    /** The Bluetooth backup is on in Lync but this phone's Bluetooth is off: a quiet line says so. */
+    bluetoothOff: Boolean = false,
+    /** Lync's Bluetooth backup switch is off: away from Wi‑Fi, codes can't reach the Mac. */
+    backupOff: Boolean = false,
     /** Macs seen on this Wi-Fi, offered when none is paired. */
     found: List<app.wallhop.link.DiscoveredMac> = emptyList(),
 ) {
@@ -250,7 +254,7 @@ fun MacTab(
             delay(60_000 - elapsed.mod(60_000L))
         }
     }
-    val meta = heroMeta(card.info, connected, since)
+    val meta = heroMeta(card.info, connected, bluetooth, since)
 
     Box(
         Modifier
@@ -351,16 +355,29 @@ fun MacTab(
             // Connected, the title says it all; forgotten, the banner above does. Otherwise, why it's away.
             if (unpaired) {
                 item(key = "mac-title") {
-                    ConnectCard(actions, found, Modifier.itemMotion(this, 1).padding(start = ScreenGutter, end = ScreenGutter, top = Space.l))
+                    ConnectCard(actions, found, Modifier.itemMotion(this, 1).padding(start = ScreenGutter, end = ScreenGutter, top = SectionGap))
                 }
-            } else if (!connected && !forgotten) {
+            } else if (!connected && !forgotten && !bluetooth) {
+                // Over Bluetooth nothing's wrong: no card. The Mac card says "Connected over
+                // Bluetooth" and Send to Mac says what waits for Wi‑Fi.
                 item(key = "mac-title") {
-                    AwayCard(macName, bluetooth, (state as? LinkState.Searching)?.reason, actions,
-                        Modifier.itemMotion(this, 1).padding(start = ScreenGutter, end = ScreenGutter, top = Space.l))
+                    AwayCard(macName, false, (state as? LinkState.Searching)?.reason, actions,
+                        Modifier.itemMotion(this, 1).padding(start = ScreenGutter, end = ScreenGutter, top = SectionGap))
+                }
+            }
+            if (!unpaired && !forgotten && !connected && backupOff) {
+                item(key = "backup-off") {
+                    BluetoothOffLine("Bluetooth backup is off · codes need Wi‑Fi", { actions.setUpSuggestion(Features.Key.Bluetooth) },
+                        Modifier.itemMotion(this, 1).padding(start = ScreenGutter, end = ScreenGutter, top = Space.m))
+                }
+            } else if (!unpaired && !forgotten && bluetoothOff) {
+                item(key = "bluetooth-off") {
+                    BluetoothOffLine("Bluetooth is off · codes need Wi‑Fi", { actions.runFix(app.wallhop.core.Fix.TurnOnBluetooth) },
+                        Modifier.itemMotion(this, 1).padding(start = ScreenGutter, end = ScreenGutter, top = Space.m))
                 }
             }
             if (!unpaired) item(key = "your-mac") {
-                SectionTitle("Your Mac", null, onClick = actions.macDetails, modifier = Modifier.itemMotion(this, 2).padding(top = Space.l))
+                SectionTitle("Your Mac", null, onClick = actions.macDetails, modifier = Modifier.itemMotion(this, 2).padding(top = SectionGap))
             }
             if (!unpaired) item(key = "cards") {
                 // The Mac card fills the width. When there's more (a transfer, the latest item),
@@ -376,7 +393,7 @@ fun MacTab(
                     horizontalArrangement = Arrangement.spacedBy(Space.m),
                     // One height for the row, so every card lines up top and bottom: the tallest
                     // card's content, which grows with a two-line Mac name or a larger font.
-                    modifier = Modifier.itemMotion(this, 2).padding(top = Space.xs).height(cardRowHeight(macName, meta, heroWidth, transfer, card.latest))
+                    modifier = Modifier.itemMotion(this, 2).padding(top = TitleGap).height(cardRowHeight(macName, meta, heroWidth, transfer, card.latest))
                         // The card peeking in from the right fades out at the edge, so it never
                         // shows half a code; it comes clear as it scrolls in.
                         .graphicsLayer { compositingStrategy = androidx.compose.ui.graphics.CompositingStrategy.Offscreen }
@@ -395,8 +412,8 @@ fun MacTab(
                         },
                 ) {
                     // A transfer card arriving pushes the others along rather than jumping them.
-                    if (transfer != null) item(key = "transfer") { Box(Modifier.itemMotion(this, -1)) { TransferCard(transfer, home, actions) } }
-                    item(key = "mac") { Box(Modifier.itemMotion(this, -1)) { MacHero(macName, connected, meta, card, home, actions, heroWidth) } }
+                    if (transfer != null) item(key = "transfer") { Box(Modifier.itemMotion(this, -1)) { TransferCard(transfer, home, actions, heroWidth) } }
+                    item(key = "mac") { Box(Modifier.itemMotion(this, -1)) { MacHero(macName, connected || bluetooth, meta, card, home, actions, heroWidth) } }
                     card.latest?.let { latest -> item(key = "latest") { Box(Modifier.itemMotion(this, -1)) { LatestCard(latest, home, actions) } } }
                 }
             }
@@ -407,10 +424,11 @@ fun MacTab(
                         unpaired -> "Pair your Mac to send photos, files and text."
                         forgotten -> "Pair again to send to your Mac."
                         connected -> null
-                        else -> "Photos and files go across once your Mac is back."
+                        bluetooth -> "Photos and files wait for the same Wi‑Fi. Text and clipboard need it to send."
+                        else -> "Photos and files go across once your Mac is back. Text and clipboard need your Mac now."
                     },
                     onClick = null,
-                    modifier = Modifier.itemMotion(this, 3).padding(top = Space.l),
+                    modifier = Modifier.itemMotion(this, 3).padding(top = SectionGap),
                 )
             }
             item(key = "send") {
@@ -425,7 +443,7 @@ fun MacTab(
                     contentPadding = PaddingValues(horizontal = ScreenGutter),
                     horizontalArrangement = Arrangement.spacedBy(Space.xs),
                     // A soft fade at an edge that has more chips past it, so a cut-off chip reads as "scroll".
-                    modifier = Modifier.itemMotion(this, 4).padding(top = Space.xs).scrollEdgeFade(chips),
+                    modifier = Modifier.itemMotion(this, 4).padding(top = TitleGap).scrollEdgeFade(chips),
                 ) {
                     item { Chip(WIcons.Image, "Photos", pairReason, needsPairing(actions.sendPhotos)) }
                     item { Chip(WIcons.File, "Files", pairReason, needsPairing(actions.sendFiles)) }
@@ -435,13 +453,13 @@ fun MacTab(
             }
             if (card.recent.isEmpty() && card.latest == null) {
                 item(key = "recent-empty") {
-                    Column(Modifier.itemMotion(this, 5).padding(top = Space.l)) {
+                    Column(Modifier.itemMotion(this, 5).padding(top = SectionGap)) {
                         SectionTitle("Recent", null, onClick = null)
                         Text(
                             "Codes, files and text that go between your phone and Mac show up here.",
                             style = app.wallhop.ui.design.Type.subheadline, color = Color.White.copy(alpha = 0.7f),
                             modifier = Modifier
-                                .padding(start = ScreenGutter, end = ScreenGutter, top = Space.xs)
+                                .padding(start = ScreenGutter, end = ScreenGutter, top = TitleGap)
                                 .fillMaxWidth()
                                 .clip(RoundedCornerShape(Radius.l))
                                 .background(home.card.copy(alpha = 0.6f))
@@ -452,14 +470,14 @@ fun MacTab(
             }
             if (card.recent.isNotEmpty()) {
                 item(key = "recent-title") {
-                    SectionTitle("Recent", null, onClick = actions.openActivity, modifier = Modifier.itemMotion(this, 5).padding(top = Space.l))
+                    SectionTitle("Recent", null, onClick = actions.openActivity, modifier = Modifier.itemMotion(this, 5).padding(top = SectionGap))
                 }
                 item(key = "recent") {
                     // The newest entry opens up at the top; the oldest folds away at the bottom.
                     val reduceMotion = Wallhop.a11y.reduceMotion
                     val rows = rememberAnimatedRows(card.recent) { it.id }
                     app.wallhop.ui.components.InsetSection(
-                        modifier = Modifier.itemMotion(this, 6).padding(start = ScreenGutter, end = ScreenGutter, top = Space.xs),
+                        modifier = Modifier.itemMotion(this, 6).padding(start = ScreenGutter, end = ScreenGutter, top = TitleGap),
                         dividerInset = app.wallhop.ui.components.IconRowTextInset,
                     ) {
                         rows.forEach { entry ->
@@ -612,10 +630,10 @@ private fun AwayCard(macName: String, bluetooth: Boolean, reason: app.wallhop.co
             Spacer(Modifier.width(Space.xs))
             Text(if (bluetooth) "$macName is connected over Bluetooth" else "$macName isn't connected", style = Label, color = Color.White, modifier = Modifier.weight(1f, fill = false).semantics { heading() })
         }
+        val problem = if (bluetooth) null else reason?.let { app.wallhop.core.Problems.away(it) }
         // Everything under the title starts where its text does, not under the link.
         Column(Modifier.padding(start = CardGlyph + Space.xs)) {
             Spacer(Modifier.height(Space.xs))
-            val problem = if (bluetooth) null else reason?.let { app.wallhop.core.Problems.away(it) }
             if (problem != null) {
                 // Why, in a few words, and what to do, in one line.
                 Column(Modifier.semantics(mergeDescendants = true) { liveRegion = LiveRegionMode.Polite }) {
@@ -633,23 +651,50 @@ private fun AwayCard(macName: String, bluetooth: Boolean, reason: app.wallhop.co
                     }
                 }
             }
-            Spacer(Modifier.height(Space.m))
-            // The problem's buttons (Wi‑Fi settings, Pair again…); Try again always.
+        }
+        Spacer(Modifier.height(Space.m))
+        run {
+            // The problem's buttons (Wi‑Fi settings, Pair again…); Try again always. They span the
+            // card from its own edge, so they line up with the card, not half-way in under the text.
             val fixes = (problem?.fixes.orEmpty() + if (bluetooth) listOf(app.wallhop.core.Fix.WifiSettings) else emptyList())
                 .let { if (app.wallhop.core.Fix.TryAgain in it || app.wallhop.core.Fix.PairAgain in it) it else it + app.wallhop.core.Fix.TryAgain }
                 .take(2)
-            // Side by side when they fit; the second wraps under at large text sizes.
-            androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(Space.xs), verticalArrangement = Arrangement.spacedBy(Space.xs)) {
+            // Side by side, sharing the width; stacked at large text sizes.
+            val stacked = LocalDensity.current.fontScale > 1.3f
+            val buttons: @Composable (Modifier) -> Unit = { m ->
                 fixes.forEachIndexed { index, fix ->
                     val first = index == 0
                     PillButton(
                         fixIcon(fix), fix.label,
                         if (first) home.pale else Color.White.copy(alpha = 0.12f), if (first) home.onPale else Color.White,
                         { if (fix == app.wallhop.core.Fix.TryAgain) actions.retryConnect() else actions.runFix(fix) },
+                        m,
                     )
                 }
             }
+            if (stacked) Column(verticalArrangement = Arrangement.spacedBy(Space.xs)) { buttons(Modifier.fillMaxWidth()) }
+            else Row(horizontalArrangement = Arrangement.spacedBy(Space.xs)) { buttons(Modifier.weight(1f)) }
         }
+    }
+}
+
+/** Bluetooth (or Lync's backup) is off: one quiet line, its button a link at the end. */
+@Composable
+private fun BluetoothOffLine(text: String, onTurnOn: () -> Unit, modifier: Modifier = Modifier) {
+    val home = Wallhop.home
+    val source = remember { MutableInteractionSource() }
+    Row(
+        modifier.fillMaxWidth().semantics(mergeDescendants = true) {},
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(WIcons.Bluetooth, null, tint = Color.White.copy(alpha = 0.6f), modifier = Modifier.size(16.dp))
+        Spacer(Modifier.width(Space.xs))
+        Text(text, style = Body, color = Color.White.copy(alpha = 0.78f), modifier = Modifier.weight(1f, fill = false))
+        Spacer(Modifier.width(Space.s))
+        Text(
+            "Turn on", style = Label, color = home.pale,
+            modifier = Modifier.pressDim(source, 0.6f).tappable(source, onClick = onTurnOn).padding(vertical = Space.xs),
+        )
     }
 }
 
@@ -712,11 +757,12 @@ private fun cardRowHeight(name: String, meta: String, heroWidth: Dp, transfer: T
     val small = SmallCardWidth - Space.m * 2
     val transferCard = transfer?.let {
         val failed = it.phase == TransferPhase.Failed
-        val done = it.phase == TransferPhase.Done || failed
         // Padding, the message's gap, the progress bar and its gap, then one button or two.
-        Space.m * 2 + Space.xs + (if (done) 0.dp else Space.s + 4.dp) + (if (failed) 48.dp * 2 + Space.xs else 48.dp) +
-            text(transferStatus(it), Overline, small) + text(LinkManager.summary(it.items), TransferTitle, small, 3) +
-            text(transferMessage(it), Meta, small, 4)
+        val wide = heroWidth - Space.m * 2
+        Space.m * 2 + Space.s + Space.xs + (if (it.phase == TransferPhase.Sending) Space.s + 4.dp else 0.dp) + Space.m +
+            (if (failed) 48.dp * 2 + Space.xs else 48.dp) +
+            text(transferStatus(it), Overline, wide) + text(LinkManager.summary(it.items), TransferTitle, wide, 3) +
+            text(transferMessage(it), Meta, wide, 4)
     } ?: 0.dp
     val latestCard = latest?.let {
         val title = if (it.kind == ActivityEntry.Kind.Otp) text(app.wallhop.core.Wording.spaced(it.title), codeStyle(density.fontScale), small)
@@ -727,9 +773,11 @@ private fun cardRowHeight(name: String, meta: String, heroWidth: Dp, transfer: T
 }
 
 /** "Connected for 15 min  •  Mac 82% charging". */
-private fun heroMeta(info: app.wallhop.link.MacInfo, connected: Boolean, since: Long?): String = buildList {
+private fun heroMeta(info: app.wallhop.link.MacInfo, connected: Boolean, bluetooth: Boolean, since: Long?): String = buildList {
     add(
         when {
+            // Off Wi-Fi but linked over Bluetooth: connected, just not for files.
+            !connected && bluetooth -> "Connected over Bluetooth"
             !connected -> "Not connected"
             since == null -> "Connected"
             since < 60_000 -> "Just connected"
@@ -749,6 +797,8 @@ private fun transferStatus(transfer: TransferState) = when (transfer.phase) {
 /** Why it failed and what to do ("Mac is out of space. Free up space…"), or how far it's got. */
 private fun transferMessage(transfer: TransferState) = transfer.problem?.sentence ?: transfer.message ?: when (transfer.phase) {
     TransferPhase.Done -> app.wallhop.core.Wording.READY
+    // Nothing has gone yet, so no "0 B of …": the size, and when it goes.
+    TransferPhase.Waiting -> "${app.wallhop.ui.components.formatBytes(transfer.totalBytes)} · sends when your Mac is back"
     else -> "${app.wallhop.ui.components.formatBytes(transfer.sentBytes)} of ${app.wallhop.ui.components.formatBytes(transfer.totalBytes)}"
 }
 
@@ -906,12 +956,13 @@ private fun LatestCard(entry: ActivityEntry, home: HomeColors, actions: MacActio
 
 /** A transfer in progress takes the first spot in the row until it's dismissed. */
 @Composable
-private fun TransferCard(transfer: TransferState, home: HomeColors, actions: MacActions) {
+private fun TransferCard(transfer: TransferState, home: HomeColors, actions: MacActions, width: Dp) {
     val title = LinkManager.summary(transfer.items)
     val failed = transfer.phase == TransferPhase.Failed
     val done = transfer.phase == TransferPhase.Done || failed
     // A failed send gives the card a short shake (the error haptic plays with it).
-    CardBox(width = SmallCardWidth, color = home.card, modifier = Modifier.fillMaxHeight().shake(failed)) {
+    // As wide as the Mac card, so the row shows one whole card and only a sliver of the next.
+    CardBox(width = width, color = home.card, modifier = Modifier.fillMaxHeight().shake(failed)) {
         Column(Modifier.fillMaxHeight().padding(Space.m)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Space.xs)) {
                 when {
@@ -924,16 +975,17 @@ private fun TransferCard(transfer: TransferState, home: HomeColors, actions: Mac
                 }
                 Text(transferStatus(transfer), style = Overline, color = Color.White.copy(alpha = 0.72f))
             }
-            Spacer(Modifier.weight(1f))
+            // What it is sits under its status; the free space goes above the button, in one place.
+            Spacer(Modifier.height(Space.s))
             Text(title, style = TransferTitle, color = Color.White, maxLines = 3, overflow = TextOverflow.Ellipsis)
             Text(
                 transferMessage(transfer),
                 style = Meta, color = Color.White.copy(alpha = 0.72f), maxLines = 4, overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.padding(top = Space.xs),
             )
-            if (!done) {
-                ProgressBar(if (transfer.phase == TransferPhase.Waiting) null else transfer.progress,
-                    Modifier.padding(top = Space.s), color = home.pale)
+            // A bar only once something is moving; waiting, the line above says when it goes.
+            if (transfer.phase == TransferPhase.Sending) {
+                ProgressBar(transfer.progress, Modifier.padding(top = Space.s), color = home.pale)
             }
             Spacer(Modifier.weight(1f))
             if (failed) {
@@ -1050,11 +1102,9 @@ private fun Chip(icon: ImageVector, label: String, disabledReason: String?, onCl
             .clip(RoundedCornerShape(24.dp))
             .background(Color.White.copy(alpha = 0.13f))
             .tappable(source, onClick = onClick)
-            .then(if (enabled) Modifier else Modifier.semantics {
-                disabled()
-                stateDescription = disabledReason.orEmpty()
-            })
-            .alpha(if (enabled) 1f else DisabledAlpha)
+            // Not greyed out: it still answers a tap (with why and the fix), and the line under
+            // "Send to Mac" already says what has to wait. TalkBack hears the reason.
+            .then(if (enabled) Modifier else Modifier.semantics { stateDescription = disabledReason.orEmpty() })
             .padding(horizontal = Space.m),
         verticalAlignment = Alignment.CenterVertically,
     ) {

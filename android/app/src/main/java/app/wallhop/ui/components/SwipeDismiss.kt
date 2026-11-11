@@ -37,6 +37,8 @@ class SwipeDismiss internal constructor(
     private val density: Float,
     private val direction: Int,
 ) {
+    /** Reduce Motion: springs back without the little overshoot. */
+    internal var reduceMotion = false
     /**
      * Where the surface is drawn, in px along the drag axis. A plain value, written straight from
      * the finger, so a late finger update can never interrupt the spring that follows a release
@@ -46,6 +48,12 @@ class SwipeDismiss internal constructor(
         private set
     /** The spring running after a release; a new touch stops it where it is. */
     private var settling: Job? = null
+    /**
+     * True while it's springing after a release: a touch then catches it at once, without
+     * waiting for the finger to move past touch slop (pass to `draggable(startDragImmediately)`).
+     */
+    var isSettling by mutableStateOf(false)
+        private set
     /** Where the finger would put it without resistance. */
     private var raw = 0f
     /** The surface's size along the axis, so the decision is relative to it. */
@@ -60,6 +68,7 @@ class SwipeDismiss internal constructor(
     /** Shown again after being thrown away: back at rest. */
     fun reset() {
         settling?.cancel()
+        isSettling = false
         raw = 0f
         gone = false
         offset = 0f
@@ -68,6 +77,7 @@ class SwipeDismiss internal constructor(
     /** A new drag starts from where the surface is now, even mid-animation. */
     fun grab() {
         settling?.cancel()
+        isSettling = false
         val shown = offset * direction
         raw = if (shown >= 0f) offset else -direction * unRubber(-shown)
     }
@@ -92,12 +102,18 @@ class SwipeDismiss internal constructor(
         val target = if (leave) direction * (extent + 48 * density) else 0f
         if (leave) gone = true else raw = 0f
         settling?.cancel()
+        // Leaving: no bounce, it's going off screen. Kept: the drag put force into it, so it
+        // lands back with a slight overshoot, like something let go of (none with Reduce Motion).
+        val spec = if (leave) spring<Float>(1f, 400f) else spring(if (reduceMotion) 1f else 0.8f, 520f)
         val job = scope.launch {
-            animate(offset, target, initialVelocity = velocity, animationSpec = spring(1f, if (leave) 400f else 500f)) { value, _ ->
-                offset = value
+            try {
+                animate(offset, target, initialVelocity = velocity, animationSpec = spec) { value, _ -> offset = value }
+            } finally {
+                if (settling == coroutineContext[Job]) isSettling = false
             }
         }
         settling = job
+        isSettling = true
         job.join()
         // Only once it's actually off screen (not if a new touch caught it on the way).
         if (leave && !job.isCancelled) onDismiss() else if (leave) gone = false
@@ -167,6 +183,7 @@ fun rememberSwipeDismiss(key: Any?, direction: Int = 1, onDismiss: () -> Unit): 
     val density = LocalDensity.current.density
     val state = remember(key) { SwipeDismiss(scope, density, direction) }
     state.pendingDismiss = onDismiss
+    state.reduceMotion = app.wallhop.ui.design.Wallhop.a11y.reduceMotion
     return state
 }
 

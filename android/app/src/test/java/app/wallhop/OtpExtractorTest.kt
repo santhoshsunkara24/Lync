@@ -83,4 +83,7 @@ class OtpExtractorTest {
     @Test fun codeBeforePhoneNumber() = assertCode("482913", "Your code is 482913. Call 1-800-555-0199 if this wasn't you")
 
     @Test fun indianPhoneNumberIgnored() = assertNoCode("To verify, call us on +91 98765 43210")
+
+    // A real one that didn't reach the Mac (9 Nov 2026): four digits, "log in", the code repeated after a #.
+    @Test fun truemedsFourDigits() = assertCode("7008", "Use 7008 to log in to Truemeds. Never share this OTP with anyone. \n\n@www.truemeds.in #7008")
 }

@@ -59,10 +59,13 @@ struct LiveCardView: View {
             CodeIconTile(size: 32, tint: theme.theme.codeAccent, wash: 0.16)
             VStack(alignment: .leading, spacing: WSpace.xxs) {
                 HStack(spacing: WSpace.xs) {
-                    // The notch is on show to anyone looking at the screen (or a screen share), so the
-                    // code itself stays hidden here: it's on the clipboard, and in the popover.
-                    RollingCode(code: masked(code), font: .wh(26, .semibold).monospacedDigit(), tracking: 1)
-                        .accessibilityLabel(model.codeOnClipboard == code ? "Code copied" : "Code hidden")
+                    // The card is on show to anyone looking at the screen (or a screen share), so the code
+                    // stays as dots unless the user chose to see it (Settings). It's on the clipboard, and
+                    // in the popover, either way.
+                    let shown = model.showCodeOnArrival
+                    RollingCode(code: shown ? spaced(code) : masked(code), font: .wh(26, .semibold).monospacedDigit(), tracking: 1)
+                        .id(shown)
+                        .accessibilityLabel(shown ? "Code \(spaced(code))" : model.codeOnClipboard == code ? "Code copied" : "Code hidden")
                     Spacer(minLength: WSpace.xs)
                     // Copy crossfades into "Copied" (and back once the code leaves the clipboard).
                     ZStack(alignment: .trailing) {
@@ -136,7 +139,7 @@ struct LiveCardView: View {
     private func transferCard(liftoffDone: Bool, failed: Bool = false, cancelled: Bool = false,
                               urls: [URL], title: String, name: String, progress: Double) -> some View {
         HStack(spacing: WSpace.s) {
-            LiftoffView(sending: !failed && !cancelled, done: liftoffDone, failed: failed, cancelled: cancelled)
+            LiftoffView(sending: !failed && !cancelled, done: liftoffDone, failed: failed, cancelled: cancelled, palette: theme.theme.link)
                 .frame(width: 84, height: 60)
                 .background(RoundedRectangle(cornerRadius: WRadius.field, style: .continuous).fill(Color(red: 0.047, green: 0.067, blue: 0.059)))
             TransferThumb(urls: urls, size: 32)

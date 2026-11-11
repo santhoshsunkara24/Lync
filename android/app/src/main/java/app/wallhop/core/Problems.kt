@@ -107,7 +107,7 @@ object Problems {
 
     fun away(reason: Away): Problem = when (reason) {
         Away.NoWifi -> Problem("Wi‑Fi is off", "Turn on Wi‑Fi to reach your Mac.", listOf(Fix.WifiSettings))
-        Away.NotOnWifi -> Problem("Not on Wi‑Fi", "Join the same Wi‑Fi as your Mac.", listOf(Fix.WifiSettings))
+        Away.NotOnWifi -> Problem("Not on Wi‑Fi", "Join your Mac’s Wi‑Fi.", listOf(Fix.WifiSettings))
         Away.MacNotOnNetwork -> Problem("Mac not on this Wi‑Fi", "Join the same Wi‑Fi as your Mac, or wake it.", listOf(Fix.WifiSettings, Fix.TryAgain))
         Away.LyncNotRunning -> Problem("Lync isn't open on your Mac", "Open Lync on your Mac.", listOf(Fix.TryAgain))
         Away.MacNotAnswering -> Problem("Mac isn't answering", "Wake your Mac and check its firewall allows Lync.", listOf(Fix.TryAgain))
@@ -124,8 +124,8 @@ object Problems {
     val FORGOTTEN_SEND = Problem("Your Mac forgot this phone", "Pair again, then send.", listOf(Fix.OpenLync))
     val NOT_PAIRED = Problem("No Mac paired", "Open Lync to pair.", listOf(Fix.OpenLync))
     /** Only Bluetooth reaches the Mac, and this needs Wi‑Fi. */
-    val TEXT_NEEDS_WIFI = Problem("Text needs Wi‑Fi", "Join the same Wi‑Fi as your Mac.", listOf(Fix.WifiSettings))
-    val FILES_NEED_WIFI = Problem("Files need Wi‑Fi", "Join the same Wi‑Fi as your Mac.", listOf(Fix.WifiSettings))
+    val TEXT_NEEDS_WIFI = Problem("Text needs Wi‑Fi", "Join your Mac’s Wi‑Fi.", listOf(Fix.WifiSettings))
+    val FILES_NEED_WIFI = Problem("Files need Wi‑Fi", "Join your Mac’s Wi‑Fi.", listOf(Fix.WifiSettings))
     val MAC_DIDNT_ANSWER = Problem("Mac didn't answer", "Check Lync is open on your Mac.", listOf(Fix.TryAgain))
     /** The Mac answered a text or link with ok false. */
     val MAC_REFUSED = Problem("Mac didn't take it", "Try again.", listOf(Fix.TryAgain))

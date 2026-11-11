@@ -147,7 +147,7 @@ extension Problem {
     }
 
     static let overBluetooth = ProblemText(title: "Connected over Bluetooth",
-                                           detail: "Codes, calls and notifications only. Join the same Wi‑Fi for files and texts.")
+                                              detail: "Files and texts need Wi‑Fi.")
 
     /// Help on buttons that are off while the phone isn't connected over Wi‑Fi.
     static func disabledHelp(bluetooth: Bool) -> String {
@@ -157,6 +157,13 @@ extension Problem {
 
     static let bluetoothOff = Problem(symbol: "antenna.radiowaves.left.and.right.slash", title: "Bluetooth is off",
                                       detail: "Turn it on so codes still arrive away from Wi‑Fi.", actionTitle: "Open Settings") {
+        SystemSettings.open(SystemSettings.bluetooth)
+    }
+
+    /// Connected over Wi‑Fi and all is well, but Bluetooth is off: one quiet line, since codes
+    /// would stop if the Wi‑Fi went.
+    static let bluetoothOffQuiet = Problem(symbol: "antenna.radiowaves.left.and.right.slash", title: "Bluetooth is off",
+                                           detail: nil, actionTitle: "Turn on") {
         SystemSettings.open(SystemSettings.bluetooth)
     }
 

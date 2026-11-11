@@ -75,7 +75,8 @@ class GlyphsTest {
     @Test fun smallLinkLeavesRoomBehind() {
         val n = 13
         val link = Glyphs.smallLink(n)
-        assertTrue(link.count { it } in 12..20)
+        // The logo's two-pixel strokes, with shorter arms.
+        assertTrue(link.count { it } in 20..32)
         // The lower-left corner (where the trail goes) is clear.
         for (y in n - 4 until n) for (x in 0 until 3) assertTrue(!link[y * n + x])
     }

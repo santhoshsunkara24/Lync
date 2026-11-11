@@ -22,6 +22,8 @@ struct WTheme: Equatable {
     /// Lync's Forest and Mint until a phone connects.
     var codeCard: Color
     var codeAccent: Color
+    /// Liftoff (files going across) in the phone's colour. Lync mint until a phone connects.
+    var link: LinkPalette = .brand
 
     static let ink = Color(red: 0.043, green: 0.043, blue: 0.047)
     // With Increase Contrast on (System Settings › Accessibility › Display), quiet text gets
@@ -65,6 +67,7 @@ struct WTheme: Equatable {
             peek = Self.color(0, 0, 0.26); peekPale = Self.color(0, 0, 0.92); onPeekPale = Self.color(0, 0, 0.12)
             glow = Self.color(0, 0, 0.9); glowAccent = Self.color(0, 0, 0.75)
             codeCard = Self.color(0, 0, 0.14); codeAccent = Self.color(0, 0, 0.88)
+            link = LinkPalette(hue: 0, vivid: 0)
             return
         }
         let sat = min(max(saturation, 0.45), 0.8)
@@ -74,6 +77,7 @@ struct WTheme: Equatable {
         pale = Self.color(p.pale); onPale = Self.color(p.onPale)
         peek = Self.color(p.peek); peekPale = Self.color(p.peekPale); onPeekPale = Self.color(p.onPeekPale)
         codeCard = Self.color(p.codeCard); codeAccent = Self.color(p.codeAccent)
+        link = seed == Self.defaultSeed ? .brand : LinkPalette(hue: hue, vivid: 1)
         // Vivid, not pastel. Light only blends cleanly between neighbouring hues (purple into blue);
         // opposite ones (rose and green) average to brown. So a far-off accent is swapped for a
         // neighbour of the main colour, 35° round in the accent's direction.
@@ -230,6 +234,8 @@ enum WRadius {
 enum WSpace {
     static let xxs: CGFloat = 4, xs: CGFloat = 8, s: CGFloat = 12, m: CGFloat = 16, l: CGFloat = 24,
                xl: CGFloat = 32, xxl: CGFloat = 40, xxxl: CGFloat = 48, huge: CGFloat = 64
+    /// The panel's side margin: a little more than `m`, so nothing feels pressed to the edge.
+    static let gutter: CGFloat = 20
 }
 
 extension VerticalAlignment {

@@ -998,13 +998,10 @@ private struct StatusNote: View {
 
 private func shortDate(_ date: Date) -> String {
     if Calendar.current.isDateInToday(date) { return date.formatted(date: .omitted, time: .shortened) }
-    if Calendar.current.isDateInYesterday(date) { return "Yesterday" }
     return date.formatted(.dateTime.day().month(.abbreviated))
 }
 
 private func dayLabel(_ date: Date) -> String {
-    if Calendar.current.isDateInToday(date) { return "Today" }
-    if Calendar.current.isDateInYesterday(date) { return "Yesterday" }
     return date.formatted(.dateTime.weekday(.wide).day().month(.wide))
 }
 

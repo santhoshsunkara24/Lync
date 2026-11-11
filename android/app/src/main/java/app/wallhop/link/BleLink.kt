@@ -81,6 +81,8 @@ class BleLink(
     private var characteristic: BluetoothGattCharacteristic? = null
     private var advertising = false
     private var advertisedWindow = -1L
+    /** When advertising last started (elapsed realtime). */
+    private var advertisedAt = 0L
     private var rotateJob: Job? = null
     private var connection: Connection? = null
     private var receiverRegistered = false
@@ -93,9 +95,14 @@ class BleLink(
     /** Why advertising didn't start (shown under the Bluetooth backup switch); null when it's fine. */
     val problem: kotlinx.coroutines.flow.StateFlow<app.wallhop.core.Problem?> = _problem
 
+    private val _radioOff = kotlinx.coroutines.flow.MutableStateFlow(false)
+    /** The backup is wanted but this phone's Bluetooth is switched off, for a quiet line on Home. */
+    val radioOff: kotlinx.coroutines.flow.StateFlow<Boolean> = _radioOff
+
     /** Starts advertising for [mac]. Safe to call again; a different Mac starts over. */
     @Synchronized
     fun start(identity: Identity, mac: PairedMac) {
+        if (BuildConfig.STRESS_HOOKS) Log.d(TAG, "start: wanted=$wanted server=${server != null} radio=${adapter?.isEnabled}")
         if (!permitted(context)) return
         if (wanted && this.mac?.publicKey?.contentEquals(mac.publicKey) == true) return
         if (wanted) stop()
@@ -103,12 +110,15 @@ class BleLink(
         this.mac = mac
         wanted = true
         registerReceiver()
+        _radioOff.value = adapter?.isEnabled != true
         openServer()
     }
 
     @Synchronized
     fun stop() {
+        if (BuildConfig.STRESS_HOOKS && wanted) Log.d(TAG, "stop")
         wanted = false
+        _radioOff.value = false
         unregisterReceiver()
         teardown()
         identity = null
@@ -131,7 +141,9 @@ class BleLink(
     @Synchronized
     private fun openServer() {
         if (server != null || adapter?.isEnabled != true) return
-        val opened = runCatching { manager.openGattServer(context, callback) }.getOrNull() ?: return
+        val opened = runCatching { manager.openGattServer(context, callback) }.getOrNull()
+        if (BuildConfig.STRESS_HOOKS) Log.d(TAG, "openServer: opened=${opened != null}")
+        if (opened == null) return
         val service = BluetoothGattService(BleWire.SERVICE, BluetoothGattService.SERVICE_TYPE_PRIMARY)
         val char = BluetoothGattCharacteristic(
             BleWire.CHARACTERISTIC,
@@ -180,8 +192,13 @@ class BleLink(
             .setIncludeDeviceName(false)
             .addServiceData(ParcelUuid(BleWire.SERVICE), BleWire.tag(tagKey, window))
             .build()
-        advertising = runCatching { advertiser.startAdvertising(settings, data, scanResponse, advertiseCallback) }.isSuccess
+        // A fresh callback per start: Android ties a set to its callback, and a start that lands
+        // after we've already asked it to stop (restarts are quick) is caught and stopped there.
+        val cb = newAdvertiseCallback()
+        advertiseCallback = cb
+        advertising = runCatching { advertiser.startAdvertising(settings, data, scanResponse, cb) }.isSuccess
         advertisedWindow = window
+        advertisedAt = android.os.SystemClock.elapsedRealtime()
         if (BuildConfig.STRESS_HOOKS) Log.d(TAG, "advertising=$advertising")
         if (rotateJob?.isActive != true) rotateJob = scope.launch {
             while (isActive) {
@@ -216,8 +233,15 @@ class BleLink(
             return
         }
         if (connection?.ready == true) return
-        if (!advertising || BleWire.window(System.currentTimeMillis()) != advertisedWindow) {
-            if (BuildConfig.STRESS_HOOKS) Log.d(TAG, "refresh: advertising afresh")
+        // No link: advertise afresh. Our own "advertising" flag can't be trusted here: Android can
+        // stop an advertising set on its own (Bluetooth or Wi-Fi changing, the stack restarting)
+        // without telling us, and then the Mac has nothing to find. But not more than every 20 s:
+        // each restart can come with a new private address, and a Mac halfway through connecting
+        // to the old one would lose it.
+        val now = android.os.SystemClock.elapsedRealtime()
+        val stale = BleWire.window(System.currentTimeMillis()) != advertisedWindow
+        if (!advertising || stale || now - advertisedAt > RESTART_EVERY_MS) {
+            if (BuildConfig.STRESS_HOOKS) Log.d(TAG, "refresh: advertising afresh (was advertising=$advertising)")
             stopAdvertising()
             startAdvertising()
         }
@@ -228,19 +252,36 @@ class BleLink(
         // Always ask Android, even when we think it already stopped: on some phones a set can
         // stay on after a central connects, and skipping this leaves it advertising a stale tag.
         advertising = false
-        runCatching { adapter?.bluetoothLeAdvertiser?.stopAdvertising(advertiseCallback) }
+        val cb = advertiseCallback ?: return
+        advertiseCallback = null
+        runCatching { adapter?.bluetoothLeAdvertiser?.stopAdvertising(cb) }
     }
 
-    private val advertiseCallback = object : AdvertiseCallback() {
+    /** The callback of the advertising set that's meant to be on; null when none is. */
+    private var advertiseCallback: AdvertiseCallback? = null
+
+    private fun newAdvertiseCallback(): AdvertiseCallback = object : AdvertiseCallback() {
         override fun onStartSuccess(settingsInEffect: AdvertiseSettings?) {
-            _problem.value = null
+            synchronized(this@BleLink) {
+                // Started after we moved on (stopped, or restarted with a new tag): without this
+                // it would advertise on, unowned, even after Lync is closed.
+                if (advertiseCallback !== this) {
+                    if (BuildConfig.STRESS_HOOKS) Log.d(TAG, "late advertising set, stopping it")
+                    runCatching { adapter?.bluetoothLeAdvertiser?.stopAdvertising(this) }
+                    return
+                }
+                _problem.value = null
+            }
         }
 
         override fun onStartFailure(errorCode: Int) {
             if (BuildConfig.STRESS_HOOKS) Log.d(TAG, "advertise failed $errorCode")
-            // Already advertising isn't a failure.
-            if (errorCode != ADVERTISE_FAILED_ALREADY_STARTED) _problem.value = app.wallhop.core.Problems.advertiseFailed(errorCode)
-            synchronized(this@BleLink) { advertising = false }
+            synchronized(this@BleLink) {
+                if (advertiseCallback !== this) return
+                // Already advertising isn't a failure.
+                if (errorCode != ADVERTISE_FAILED_ALREADY_STARTED) _problem.value = app.wallhop.core.Problems.advertiseFailed(errorCode)
+                advertising = false
+            }
         }
     }
 
@@ -252,12 +293,28 @@ class BleLink(
         }
 
         override fun onConnectionStateChange(device: BluetoothDevice, status: Int, newState: Int) {
+            if (BuildConfig.STRESS_HOOKS) Log.d(TAG, "gatt state=$newState status=$status device=${device.address.takeLast(5)} current=${connection?.device?.address?.takeLast(5)}")
             synchronized(this@BleLink) {
                 val current = connection
                 if (newState == BluetoothProfile.STATE_CONNECTED) {
-                    // One Mac at a time: a second central waits until the first is gone.
+                    // One Mac at a time. But Macs change their Bluetooth address for privacy, so the
+                    // Mac coming back can look like a second one while we still hold its old link,
+                    // which went away without Android telling us. An old link that isn't really
+                    // connected any more, hasn't finished its handshake, or has gone quiet makes
+                    // way for the new one; a live one keeps its place.
                     if (current != null && current.device.address != device.address) {
-                        runCatching { server?.cancelConnection(device) }
+                        val stillThere = runCatching {
+                            manager.getConnectionState(current.device, BluetoothProfile.GATT_SERVER) == BluetoothProfile.STATE_CONNECTED
+                        }.getOrDefault(false)
+                        val quiet = android.os.SystemClock.elapsedRealtime() - current.lastHeard > REPLACE_QUIET_MS
+                        if (stillThere && current.ready && !quiet) {
+                            if (BuildConfig.STRESS_HOOKS) Log.d(TAG, "second central turned away")
+                            runCatching { server?.cancelConnection(device) }
+                            return
+                        }
+                        if (BuildConfig.STRESS_HOOKS) Log.d(TAG, "old link gone (connected=$stillThere ready=${current.ready} quiet=$quiet): taking the new one")
+                        closeConnection(current)
+                        connection = Connection(device).also { it.startTimeout() }
                         return
                     }
                     if (current == null) connection = Connection(device).also { it.startTimeout() }
@@ -284,6 +341,7 @@ class BleLink(
             // that never went down (the Mac slept with it open), so no "connected" callback came.
             val conn = connectionFor(device) ?: adopt(device)
             val ok = conn != null && descriptor.uuid == BleWire.CCCD && !preparedWrite && offset == 0
+            if (BuildConfig.STRESS_HOOKS) Log.d(TAG, "subscribe ok=$ok conn=${conn != null} device=${device.address.takeLast(5)}")
             if (ok) conn.subscribed = value?.firstOrNull()?.toInt()?.and(1) == 1
             if (responseNeeded) respond(device, requestId, ok)
         }
@@ -295,6 +353,7 @@ class BleLink(
             val conn = connectionFor(device)
             // Long (prepared) writes aren't used: the Mac splits frames to fit one write each.
             val ok = conn != null && characteristic.uuid == BleWire.CHARACTERISTIC && !preparedWrite && offset == 0 && value != null
+            if (BuildConfig.STRESS_HOOKS) Log.d(TAG, "write ok=$ok len=${value?.size} device=${device.address.takeLast(5)}")
             if (responseNeeded) respond(device, requestId, ok)
             if (ok) conn.received(value)
         }
@@ -501,8 +560,8 @@ class BleLink(
     private val stateReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
             when (intent.getIntExtra(BluetoothAdapter.EXTRA_STATE, -1)) {
-                BluetoothAdapter.STATE_ON -> synchronized(this@BleLink) { if (wanted) openServer() }
-                BluetoothAdapter.STATE_TURNING_OFF, BluetoothAdapter.STATE_OFF -> teardown()
+                BluetoothAdapter.STATE_ON -> synchronized(this@BleLink) { _radioOff.value = false; if (wanted) openServer() }
+                BluetoothAdapter.STATE_TURNING_OFF, BluetoothAdapter.STATE_OFF -> { _radioOff.value = wanted; teardown() }
             }
         }
     }
@@ -538,6 +597,10 @@ class BleLink(
         /** Same rhythm as the Wi-Fi session: a ping every 15 s, and 45 s of silence is a dead link. */
         private const val PING_EVERY_MS = 15_000L
         private const val DEAD_AFTER_MS = 45_000L
+        /** A refresh with no link restarts advertising at most this often. */
+        private const val RESTART_EVERY_MS = 20_000L
+        /** An old link this quiet makes way for a new connection from the Mac. */
+        private const val REPLACE_QUIET_MS = 20_000L
 
         /** Android 12+ asks for "Nearby devices"; before that the Bluetooth permissions are granted at install. */
         val required: Array<String> =

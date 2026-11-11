@@ -1,7 +1,7 @@
 package app.wallhop.ui.components
 
 import androidx.compose.animation.core.spring
-import androidx.compose.foundation.background
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.gestures.draggable
 import androidx.compose.foundation.gestures.rememberDraggableState
@@ -62,11 +62,20 @@ fun SwipeToDelete(onDelete: () -> Unit, modifier: Modifier = Modifier, content: 
     var armed by remember { mutableStateOf(false) }
 
     fun shown(r: Float): Float = if (r <= 0f) r else (1f - 1f / (r * 0.55f / button + 1f)) * button * 0.5f
-    fun animateTo(target: Float, velocity: Float) {
+    var isSettling by remember { mutableStateOf(false) }
+    // Let go of a drag, it lands with a slight overshoot (none with Reduce Motion, none going off).
+    fun animateTo(target: Float, velocity: Float, bounce: Boolean = true) {
         settling[0]?.cancel()
-        settling[0] = scope.launch {
-            androidx.compose.animation.core.animate(x, target, velocity, spring(1f, 500f)) { value, _ -> x = value }
+        val spec = spring<Float>(if (bounce && !reduceMotion) 0.8f else 1f, 520f)
+        val job = scope.launch {
+            try {
+                androidx.compose.animation.core.animate(x, target, velocity, spec) { value, _ -> x = value }
+            } finally {
+                if (settling[0] == coroutineContext[kotlinx.coroutines.Job]) isSettling = false
+            }
         }
+        settling[0] = job
+        isSettling = true
     }
     fun settle(target: Float, velocity: Float) {
         raw = target
@@ -76,9 +85,12 @@ fun SwipeToDelete(onDelete: () -> Unit, modifier: Modifier = Modifier, content: 
     // closes the gap, in one motion, rather than a red row waiting to be removed.
     fun delete(velocity: Float = 0f) {
         onDelete()
-        animateTo(-width, velocity)
+        haptics.perform(Haptic.Medium)
+        animateTo(-width, velocity, bounce = false)
     }
-    val open = x < -button * 0.5f
+    // Read during composition only when it flips, not on every frame of the swipe.
+    val open by remember { androidx.compose.runtime.derivedStateOf { x < -button * 0.5f } }
+    val revealing by remember { androidx.compose.runtime.derivedStateOf { x < 0f } }
 
     Box(
         modifier
@@ -87,27 +99,37 @@ fun SwipeToDelete(onDelete: () -> Unit, modifier: Modifier = Modifier, content: 
             .semantics { customActions = listOf(CustomAccessibilityAction("Delete") { onDelete(); true }) },
     ) {
         // The red behind the row, growing with the swipe; "Delete" sits in its trailing end.
-        val revealed = (-x).coerceAtLeast(0f)
-        if (revealed > 0f) {
+        // Its width and the label's fade are read while drawing, so a swipe redraws only these
+        // two layers each frame instead of recomposing the row.
+        if (revealing) {
             val source = remember { MutableInteractionSource() }
-            Box(Modifier.matchParentSize()) {
             Box(
                 Modifier
-                    .align(Alignment.CenterEnd)
-                    .fillMaxHeight()
-                    .width(with(density) { revealed.toDp() })
-                    .background(red)
-                    .tappable(source, enabled = open) { delete() },
-                contentAlignment = Alignment.CenterEnd,
+                    .matchParentSize()
+                    .drawBehind {
+                        val w = (-x).coerceIn(0f, size.width)
+                        drawRect(red, topLeft = androidx.compose.ui.geometry.Offset(size.width - w, 0f), size = androidx.compose.ui.geometry.Size(w, size.height))
+                    },
             ) {
-                Text(
-                    "Delete", style = Type.subheadline.copy(fontWeight = FontWeight.SemiBold), color = androidx.compose.ui.graphics.Color.White,
-                    modifier = Modifier.width(with(density) { button.toDp() })
-                        .graphicsLayer { alpha = (revealed / button).coerceIn(0f, 1f) }
-                        .align(Alignment.CenterEnd),
-                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                )
-            }
+                Box(
+                    Modifier
+                        .align(Alignment.CenterEnd)
+                        .fillMaxHeight()
+                        .width(with(density) { button.toDp() })
+                        .tappable(source, enabled = open) { delete() },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        "Delete", style = Type.subheadline.copy(fontWeight = FontWeight.SemiBold), color = androidx.compose.ui.graphics.Color.White,
+                        modifier = Modifier.graphicsLayer {
+                            val revealed = (-x).coerceAtLeast(0f)
+                            alpha = (revealed / button).coerceIn(0f, 1f)
+                            // Rides in with the red, then sits still at the end.
+                            translationX = (button - revealed).coerceAtLeast(0f) * 0.35f
+                        },
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                    )
+                }
             }
         }
         Box(
@@ -124,7 +146,8 @@ fun SwipeToDelete(onDelete: () -> Unit, modifier: Modifier = Modifier, content: 
                         x = next
                     },
                     Orientation.Horizontal,
-                    enabled = !reduceMotion,
+                    // Swiping is the user's own motion, so it stays with Reduce Motion on.
+                    startDragImmediately = isSettling,
                     onDragStarted = { settling[0]?.cancel(); raw = x },
                     onDragStopped = { velocity ->
                         val dpPerSec = velocity / density.density

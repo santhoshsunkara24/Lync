@@ -58,7 +58,13 @@ import app.wallhop.ui.design.Wallhop
 val MaxContentWidth: Dp = 640.dp
 
 /** Space between the screen's edges and its content. */
-val ScreenGutter: Dp = Space.m
+val ScreenGutter: Dp = 20.dp
+
+/** Between one block of a screen and the next (a section, a card row): room to breathe. */
+val SectionGap: Dp = Space.xl
+
+/** From a section's title to its content. */
+val TitleGap: Dp = Space.s
 
 /** Height of the floating tab bar plus its gap, so the last row can scroll clear of it. */
 val TabBarClearance: Dp = 64.dp + Space.s + Space.l
@@ -143,13 +149,19 @@ fun Page(
         // Solid behind the small title and a little below it, then a short fade, so rows never
         // show through the title as they scroll under it.
         val solid = statusBar + 64.dp
-        val total = solid + 28.dp
+        // A long, eased tail: content dissolves into the header instead of meeting a hard band.
+        val total = solid + 64.dp
         Box(
             Modifier
                 .fillMaxWidth()
                 .height(total)
                 .graphicsLayer { alpha = fade }
-                .background(Brush.verticalGradient(0f to home.top, solid / total to home.top, 1f to home.top.copy(alpha = 0f))),
+                .background(Brush.verticalGradient(
+                    0f to home.top, solid / total to home.top,
+                    (solid / total + (1f - solid / total) * 0.35f) to home.top.copy(alpha = 0.72f),
+                    (solid / total + (1f - solid / total) * 0.7f) to home.top.copy(alpha = 0.25f),
+                    1f to home.top.copy(alpha = 0f),
+                )),
         ) {
             // Tapping the small title goes back to the top, like the status bar on iOS.
             val scope = androidx.compose.runtime.rememberCoroutineScope()
@@ -200,7 +212,7 @@ fun Page(
 @Composable
 fun SectionHeader(text: String) {
     Row(
-        Modifier.fillMaxWidth().padding(bottom = Space.xs),
+        Modifier.fillMaxWidth().padding(start = Space.xxs, bottom = TitleGap),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(Space.xs),
     ) {

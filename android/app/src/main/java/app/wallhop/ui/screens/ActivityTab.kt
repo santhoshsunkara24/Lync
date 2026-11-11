@@ -151,7 +151,7 @@ fun ActivityTab(
                 onSelect = { scope.launch { pager.animateScrollToPage(it, animationSpec = androidx.compose.animation.core.spring(1f, 500f)) } },
                 position = { pager.currentPage + pager.currentPageOffsetFraction },
             )
-            Spacer(Modifier.height(Space.l))
+            Spacer(Modifier.height(SectionGap))
             }
         }
         item(key = "pages") {
@@ -198,11 +198,7 @@ private fun ActivityPage(
     onActions: (ActivityEntry, androidx.compose.ui.geometry.Rect?) -> Unit,
     onDelete: (ActivityEntry) -> Unit,
 ) {
-    val context = LocalContext.current
     val reduceMotion = Wallhop.a11y.reduceMotion
-    val groups = entries.groupBy { dayLabel(context, it.time) }
-    // Days already here when the page opened; a day that turns up later animates its first row in.
-    val initialDays = remember { groups.keys.toSet() }
     Column(Modifier.fillMaxWidth()) {
         if (entries.isEmpty()) {
             EmptyState(
@@ -216,11 +212,11 @@ private fun ActivityPage(
                 },
             )
         }
-        groups.forEach { (day, items) ->
-            key(day) {
-                SectionHeader(day)
+        // One list, newest first: each row carries its own time or date, no day headings.
+        if (entries.isNotEmpty()) {
+            run {
                 // New entries open up into place; deleted ones fold away (DESIGN.md §7.2).
-                val rows = rememberAnimatedRows(items, enterInitially = day !in initialDays) { it.id }
+                val rows = rememberAnimatedRows(entries, enterInitially = false) { it.id }
                 InsetSection(dividerInset = app.wallhop.ui.components.IconRowTextInset) {
                     rows.forEach { entry ->
                         row {
@@ -229,14 +225,14 @@ private fun ActivityPage(
                             key(entry.key) {
                                 AnimatedVisibility(entry.visible, enter = rowEnter(reduceMotion), exit = rowExit(reduceMotion)) {
                                     SwipeToDelete(onDelete = { onDelete(entry.item) }) {
-                                        ActivityRow(entry.item, onLongClick = { onActions(entry.item, it) }, onClick = { onTap(entry.item) })
+                                        ActivityRow(entry.item, onLongClick = { onActions(entry.item, it) }, onClick = { onTap(entry.item) }, showDay = true)
                                     }
                                 }
                             }
                         }
                     }
                 }
-                Spacer(Modifier.height(Space.l))
+                Spacer(Modifier.height(SectionGap))
             }
         }
     }
@@ -349,7 +345,7 @@ internal fun tapEntry(
 
 /**
  * One entry. Tap does the obvious thing ([tapEntry]); long press offers the actions.
- * [showDay]: lists that aren't grouped by day (Home's Recent) say "Yesterday" or the date.
+ * [showDay]: rows from before today show their date instead of the time.
  */
 @Composable
 internal fun ActivityRow(entry: ActivityEntry, onLongClick: (androidx.compose.ui.geometry.Rect?) -> Unit, onClick: (() -> Unit)? = null, showDay: Boolean = false) {
@@ -399,28 +395,15 @@ internal fun ActivityRow(entry: ActivityEntry, onLongClick: (androidx.compose.ui
     )
 }
 
-/** The time today, otherwise "Yesterday" or a short date. */
+/** The time today, otherwise a short date ("8 Nov"). */
 private fun rowTime(context: android.content.Context, time: Long): String {
     val zone = java.time.ZoneId.systemDefault()
     val today = java.time.LocalDate.now(zone)
     return when (java.time.Instant.ofEpochMilli(time).atZone(zone).toLocalDate()) {
         today -> DateUtils.formatDateTime(context, time, DateUtils.FORMAT_SHOW_TIME)
-        today.minusDays(1) -> "Yesterday"
         else -> DateUtils.formatDateTime(context, time, DateUtils.FORMAT_SHOW_DATE or DateUtils.FORMAT_ABBREV_MONTH)
     }
 }
-
-private fun dayLabel(context: android.content.Context, time: Long): String {
-    val zone = java.time.ZoneId.systemDefault()
-    val today = java.time.LocalDate.now(zone)
-    val day = java.time.Instant.ofEpochMilli(time).atZone(zone).toLocalDate()
-    return when (day) {
-        today -> "Today"
-        today.minusDays(1) -> "Yesterday"
-        else -> DateUtils.formatDateTime(context, time, DateUtils.FORMAT_SHOW_DATE or DateUtils.FORMAT_SHOW_WEEKDAY)
-    }
-}
-
 
 /** The red Clear all pill at the top of Activity. */
 @Composable

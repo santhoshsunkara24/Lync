@@ -17,6 +17,8 @@ struct LiftoffView: View {
     var failed = false
     /// It was cancelled: the link powers down and fades.
     var cancelled = false
+    /// Its colours: the phone's wallpaper's, like the rest of Lync (Lync mint until a phone connects).
+    var palette: LinkPalette = .brand
 
     @State private var engine = LiftoffEngine()
     /// Nothing is moving: the timeline stops until the send's state changes.
@@ -25,6 +27,7 @@ struct LiftoffView: View {
     var body: some View {
         TimelineView(.animation(minimumInterval: 1 / 60, paused: WMotion.reduceMotion || still)) { context in
             Canvas { ctx, size in
+                engine.palette = palette
                 engine.step(now: context.date, sending: sending, done: done, failed: failed, cancelled: cancelled)
                 engine.draw(ctx, size: size)
                 if engine.isStill && !still { DispatchQueue.main.async { still = true } }
@@ -62,28 +65,12 @@ final class LiftoffEngine {
     private static let p = CGPoint(x: 0.7071, y: 0.7071)    // across
 
     // Everything that doesn't change between frames, made once rather than 60 times a second.
-    private static let streakColor = Color(red: 0.886, green: 0.925, blue: 0.906)
-    private static let glowSend = glowGradient(0.9), glowRest = glowGradient(0.6)
-    private static func glowGradient(_ glow: Double) -> Gradient {
-        Gradient(colors: [Color(red: 0.373, green: 0.851, blue: 0.627).opacity(0.32 * glow), .clear])
-    }
+    /// The colours it draws with (see `LinkPalette`).
+    var palette: LinkPalette = .brand
     private static let edgeStroke = round(19), tubeStroke = round(16), highlightStroke = round(3)
     private static func round(_ w: CGFloat) -> StrokeStyle { StrokeStyle(lineWidth: w, lineCap: .round, lineJoin: .round) }
     private static let glintDash: [CGFloat] = [24, 600]
 
-    /// One hook's colours: its edge, the lit tube (top to bottom) and the fine highlight.
-    private struct HookStyle {
-        let edge: Color
-        let tube: Gradient
-        let highlight: Color
-        init(edge: (Double, Double, Double), tube: [(Double, Double, Double)], highlight: Double) {
-            self.edge = Color(red: edge.0, green: edge.1, blue: edge.2)
-            self.tube = Gradient(colors: tube.map { Color(red: $0.0, green: $0.1, blue: $0.2) })
-            self.highlight = .white.opacity(highlight)
-        }
-    }
-    private static let styleA = HookStyle(edge: (0.624, 0.902, 0.765), tube: [(1, 1, 1), (0.910, 1, 0.957), (0.725, 0.933, 0.827)], highlight: 0.9)
-    private static let styleB = HookStyle(edge: (0.498, 0.835, 0.682), tube: [(0.839, 0.984, 0.914), (0.561, 0.867, 0.722)], highlight: 0.6)
 
     private var stage = Stage.idle
     private var tp: Double = 0
@@ -196,20 +183,20 @@ final class LiftoffEngine {
             var c = ctx
             // In quickly, then fading the further it gets from the link.
             c.opacity = 0.7 * min(1, (1 - l.life) * 8) * l.life
-            c.stroke(line, with: .color(Self.streakColor), style: StrokeStyle(lineWidth: l.w, lineCap: .round))
+            c.stroke(line, with: .color(palette.streak), style: StrokeStyle(lineWidth: l.w, lineCap: .round))
         }
         drawLink(ctx, x: bx, y: by, s: linkSize, stretch: stretch, alpha: alpha, glint: glint, sending: bright, apart: apart)
     }
 
-    /// The link as a lit mint tube, like the app icon, centred at (x, y) and `s` points tall.
+    /// The link as a lit tube in the phone's colour, like the app icon, centred at (x, y) and `s` points tall.
     private func drawLink(_ ctx: GraphicsContext, x: CGFloat, y: CGFloat, s: CGFloat, stretch: CGFloat = 1, alpha: CGFloat = 1, glint: Double = -1, sending: Bool = false, apart: CGFloat = 0) {
         guard alpha > 0.002 else { return }
         var c = ctx
         c.opacity = alpha
-        // A soft mint glow under it.
+        // A soft glow under it.
         let r = s * 0.75
         c.fill(Path(ellipseIn: CGRect(x: x - r, y: y - r, width: r * 2, height: r * 2)),
-               with: .radialGradient(sending ? Self.glowSend : Self.glowRest,
+               with: .radialGradient(sending ? palette.glowSend : palette.glowRest,
                                      center: CGPoint(x: x, y: y), startRadius: 0, endRadius: r))
         let k = s / 256
         c.translateBy(x: x, y: y)
@@ -222,11 +209,11 @@ final class LiftoffEngine {
         let shift = apart / k
         var a = c; a.translateBy(x: -Self.u.x * shift, y: -Self.u.y * shift)
         var b = c; b.translateBy(x: Self.u.x * shift, y: Self.u.y * shift)
-        hook(a, Self.pathA, style: Self.styleA, glint: glint)
-        hook(b, Self.pathB, style: Self.styleB, glint: glint)
+        hook(a, Self.pathA, style: palette.hookA, glint: glint)
+        hook(b, Self.pathB, style: palette.hookB, glint: glint)
     }
 
-    private func hook(_ ctx: GraphicsContext, _ path: Path, style: HookStyle, glint: Double) {
+    private func hook(_ ctx: GraphicsContext, _ path: Path, style: LinkPalette.Hook, glint: Double) {
         ctx.stroke(path, with: .color(style.edge), style: Self.edgeStroke)
         var t = ctx; t.translateBy(x: -1, y: -1)
         t.stroke(path, with: .linearGradient(style.tube, startPoint: CGPoint(x: 0, y: 60), endPoint: CGPoint(x: 0, y: 196)),
@@ -291,5 +278,48 @@ struct TransferThumb: View {
         let s = Int(CMTimeGetSeconds(time).rounded())
         guard s > 0 else { return nil }
         return s >= 3600 ? String(format: "%d:%02d:%02d", s / 3600, s / 60 % 60, s % 60) : String(format: "%d:%02d", s / 60, s % 60)
+    }
+}
+
+/// Liftoff's colours, in the phone's wallpaper hue like the rest of Lync: the same recipe as the
+/// phone's `LinkColors` (LinkColors.kt). `brand` is Lync's own mint, exactly as it always was.
+struct LinkPalette: Equatable {
+    /// One hook's colours: its edge, the lit tube (top to bottom) and the fine highlight.
+    struct Hook: Equatable {
+        let edge: Color
+        let tube: Gradient
+        let highlight: Color
+    }
+    let streak: Color
+    let glowSend: Gradient
+    let glowRest: Gradient
+    let hookA: Hook
+    let hookB: Hook
+
+    private init(glow: Color, streak: Color, edgeA: Color, edgeB: Color, tubeA: [Color], tubeB: [Color]) {
+        self.streak = streak
+        glowSend = Gradient(colors: [glow.opacity(0.32 * 0.9), .clear])
+        glowRest = Gradient(colors: [glow.opacity(0.32 * 0.6), .clear])
+        hookA = Hook(edge: edgeA, tube: Gradient(colors: tubeA), highlight: .white.opacity(0.9))
+        hookB = Hook(edge: edgeB, tube: Gradient(colors: tubeB), highlight: .white.opacity(0.6))
+    }
+
+    static let brand = LinkPalette(
+        glow: Color(red: 0.373, green: 0.851, blue: 0.627),
+        streak: Color(red: 0.886, green: 0.925, blue: 0.906),
+        edgeA: Color(red: 0.624, green: 0.902, blue: 0.765),
+        edgeB: Color(red: 0.498, green: 0.835, blue: 0.682),
+        tubeA: [.white, Color(red: 0.910, green: 1, blue: 0.957), Color(red: 0.725, green: 0.933, blue: 0.827)],
+        tubeB: [Color(red: 0.839, green: 0.984, blue: 0.914), Color(red: 0.561, green: 0.867, blue: 0.722)]
+    )
+
+    /// The recipe in `hue`; `vivid` 1 for a colourful wallpaper, 0 for a monochrome phone (greys).
+    init(hue: Double, vivid: Double) {
+        func c(_ s: Double, _ l: Double) -> Color {
+            let v = WTheme.rgb(hue, min(1, max(0, s * vivid)), l)
+            return Color(red: v.r, green: v.g, blue: v.b)
+        }
+        self.init(glow: c(0.62, 0.61), streak: c(0.15, 0.91), edgeA: c(0.58, 0.76), edgeB: c(0.52, 0.67),
+                  tubeA: [.white, c(1, 0.955), c(0.61, 0.83)], tubeB: [c(0.84, 0.91), c(0.56, 0.71)])
     }
 }

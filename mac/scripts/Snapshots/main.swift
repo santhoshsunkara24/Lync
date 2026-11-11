@@ -22,7 +22,8 @@ CTFontManagerRegisterFontsForURL(URL(fileURLWithPath: "Resources/Galindo.ttf") a
 
 @MainActor func render<V: View>(_ name: String, _ view: V) {
     let renderer = ImageRenderer(content: view.environment(\.colorScheme, .dark))
-    renderer.scale = 2
+    // 2× for checking screens; SNAPSHOT_SCALE=3 for the launch film's 4K frames.
+    renderer.scale = CGFloat(Double(ProcessInfo.processInfo.environment["SNAPSHOT_SCALE"] ?? "") ?? 2)
     guard let image = renderer.nsImage, let tiff = image.tiffRepresentation,
           let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]) else {
         print("failed: \(name)"); return
@@ -76,9 +77,11 @@ CTFontManagerRegisterFontsForURL(URL(fileURLWithPath: "Resources/Galindo.ttf") a
     let server = LinkServer(identity: Identity.loadOrCreate(), paired: PairedPhones())
     // First launch each run: the panel starts on "Lync lives here".
     UserDefaults.standard.removeObject(forKey: "onboardingHotkeySeen")
+    // The "Open at login?" card is a first-run question, not part of these screens.
+    UserDefaults.standard.set(true, forKey: "askedLaunchAtLogin")
     let model = AppModel(server: server)
     let send: (LinkEvent) -> Void = { server.onEvent?($0) }
-    let phone = PairedPhone(id: "test", name: "Nothing Phone (3a) Pro", publicKey: Data(count: 32), pairedAt: Date())
+    let phone = PairedPhone(id: "test", name: "Pixel 9", publicKey: Data(count: 32), pairedAt: Date())
 
     // Not paired yet, first launch: "Lync lives here" teaches ⌥⌘L, then the QR.
     render("1a_onboarding_hotkey", PanelView(model: model, theme: model.themeStore, fromNotch: true).fixedSize())
@@ -95,8 +98,8 @@ CTFontManagerRegisterFontsForURL(URL(fileURLWithPath: "Resources/Galindo.ttf") a
     send(.status(battery: 62, charging: true))
     // Lync's own mint and rose (HomeColors.Default on the phone), not a wallpaper's colours.
     send(.theme(seed: WTheme.defaultSeed, accent: WTheme.defaultAccent))
-    send(.media(NowPlaying(app: "YouTube Music", title: "Midnight City", artist: "M83", playing: true), art: nil))
-    send(.notification(PhoneNotification(key: "n1", packageName: "com.whatsapp", appName: "WhatsApp", title: "Design team",
+    send(.media(NowPlaying(app: "Music", title: "Slow Tides", artist: "Nova Lane", playing: true), art: nil))
+    send(.notification(PhoneNotification(key: "n1", packageName: "com.example.messages", appName: "Messages", title: "Design team",
                                          text: "Can you share the new home screen?", time: Date(), canReply: true), icon: nil))
     send(.text("Meeting moved to 4:30, see you there", from: phone))
     let folder = URL(fileURLWithPath: NSTemporaryDirectory() + "wallhop-snapshot-files", isDirectory: true)
@@ -120,12 +123,23 @@ CTFontManagerRegisterFontsForURL(URL(fileURLWithPath: "Resources/Galindo.ttf") a
     send(.batchStarted(id: "b3", count: 1, bytes: 1_800_000_000))
     send(.fileSaved(batch: "b3", url: photo))
     send(.batchProgress(id: "b3", bytes: 860_000_000))
-    send(.otp(code: "482913", sender: "HDFC Bank", app: "SMS"))
+    send(.otp(code: "482913", sender: "Halo Bank", app: "SMS"))
 
     render("2_home_notch", PanelView(model: model, theme: model.themeStore, fromNotch: true).fixedSize())
+    // For the launch film: the same panel once the music is paused from it.
+    send(.media(NowPlaying(app: "Music", title: "Slow Tides", artist: "Nova Lane", playing: false), art: nil))
+    render("film_home_paused", PanelView(model: model, theme: model.themeStore, fromNotch: true).fixedSize())
+    send(.media(NowPlaying(app: "Music", title: "Slow Tides", artist: "Nova Lane", playing: true), art: nil))
     render("3_home_menubar", PanelView(model: model, theme: model.themeStore, fromNotch: false).fixedSize())
     model.panelPage = .settings
     render("4_settings", PanelView(model: model, theme: model.themeStore, fromNotch: false).fixedSize())
+    // For the launch film: Settings opened from the notch, with Notch and then Menu bar chosen.
+    let mode = model.displayMode
+    model.displayMode = .notch
+    render("film_settings_notch", PanelView(model: model, theme: model.themeStore, fromNotch: true).fixedSize())
+    model.displayMode = .menuBar
+    render("film_settings_menubar", PanelView(model: model, theme: model.themeStore, fromNotch: true).fixedSize())
+    model.displayMode = mode
     model.confirmingForget = phone.id
     render("4b_settings_forget", PanelView(model: model, theme: model.themeStore, fromNotch: false).fixedSize())
     model.confirmingForget = nil
@@ -183,7 +197,7 @@ CTFontManagerRegisterFontsForURL(URL(fileURLWithPath: "Resources/Galindo.ttf") a
     // Live moments, drawn the way the notch shows them.
     for (name, card) in [("7c_live_pairing", LiveCard.pairing(request.id)),
                          ("7d_live_call", LiveCard.call("c1")),
-                         ("7e_live_notification", LiveCard.notification(key: "n1")),("5_live_code", LiveCard.otp(code: "482913", sender: "HDFC Bank")),
+                         ("7e_live_notification", LiveCard.notification(key: "n1")),("5_live_code", LiveCard.otp(code: "482913", sender: "Halo Bank")),
                          ("6_live_files", LiveCard.added(batchId: "b1")),
                          ("6b_live_receiving", LiveCard.receiving(batchId: "b3")),
                          ("7_live_text", LiveCard.text("Meeting moved to 4:30")),
@@ -202,6 +216,36 @@ CTFontManagerRegisterFontsForURL(URL(fileURLWithPath: "Resources/Galindo.ttf") a
             .environmentObject(model.themeStore)
             .foregroundStyle(.white)
         render(name, content)
+    }
+    // `--compare`: every card through the real overlay, in the notch and in menu bar mode, then stop.
+    if CommandLine.arguments.contains("--compare") {
+        let bar = PlacementState(); bar.placement = .menuBar
+        let notch = PlacementState(); notch.placement = .notch(notchHeight: 32); notch.notchWidth = 190
+        let cards: [(String, LiveCard)] = [
+            ("pairing", .pairing(request.id)),
+            ("call", .call("c1")),
+            ("code", .otp(code: "482913", sender: "Halo Bank")),
+            ("notification", .notification(key: "n1")),
+            ("text", .text("Meeting moved to 4:30")),
+            ("receiving", .receiving(batchId: "b3")),
+            ("files", .added(batchId: "b1")),
+            ("problem", .problem(Problem(symbol: "iphone.slash", title: "2 of 3 sent", detail: "Report.pdf didn't arrive").with("Try again") {})),
+            ("info", .info(symbol: "laptopcomputer", title: "Lync lives in the notch — click it", subtitle: "Or press ⌥⌘L from anywhere")),
+            ("quiet", .quiet(symbol: "iphone.radiowaves.left.and.right", text: "\(phone.name) connected")),
+        ]
+        for (name, card) in cards {
+            model.show(card, for: nil)
+            if model.live != card { print("compare: \(name) not shown, live=\(String(describing: model.live))") }
+            for (tag, place) in [("notch", notch), ("menubar", bar)] {
+                render("cmp_\(name)_\(tag)", OverlayRoot(model: model, placement: place)
+                    .frame(width: 448, height: 300).background(Color(white: 0.55)).environmentObject(model.themeStore))
+            }
+            model.hideLive()
+            if name == "pairing" { model.decidePairing(false) }
+            if name == "call" { send(.call(PhoneCall(id: "c1", state: .ended, number: nil, name: nil, sim: nil))) }
+            model.hideLive()
+        }
+        exit(0)
     }
     // The pairing request and the call from the cards above are done with.
     model.decidePairing(false)
@@ -261,8 +305,10 @@ CTFontManagerRegisterFontsForURL(URL(fileURLWithPath: "Resources/Galindo.ttf") a
     // Bluetooth off on this Mac: a second note under "isn't connected".
     send(.bluetoothRadio(.off))
     render("10k_home_bluetooth_off", PanelView(model: model, theme: model.themeStore, fromNotch: true).fixedSize())
-    send(.bluetoothRadio(.ready))
+    // Connected over Wi‑Fi with Bluetooth off: one quiet line, as codes would stop without Wi‑Fi.
     send(.connected(phone))
+    render("10l_home_wifi_bluetooth_off", PanelView(model: model, theme: model.themeStore, fromNotch: true).fixedSize())
+    send(.bluetoothRadio(.ready))
     send(.call(PhoneCall(id: "c1", state: .ringing, number: "+44 7700 900123", name: "mi amor ❤️", sim: "SIM 1")))
 
     // The real overlay: a code that arrived during the call waits, then shows once the call ends.

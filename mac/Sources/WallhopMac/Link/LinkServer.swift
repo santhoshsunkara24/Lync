@@ -188,6 +188,8 @@ final class LinkServer {
     private let busy = TransferActivity()
     /// The fallback when no phone reaches this Mac over Wi-Fi.
     private let bluetooth: BluetoothLink
+    /// Makes this Mac findable for a minute so the phone can link Lync as its companion app.
+    private let beacon = CompanionBeacon()
     /// Stands for the Bluetooth link in `pendingAcks`, so its acks fail when it drops.
     private let bluetoothConnectionId = UUID()
     /// A paired phone reaches this Mac over Bluetooth only.
@@ -675,6 +677,10 @@ final class LinkServer {
         case "ring":
             if message.string("action") == "stopped" { emit(.ringStopped) }
 
+        case "companion_beacon":
+            // The phone is about to link Lync to this Mac as its companion (Android 17 codes).
+            beacon.show()
+
         default:
             break // Unknown types are ignored so newer phones keep working.
         }
@@ -716,6 +722,10 @@ final class LinkServer {
             if let notification = Self.notification(from: message) { emit(.notification(notification, icon: nil)) }
         case "notif_removed":
             if let key = message.string("key") { emit(.notificationRemoved(key: key)) }
+        case "companion_beacon":
+            beacon.show()
+        case "ring":
+            if message.string("action") == "stopped" { emit(.ringStopped) }
         case "forget":
             // Forget on the phone while only Bluetooth reached us: drop the pairing, as over Wi-Fi.
             paired.remove(id: phone.id)
@@ -795,7 +805,13 @@ final class LinkServer {
 
     /// Starts or stops the phone ringing so it can be found. `completion` (main thread): whether it was sent.
     func ringPhone(_ start: Bool, completion: @escaping (Bool) -> Void) {
-        send(Message("ring", ["action": start ? "start" : "stop"]), completion: completion)
+        let message = Message("ring", ["action": start ? "start" : "stop"])
+        queue.async {
+            // Off Wi-Fi it goes over the Bluetooth link instead: it's one small message.
+            guard self.active == nil else { return self.send(message, completion: completion) }
+            let sent = self.bluetooth.send(message)
+            DispatchQueue.main.async { completion(sent) }
+        }
     }
 
     /// Sends a message that needs no reply. Dropped when no phone is connected.

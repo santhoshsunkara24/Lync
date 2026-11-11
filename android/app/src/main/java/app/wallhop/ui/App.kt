@@ -753,11 +753,12 @@ private fun Tabs(
     LaunchedEffect(Unit) { if (textSheetOpen.value) showTextSheet() }
 
     // Before Android's own prompt: what it looks like, what Lync sees and never sees (Play's prominent disclosure).
-    fun disclose(key: Features.Key, extra: (@Composable () -> Unit)? = null, onContinue: () -> Unit) {
+    fun disclose(key: Features.Key, extra: (@Composable () -> Unit)? = null, keepIfOn: Boolean = false, onContinue: () -> Unit) {
         val ask = app.wallhop.ui.screens.askFor(key) ?: return onContinue()
         overlays.showSheet(
             onDismiss = {
-                Features.set(context, key, false)
+                // Closing the explanation of something that's already on and allowed changes nothing.
+                if (!keepIfOn) Features.set(context, key, false)
                 currentOnPermissionChange()
                 // The guided setup moves on to its next step.
                 afterAnswer.value?.let { next -> afterAnswer.value = null; next(false) }
@@ -787,7 +788,7 @@ private fun Tabs(
             showBlockedAlert(overlays, context, key, stuck)
             return
         }
-        disclose(key) { request(key, required, optional) }
+        disclose(key, keepIfOn = Features.on(context, key) && required.all(::granted)) { request(key, required, optional) }
     }
 
     // Notification access is a trip to Android's settings. When the user comes back without it on a
@@ -826,7 +827,43 @@ private fun Tabs(
         disclose(Features.Key.AppNotifications, extra = { NotificationAccessSteps(context) }) { openAccessList() }
 
     // The features that need Android's OK, each behind its ask sheet.
-    fun allowCodes() = ask(Features.Key.Codes, arrayOf(Manifest.permission.RECEIVE_SMS))
+    // Android 17 holds code texts in the WebOTP format back for three hours unless Lync is the
+    // Mac's companion app (core/Companion.kt). Turning on Codes links it right after the SMS
+    // permission: one step, no setting of its own. [done] runs however it ends.
+    val companionDone = remember { arrayOfNulls<() -> Unit>(1) }
+    val companionDialog = rememberLauncherForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) {
+        currentOnPermissionChange()
+        companionDone[0].also { companionDone[0] = null }?.invoke()
+    }
+    fun linkCompanion(done: () -> Unit = {}) {
+        val activity = activityHost ?: return done()
+        companionDone[0] = done
+        // The Mac shows itself over Bluetooth for a minute; Android then finds it in its dialog.
+        link.askMacToShowItself()
+        scope.launch {
+            kotlinx.coroutines.delay(1_200)
+            app.wallhop.core.Companion.request(activity, onPending = { sender ->
+                runCatching { companionDialog.launch(androidx.activity.result.IntentSenderRequest.Builder(sender).build()) }
+                    .onFailure { companionDone[0].also { companionDone[0] = null }?.invoke() }
+            }) { ok, error ->
+                if (!ok) {
+                    if (error != null) overlays.toast("Couldn't find your Mac", WIcons.Warning,
+                        detail = "Keep Lync open on your Mac with Bluetooth on, then try again.")
+                    companionDone[0].also { companionDone[0] = null }?.invoke()
+                }
+            }
+        }
+    }
+    val companionWanted = { app.wallhop.core.Companion.needed && !app.wallhop.core.Companion.linked(context) }
+
+    fun allowCodes() {
+        // Allowed: link the Mac as well (Android 17), then whatever was waiting carries on.
+        if (companionWanted()) {
+            val then = afterAnswer.value
+            afterAnswer.value = { ok -> if (ok && companionWanted()) linkCompanion { then?.invoke(true) } else then?.invoke(ok) }
+        }
+        ask(Features.Key.Codes, arrayOf(Manifest.permission.RECEIVE_SMS))
+    }
     fun allowCalls() = ask(Features.Key.Calls, CallControl.required, CallControl.optional)
     fun allowTexts() = ask(Features.Key.Texts, SmsStore.required, SmsStore.optional)
 
@@ -1014,6 +1051,14 @@ private fun Tabs(
                     Features.Key.Calls -> allowCalls()
                     Features.Key.Texts -> allowTexts()
                     Features.Key.AppNotifications -> requestNotificationAccess()
+                    Features.Key.Bluetooth ->
+                        if (app.wallhop.link.BleLink.required.all(::granted)) {
+                            // Already allowed: just the switch, no explanation to read again.
+                            Features.set(context, key, true)
+                            link.bluetoothChanged()
+                            currentOnPermissionChange()
+                            overlays.toast("Bluetooth backup is on.", WIcons.Bluetooth, colors.green)
+                        } else ask(key, app.wallhop.link.BleLink.required)
                     else -> Unit
                 }
             },
@@ -1049,6 +1094,7 @@ private fun Tabs(
 
     val settingsActions = remember {
         SettingsActions(
+            linkCompanion = { done -> linkCompanion(done) },
             allowSms = { allowCodes() },
             allowCalls = { allowCalls() },
             allowTexts = { allowTexts() },
@@ -1317,14 +1363,29 @@ private fun HomeSlot(
             recent = activity.drop(1).take(4),
         )
     } else {
-        // The newest entry has its own card beside the Mac, so Recent starts with the one after it.
-        app.wallhop.ui.screens.MacCardData(macInfo, connectedSince, activity.firstOrNull(), transfer, activity.drop(1).take(4))
+        // A code has the "Latest" card for one minute (as long as it's on the Mac's clipboard),
+        // then gives it to the newest thing that isn't a code; it stays in Recent.
+        var now by remember { androidx.compose.runtime.mutableLongStateOf(System.currentTimeMillis()) }
+        LaunchedEffect(activity) {
+            while (true) {
+                now = System.currentTimeMillis()
+                val next = activity.filter { it.kind == app.wallhop.link.ActivityEntry.Kind.Otp && now - it.time < CODE_CARD_MS }
+                    .minOfOrNull { it.time + CODE_CARD_MS } ?: break
+                kotlinx.coroutines.delay((next - now).coerceAtLeast(0L) + 100)
+            }
+        }
+        val latest = activity.firstOrNull { it.kind != app.wallhop.link.ActivityEntry.Kind.Otp || now - it.time < CODE_CARD_MS }
+        // The newest entry has its own card beside the Mac, so Recent is everything else.
+        app.wallhop.ui.screens.MacCardData(macInfo, connectedSince, latest, transfer, activity.filter { it !== latest }.take(4))
     }
     val ringing by app.wallhop.extras.PhoneFinder.ringing.collectAsStateWithLifecycle()
     val bluetooth by link.bluetooth.collectAsStateWithLifecycle()
+    val bluetoothOff by link.bluetoothOff.collectAsStateWithLifecycle()
+    val backupOff by link.bluetoothBackupOff.collectAsStateWithLifecycle()
     // No Mac yet: the ones Lync can see on this Wi-Fi, to pair with in one tap.
     val found by link.discovered.collectAsStateWithLifecycle()
-    MacTab(state, macName, transfer, suggestion, actions = actions, card = card, ringing = ringing, bluetooth = bluetooth && !demo, found = found)
+    MacTab(state, macName, transfer, suggestion, actions = actions, card = card, ringing = ringing, bluetooth = bluetooth && !demo,
+        bluetoothOff = bluetoothOff && !demo, backupOff = backupOff && !demo, found = found)
 }
 
 /** Haptics when a transfer ends; a finished one clears itself after a moment. */
@@ -1430,14 +1491,14 @@ private fun demoActivity(): List<app.wallhop.link.ActivityEntry> {
     val now = System.currentTimeMillis()
     val hour = 3_600_000L
     return listOf(
-        app.wallhop.link.ActivityEntry("1", app.wallhop.link.ActivityEntry.Kind.Otp, "482913", "From HDFC Bank · ready to paste", now - 120_000),
+        app.wallhop.link.ActivityEntry("1", app.wallhop.link.ActivityEntry.Kind.Otp, "482913", "From Halo Bank · ready to paste", now - 120_000),
         app.wallhop.link.ActivityEntry("2", app.wallhop.link.ActivityEntry.Kind.FilesSent, "3 photos", "Ready to paste on your Mac", now - hour),
-        app.wallhop.link.ActivityEntry("3", app.wallhop.link.ActivityEntry.Kind.Call, "Missed call", "Mom", now - 2 * hour),
-        app.wallhop.link.ActivityEntry("4", app.wallhop.link.ActivityEntry.Kind.TextSent, "Link opened on your Mac", "https://www.nothing.tech", now - 3 * hour),
-        app.wallhop.link.ActivityEntry("5", app.wallhop.link.ActivityEntry.Kind.Otp, "771204", "From Swiggy · ready to paste", now - 26 * hour),
+        app.wallhop.link.ActivityEntry("3", app.wallhop.link.ActivityEntry.Kind.Call, "Missed call", "Mi amor ❤️", now - 2 * hour),
+        app.wallhop.link.ActivityEntry("4", app.wallhop.link.ActivityEntry.Kind.TextSent, "Link opened on your Mac", "https://northwind.app", now - 3 * hour),
+        app.wallhop.link.ActivityEntry("5", app.wallhop.link.ActivityEntry.Kind.Otp, "771204", "From Pine Market · ready to paste", now - 26 * hour),
         app.wallhop.link.ActivityEntry("6", app.wallhop.link.ActivityEntry.Kind.FromMac, "2 files from your Mac", "Saved to Downloads › Lync", now - 27 * hour),
         app.wallhop.link.ActivityEntry("7", app.wallhop.link.ActivityEntry.Kind.FilesSent, "Invoice.pdf", "Ready to paste on your Mac", now - 28 * hour),
-        app.wallhop.link.ActivityEntry("8", app.wallhop.link.ActivityEntry.Kind.Otp, "903311", "From Google · ready to paste", now - 30 * hour),
+        app.wallhop.link.ActivityEntry("8", app.wallhop.link.ActivityEntry.Kind.Otp, "903311", "From Orbit Mail · ready to paste", now - 30 * hour),
         app.wallhop.link.ActivityEntry("9", app.wallhop.link.ActivityEntry.Kind.Call, "Missed call", "+91 98765 43210", now - 50 * hour),
     )
 }
@@ -1516,3 +1577,6 @@ private fun backgroundSteps(): String =
     if (Build.VERSION.SDK_INT >= 35)
         "On the next screen, tap App battery usage, then tap the words “Allow background usage” (not the switch) and choose Unrestricted."
     else "On the next screen, tap Battery (or App battery usage) and choose Unrestricted."
+
+/** How long a code keeps Home's "Latest" card: the minute it's on the Mac's clipboard. */
+private const val CODE_CARD_MS = 60_000L

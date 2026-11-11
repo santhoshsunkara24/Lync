@@ -7,6 +7,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.drawscope.CanvasDrawScope
 
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asAndroidBitmap
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.runtime.Composable
@@ -29,6 +30,7 @@ import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.graphics.vector.PathParser
 import androidx.compose.ui.platform.LocalView
+import app.wallhop.ui.design.LinkColors
 import app.wallhop.ui.design.Wallhop
 import kotlin.math.PI
 import kotlin.math.cos
@@ -94,19 +96,29 @@ private class Engine {
     var nextLane = 0
     var glow: Brush? = null
     var glowRadius = -1f
+    /**
+     * Drawn as a loop of still frames ([LiftoffFrames]): the hover then takes exactly four swings
+     * per loop, so the last frame runs into the first without a jump. 0 on screen.
+     */
+    var loopMs = 0f
+    /** The colours it draws with: the wallpaper's, from [Liftoff]'s caller. */
+    var colors: LinkColors = LinkColors.Brand
+    private var glowColors: LinkColors? = null
 
     fun streak(): Streak = if (spare.isEmpty()) Streak() else spare.removeAt(spare.lastIndex)
 
     fun glowBrush(r: Float): Brush {
-        if (r != glowRadius || glow == null) {
-            glow = Brush.radialGradient(listOf(Mint, Color.Transparent), Offset(r, r), r)
+        if (r != glowRadius || glow == null || glowColors != colors) {
+            glow = Brush.radialGradient(listOf(colors.glow, Color.Transparent), Offset(r, r), r)
             glowRadius = r
+            glowColors = colors
         }
         return glow!!
     }
 
     private var tubeImages: Pair<ImageBitmap, ImageBitmap>? = null
     private var tubeSide = -1
+    private var tubeColors: LinkColors? = null
 
     /**
      * The two hooks, each drawn once for its size into a bitmap that every frame then simply
@@ -114,7 +126,7 @@ private class Engine {
      */
     fun tube(scope: DrawScope, s: Float): Pair<ImageBitmap, ImageBitmap> {
         val side = ceil(s * 1.1f).toInt().coerceAtLeast(1)
-        tubeImages?.takeIf { tubeSide == side }?.let { return it }
+        tubeImages?.takeIf { tubeSide == side && tubeColors == colors }?.let { return it }
         fun hook(path: Path, edge: Color, tube: Brush, highlight: Float): ImageBitmap {
             val image = ImageBitmap(side, side)
             CanvasDrawScope().draw(scope, scope.layoutDirection, androidx.compose.ui.graphics.Canvas(image), Size(side.toFloat(), side.toFloat())) {
@@ -127,19 +139,14 @@ private class Engine {
             }
             return image
         }
-        val images = hook(LinkA, EdgeA, TubeA, 0.9f) to hook(LinkB, EdgeB, TubeB, 0.6f)
+        val images = hook(LinkA, colors.edgeA, colors.tubeBrushA(), 0.9f) to hook(LinkB, colors.edgeB, colors.tubeBrushB(), 0.6f)
         tubeImages = images
         tubeSide = side
+        tubeColors = colors
         return images
     }
 }
 
-private val Mint = Color(0xFF5FD9A0)
-private val StreakColor = Color(0xFFE2ECE7)
-private val EdgeA = Color(0xFF9FE6C3)
-private val EdgeB = Color(0xFF7FD5AE)
-private val TubeA = Brush.verticalGradient(listOf(Color.White, Color(0xFFE8FFF4), Color(0xFFB9EED3)), startY = 60f, endY = 196f)
-private val TubeB = Brush.verticalGradient(listOf(Color(0xFFD6FBE9), Color(0xFF8FDDB8)), startY = 60f, endY = 196f)
 private val EdgeStroke = Stroke(19f, cap = StrokeCap.Round)
 private val TubeStroke = Stroke(16f, cap = StrokeCap.Round)
 private val HighlightStroke = Stroke(3f, cap = StrokeCap.Round)
@@ -169,10 +176,13 @@ fun Liftoff(
     failed: Boolean = false,
     /** Cancel was pressed: the link powers down (the screen closes once it has). */
     cancelled: Boolean = false,
+    /** Its colours: the wallpaper's, like the rest of Lync. */
+    colors: LinkColors = LinkColors.from(Wallhop.home),
 ) {
     val reduceMotion = Wallhop.a11y.reduceMotion
     val view = LocalView.current
     val engine = remember { Engine() }
+    engine.colors = colors
     val currentSending by rememberUpdatedState(sending)
     val currentDone by rememberUpdatedState(done)
     val currentFailed by rememberUpdatedState(failed)
@@ -211,7 +221,7 @@ fun Liftoff(
     Canvas(modifier) {
         frame.longValue // Redraw every frame while it animates.
         if (reduceMotion) {
-            drawLinkTube(size.width / 2, size.height / 2, size.minDimension * 0.5f)
+            drawLinkTube(size.width / 2, size.height / 2, size.minDimension * 0.5f, colors = colors)
             return@Canvas
         }
         drawLiftoff(engine)
@@ -241,7 +251,7 @@ private fun DrawScope.drawLiftoff(e: Engine) {
         Stage.Launch -> { val t = e.tp / LaunchMs; back = -10f * easeOut(t); stretch = 1f - 0.07f * easeOut(t) }
         Stage.Send -> {
             back = -10f + 16f * easeOut(e.tp / 220f); stretch = 1.03f
-            hover = sin(e.vt / 70f) * 0.9f
+            hover = sin(if (e.loopMs > 0f) e.vt * (2f * PI.toFloat() * 4f / e.loopMs) else e.vt / 70f) * 0.9f
             rate = 9f; speed = linkSize * 2.2f
             glow = 0.9f
         }
@@ -302,27 +312,28 @@ private fun DrawScope.drawLiftoff(e: Engine) {
         val x = bx - Ux * l.d + Px * l.off
         val y = by - Uy * l.d + Py * l.off
         drawLine(
-            StreakColor, Offset(x, y), Offset(x - Ux * l.len, y - Uy * l.len), strokeWidth = l.w, cap = StrokeCap.Round,
+            e.colors.streak, Offset(x, y), Offset(x - Ux * l.len, y - Uy * l.len), strokeWidth = l.w, cap = StrokeCap.Round,
             // In quickly, then fading the further it gets from the link.
             alpha = 0.7f * minOf(1f, (1f - l.life) * 8f) * l.life,
         )
     }
     drawLinkTube(bx, by, linkSize, stretch, alpha, glint, glow = glow,
-        glowBrush = e.glowBrush(linkSize * 0.75f), cached = e.tube(this, linkSize), apart = apart)
+        glowBrush = e.glowBrush(linkSize * 0.75f), cached = e.tube(this, linkSize), apart = apart, colors = e.colors)
 }
 
-/** The link as a lit mint tube, like the app icon, centred at ([x], [y]) and [s] px tall. */
+/** The link as a lit tube in the wallpaper's colour, like the app icon, centred at ([x], [y]) and [s] px tall. */
 private fun DrawScope.drawLinkTube(
     x: Float, y: Float, s: Float, stretch: Float = 1f, alpha: Float = 1f, glint: Float = -1f, glow: Float = 0.6f, glowBrush: Brush? = null,
     /** The two hooks already drawn ([Engine.tube]): placed rather than drawn again. */
     cached: Pair<ImageBitmap, ImageBitmap>? = null,
     /** The hooks pulled apart along the link by this many px (undone, failed). */
     apart: Float = 0f,
+    colors: LinkColors = LinkColors.Brand,
 ) {
     if (alpha <= 0.002f) return
-    // A soft mint glow under it (the brush is centred on its own box, so it can be reused).
+    // A soft glow under it (the brush is centred on its own box, so it can be reused).
     val r = s * 0.75f
-    val brush = glowBrush ?: Brush.radialGradient(listOf(Mint, Color.Transparent), Offset(r, r), r)
+    val brush = glowBrush ?: Brush.radialGradient(listOf(colors.glow, Color.Transparent), Offset(r, r), r)
     translate(x - r, y - r) { drawCircle(brush, radius = r, center = Offset(r, r), alpha = 0.32f * glow * alpha) }
     val k = s / 256f
     withTransform({
@@ -348,8 +359,8 @@ private fun DrawScope.drawLinkTube(
                 glintHook(LinkB, alpha, glint)
             }
         } else {
-            tubeHook(LinkA, EdgeA, TubeA, 0.9f, alpha, glint)
-            tubeHook(LinkB, EdgeB, TubeB, 0.6f, alpha, glint)
+            tubeHook(LinkA, colors.edgeA, colors.tubeBrushA(), 0.9f, alpha, glint)
+            tubeHook(LinkB, colors.edgeB, colors.tubeBrushB(), 0.6f, alpha, glint)
         }
     }
 }
@@ -374,5 +385,41 @@ private fun DrawScope.tubeHook(path: Path, edge: Color, tube: Brush, highlight: 
             path, Color.White.copy(alpha = 0.95f * sin(glint * PI.toFloat()) * alpha),
             style = Stroke(7f, cap = StrokeCap.Round, pathEffect = PathEffect.dashPathEffect(floatArrayOf(24f, 600f), 24f - glint * 230f)),
         )
+    }
+}
+
+/**
+ * Liftoff as still pictures, for the home screen widget, which can only flip between pictures.
+ * Drawn by the same code as the app's screen, in the same colours. While sending, the speed lines
+ * repeat every 15 lines (five lanes, three lengths, 9 a second), so [sending] is one exact cycle
+ * and plays as a seamless loop.
+ */
+object LiftoffFrames {
+    /** One full cycle of the speed lines while sending, in ms. */
+    const val LOOP_MS = 15_000f / 9f
+
+    /** [count] frames of the send loop, [sidePx] square; show each for [LOOP_MS] / [count]. */
+    fun sending(sidePx: Int, colors: LinkColors, count: Int): List<android.graphics.Bitmap> {
+        val e = Engine().apply { this.colors = colors; stage = Stage.Send; tp = 1_000f; loopMs = LOOP_MS }
+        val step = LOOP_MS / count
+        // Warm up for a whole loop first, so the trail is already full in the first frame.
+        repeat(count) { draw(e, sidePx, step) }
+        return List(count) { draw(e, sidePx, step) }
+    }
+
+    /** One still: landed (the link at rest), or failed (its hooks apart, dimmed). */
+    fun still(sidePx: Int, colors: LinkColors, failed: Boolean): android.graphics.Bitmap {
+        val e = Engine().apply { this.colors = colors; stage = if (failed) Stage.Fail else Stage.Idle; tp = 1_500f }
+        return draw(e, sidePx, 0f)
+    }
+
+    private fun draw(e: Engine, sidePx: Int, stepMs: Float): android.graphics.Bitmap {
+        e.dt = stepMs; e.tp += stepMs; e.vt += stepMs
+        val image = ImageBitmap(sidePx, sidePx)
+        CanvasDrawScope().draw(
+            androidx.compose.ui.unit.Density(1f), androidx.compose.ui.unit.LayoutDirection.Ltr,
+            androidx.compose.ui.graphics.Canvas(image), Size(sidePx.toFloat(), sidePx.toFloat()),
+        ) { drawLiftoff(e) }
+        return image.asAndroidBitmap()
     }
 }

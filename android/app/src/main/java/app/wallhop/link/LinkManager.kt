@@ -232,11 +232,20 @@ class LinkManager private constructor(private val context: Context) {
                 val path = blePath
                 if (id != null && path != null) scope.launch { runCatching { path.send(ack(id, err)) } }
             }
+            // Find my phone works off Wi-Fi too.
+            "ring" -> if (message.string("action") == "stop") app.wallhop.extras.PhoneFinder.stop(context)
+                else app.wallhop.extras.PhoneFinder.start(context)
             else -> Unit // Everything else needs Wi-Fi.
         }
     }
     /** Why the Bluetooth backup isn't advertising (it failed to start), for Settings. */
     val bluetoothProblem: StateFlow<Problem?> get() = ble.problem
+    /** The Bluetooth backup is on in Lync, but the phone's Bluetooth is off. */
+    val bluetoothOff: StateFlow<Boolean> get() = ble.radioOff
+
+    private val _bluetoothBackupOff = MutableStateFlow(false)
+    /** Paired, but Lync's own Bluetooth backup switch is off (or not allowed): codes need Wi‑Fi. */
+    val bluetoothBackupOff: StateFlow<Boolean> = _bluetoothBackupOff
     private var bleJob: Job? = null
     private var loopJob: Job? = null
     private var pairingJob: Job? = null
@@ -291,7 +300,8 @@ class LinkManager private constructor(private val context: Context) {
         scope.launch {
             var was = false
             app.wallhop.extras.PhoneFinder.ringing.collect { ringing ->
-                if (was && !ringing) session?.takeIf { !it.closed }?.let { runCatching { it.send(Message.of("ring", "action" to "stopped")) } }
+                if (was && !ringing) (session?.takeIf { !it.closed } ?: blePath?.takeIf { !it.closed })
+                    ?.let { runCatching { it.send(Message.of("ring", "action" to "stopped")) } }
                 was = ringing
             }
         }
@@ -322,9 +332,11 @@ class LinkManager private constructor(private val context: Context) {
             bleJob = scope.launch {
                 delay(delayMs)
                 val mac = store.get()
+                _bluetoothBackupOff.value = mac != null && !(app.wallhop.core.Features.on(context, app.wallhop.core.Features.Key.Bluetooth) && BleLink.permitted(context))
                 val wanted = loopJob?.isActive == true && mac != null && session?.closed != false &&
                     app.wallhop.core.Features.on(context, app.wallhop.core.Features.Key.Bluetooth) && BleLink.permitted(context)
                 val id = if (wanted) runCatching { identity }.getOrNull() else null
+                if (BuildConfig.STRESS_HOOKS) android.util.Log.d("WallhopBle", "decide: wanted=$wanted loop=${loopJob?.isActive} mac=${mac != null} session=${session?.closed} feature=${app.wallhop.core.Features.on(context, app.wallhop.core.Features.Key.Bluetooth)} permitted=${BleLink.permitted(context)} id=${id != null}")
                 if (mac != null && id != null) ble.start(id, mac) else ble.stop()
             }
         }
@@ -1077,17 +1089,46 @@ class LinkManager private constructor(private val context: Context) {
         }
     }
 
+    /**
+     * Asks the Mac to advertise [app.wallhop.core.Companion.BEACON] for a minute, so Android can
+     * find it and link Lync to it as its companion app (see Companion).
+     */
+    fun askMacToShowItself(): Job = scope.launch {
+        val path = runCatching { awaitPath(5_000) }.getOrNull() ?: return@launch
+        runCatching { path.send(Message.of("companion_beacon")) }
+    }
+
+    /**
+     * The SMS app just showed a new text: look in the inbox too, in case the SMS broadcast didn't
+     * reach Lync or stopped early. Codes that already went are dropped by [sendOtp].
+     */
+    fun checkInboxSoon() {
+        scope.launch {
+            // The SMS app writes the text to the inbox around the time it notifies.
+            delay(1_500)
+            scanInboxForCodes()
+        }
+    }
+
     /** Sends a one-time code. Duplicates within three minutes (SMS plus its notification) are dropped. */
     fun sendOtp(code: String, sender: String, app: String): Job? {
         val now = System.currentTimeMillis()
         recentCodes.entries.removeAll { now - it.value > 3 * 60_000 }
-        if (recentCodes.putIfAbsent(code, now) != null) return null
+        if (recentCodes.putIfAbsent(code, now) != null) {
+            if (BuildConfig.STRESS_HOOKS) Log.d("WallhopLink", "otp: already sent, skipping")
+            return null
+        }
 
         return scope.launch {
             // The phone may go back to deep sleep the moment the SMS is handled; stay awake while
             // the Mac finds it (over Bluetooth that's a scan, a connection and a handshake).
             val wake = keepAwake(30_000)
-            val path = awaitPath(20_000)
+            // Anything going wrong while finding the Mac (Bluetooth refusing a restart, say) must
+            // not lose the code: it then counts as not delivered, is kept and goes later.
+            val path = runCatching { awaitPath(20_000) }
+                .onFailure { if (BuildConfig.STRESS_HOOKS) Log.e("WallhopLink", "otp: finding the Mac failed", it) }
+                .getOrNull()
+            if (BuildConfig.STRESS_HOOKS) Log.d("WallhopLink", "otp: path=${path?.let { if (it is Session) "wifi" else "bluetooth" }}")
             val id = UUID.randomUUID().toString()
             val ack = path?.let {
                 runCatching {

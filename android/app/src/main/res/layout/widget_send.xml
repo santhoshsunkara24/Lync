@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The 4×2 widget while files go to the Mac: what's sending and how far on the left, Lync's Liftoff on the right. -->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@android:id/background"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
+    <ImageView
+        android:id="@+id/widget_card"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:scaleType="fitXY"
+        android:src="@drawable/widget_shape"
+        android:importantForAccessibility="no" />
+    <LinearLayout
+        android:id="@+id/widget_open"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:baselineAligned="false"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:paddingStart="18dp"
+        android:paddingTop="14dp"
+        android:paddingEnd="10dp"
+        android:paddingBottom="14dp">
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:orientation="vertical">
+            <ImageView
+                android:id="@+id/widget_send_overline"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:adjustViewBounds="true"
+                android:importantForAccessibility="no" />
+            <ImageView
+                android:id="@+id/widget_send_title"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:adjustViewBounds="true"
+                android:importantForAccessibility="no" />
+            <ImageView
+                android:id="@+id/widget_send_status"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:adjustViewBounds="true"
+                android:importantForAccessibility="no" />
+        </LinearLayout>
+        <ViewFlipper
+            android:id="@+id/widget_liftoff"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="0.85"
+            android:autoStart="true"
+            android:flipInterval="56" />
+    </LinearLayout>
+</FrameLayout>

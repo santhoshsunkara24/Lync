@@ -97,4 +97,17 @@ class ContrastTest {
     @Test fun shareDoneBarInkOnGreen() {
         assertTrue(Contrast.ratio(Ink.argb(), 0xFF30D158.toInt()) >= Contrast.AA)
     }
+
+    /** The send screen in every wallpaper's colours: its text reads on its own dark ground. */
+    @Test fun sendScreenTextReadsInEveryColour() {
+        val colours = seeds.map { (name, seed) -> name to LinkColors.from(HomeColors.from(seed, null)) } + ("brand" to LinkColors.Brand)
+        for ((name, link) in colours) {
+            for (ground in listOf(link.backgroundTop, link.backgroundBottom)) {
+                for ((part, color) in listOf("ink" to link.ink, "onDark" to link.onDark, "percent" to link.percent, "soft" to link.soft)) {
+                    val ratio = Contrast.ratio(color.argb(), ground.argb())
+                    assertTrue("$part on the send screen, $name: $ratio", ratio >= Contrast.AA)
+                }
+            }
+        }
+    }
 }

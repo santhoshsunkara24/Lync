@@ -62,6 +62,12 @@ object PhoneFinder {
     private const val NOTIFICATION_ID = 77
     private const val ACTION_STOP = "app.wallhop.STOP_RINGING"
     private var player: MediaPlayer? = null
+    /**
+     * The vibrator the ringing was started on. Android only cancels a vibration through the same
+     * Vibrator that started it, so stop() must use this one, not a fresh one from another
+     * context (that left the phone buzzing after Stop).
+     */
+    private var buzzing: android.os.Vibrator? = null
     private val stopLater = Runnable { stop(appContext ?: return@Runnable) }
     private var appContext: Context? = null
     private val handler = android.os.Handler(android.os.Looper.getMainLooper())
@@ -100,14 +106,21 @@ object PhoneFinder {
             player?.runCatching { stop(); release() }
             player = null
             _ringing.value = false
-            vibrator(context)?.cancel()
+            buzzing?.cancel()
+            buzzing = null
+            // And any other instance, in case one was started some other way.
+            vibrator(context.applicationContext)?.cancel()
             Glyphs.stop(context)
             NotificationManagerCompat.from(context).cancel(NOTIFICATION_ID)
         }
     }
 
     private fun vibrate(context: Context) {
-        vibrator(context)?.vibrate(VibrationEffect.createWaveform(longArrayOf(0, 600, 400), 0))
+        buzzing = vibrator(context)?.also {
+            it.vibrate(VibrationEffect.createWaveform(longArrayOf(0, 600, 400), 0),
+                // As an alarm: Android keeps it going through Do Not Disturb, like the sound.
+                AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_ALARM).build())
+        }
     }
 
     /** The phone's vibrator on every Android version Wallhop supports (10 and later). */

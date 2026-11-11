@@ -191,8 +191,32 @@ final class BluetoothLink: NSObject {
         Self.log.notice("link dropped at \(String(describing: link.stage), privacy: .public)")
         if let central, central.state == .poweredOn { central.cancelPeripheralConnection(link.peripheral) }
         if wasOpen { onState?(nil) }
+        // Found but never opened, twice running: start Bluetooth afresh (see restartCentral).
+        failedTries = wasOpen ? 0 : failedTries + 1
+        if failedTries >= 2 {
+            failedTries = 0
+            restartCentral()
+        }
         // Look again in a moment (the phone restarts advertising once the link is gone).
         queue.asyncAfter(deadline: .now() + 1) { [weak self] in self?.scan() }
+    }
+
+    /// Links that were found but never opened, in a row.
+    private var failedTries = 0
+
+    /// A new connection manager, as a relaunch would give. macOS keeps the phone's Bluetooth
+    /// layout (its service and characteristic) cached against the peripheral while a manager
+    /// lives. When Lync's server on the phone starts over (the app updated or reinstalled, or
+    /// Bluetooth toggled), Android only announces the change to bonded devices, and Lync never
+    /// bonds: so the Mac keeps writing to the old layout, nothing answers, and every attempt
+    /// times out until Lync on the Mac is restarted. A fresh manager reads the layout anew.
+    private func restartCentral() {
+        guard wanted else { return }
+        Self.log.notice("phone found but never answering: starting Bluetooth afresh")
+        central?.stopScan()
+        central?.delegate = nil
+        central = CBCentralManager(delegate: self, queue: queue, options: [CBCentralManagerOptionShowPowerAlertKey: false])
+        // It reports poweredOn shortly and scanning resumes from there.
     }
 
     /// The paired phone whose tag this is. A phone's tag changes every 15 minutes, but only while
@@ -300,6 +324,7 @@ final class BluetoothLink: NSObject {
                 throw BleWire.FrameError.bad
             }
             link.stage = .open
+            failedTries = 0
             link.timeout?.cancel()
             startHeartbeat(on: link)
             Self.log.notice("link up")
@@ -345,11 +370,13 @@ extension BluetoothLink: CBCentralManagerDelegate {
     }
 
     func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
+        Self.log.info("didConnect (ours: \(self.link?.peripheral === peripheral, privacy: .public))")
         guard let link, link.peripheral === peripheral else { return }
         peripheral.discoverServices([Self.serviceUUID])
     }
 
     func centralManager(_ central: CBCentralManager, didFailToConnect peripheral: CBPeripheral, error: Error?) {
+        Self.log.info("didFailToConnect: \(String(describing: error), privacy: .public)")
         if let link, link.peripheral === peripheral { drop(link) }
     }
 
@@ -360,12 +387,14 @@ extension BluetoothLink: CBCentralManagerDelegate {
 
 extension BluetoothLink: CBPeripheralDelegate {
     func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
+        Self.log.info("services: \(peripheral.services?.map(\.uuid.uuidString) ?? [], privacy: .public) error: \(String(describing: error), privacy: .public)")
         guard let link, link.peripheral === peripheral else { return }
         guard let service = peripheral.services?.first(where: { $0.uuid == Self.serviceUUID }) else { return drop(link) }
         peripheral.discoverCharacteristics([Self.characteristicUUID], for: service)
     }
 
     func peripheral(_ peripheral: CBPeripheral, didDiscoverCharacteristicsFor service: CBService, error: Error?) {
+        Self.log.info("characteristics: \(service.characteristics?.count ?? -1, privacy: .public) error: \(String(describing: error), privacy: .public)")
         guard let link, link.peripheral === peripheral else { return }
         guard let characteristic = service.characteristics?.first(where: { $0.uuid == Self.characteristicUUID }) else {
             return drop(link)
@@ -381,6 +410,7 @@ extension BluetoothLink: CBPeripheralDelegate {
     }
 
     func peripheral(_ peripheral: CBPeripheral, didUpdateNotificationStateFor characteristic: CBCharacteristic, error: Error?) {
+        Self.log.info("notifying: \(characteristic.isNotifying, privacy: .public) error: \(String(describing: error), privacy: .public)")
         guard let link, link.peripheral === peripheral else { return }
         guard error == nil else { return drop(link) }
         guard link.stage == .connecting else { return }
@@ -407,6 +437,7 @@ extension BluetoothLink: CBPeripheralDelegate {
     }
 
     func peripheral(_ peripheral: CBPeripheral, didWriteValueFor characteristic: CBCharacteristic, error: Error?) {
+        if let error { Self.log.info("write failed: \(String(describing: error), privacy: .public)") }
         if error != nil, let link, link.peripheral === peripheral { drop(link) }
     }
 }

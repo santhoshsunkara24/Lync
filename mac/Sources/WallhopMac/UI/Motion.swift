@@ -25,6 +25,7 @@ struct WInteractive<S: Shape>: ViewModifier {
             .scaleEffect(pressed ? 0.96 : 1)
             .opacity(pressed ? 0.85 : 1)
             .modifier(HoverNudge(count: nudges))
+            .modifier(ClickNudgeTracking(pressed: pressed))
             .contentShape(shape)
             .onHover { inside in
                 hovering = inside
@@ -50,6 +51,7 @@ struct WPlainPress: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .modifier(HoverNudgeTracking())
+            .modifier(ClickNudgeTracking(pressed: configuration.isPressed))
             .scaleEffect(configuration.isPressed ? 0.96 : 1)
             .opacity(configuration.isPressed ? 0.7 : 1)
             .contentShape(Rectangle())
@@ -70,8 +72,31 @@ struct HoverNudge: ViewModifier {
 }
 
 private struct HoverNudgeKey: EnvironmentKey { static let defaultValue = 0 }
+private struct ClickNudgeKey: EnvironmentKey { static let defaultValue = 0 }
+
+/// Hands "the button was just clicked" down to its icons: each plays its motion once more as the
+/// click lets go, so every action answers with a small move (the media controls too, which
+/// stay still on hover). A click released off the button (cancelled) doesn't count.
+struct ClickNudgeTracking: ViewModifier {
+    let pressed: Bool
+    @State private var clicks = 0
+    @State private var inside = false
+
+    func body(content: Content) -> some View {
+        content
+            .environment(\.clickNudge, clicks)
+            .onHover { inside = $0 }
+            .onChange(of: pressed) { was, now in if was && !now && inside { clicks += 1 } }
+    }
+}
 
 extension EnvironmentValues {
+    /// Goes up each time the button around this view is clicked.
+    var clickNudge: Int {
+        get { self[ClickNudgeKey.self] }
+        set { self[ClickNudgeKey.self] = newValue }
+    }
+
     /// Goes up each time the pointer arrives on the button or row around this view.
     var hoverNudge: Int {
         get { self[HoverNudgeKey.self] }
@@ -88,13 +113,33 @@ extension EnvironmentValues {
 struct NudgeImage: View {
     let name: String
     @Environment(\.hoverNudge) private var nudge
+    @Environment(\.clickNudge) private var click
 
     init(_ name: String) { self.name = name }
 
     var body: some View {
+        if WMotion.reduceMotion {
+            IconImage(name)
+        } else {
+            let tap = IconMotion(symbol: name, click: true)
+            hovered.keyframeAnimator(initialValue: IconPose(), trigger: click) { content, pose in
+                content
+                    .scaleEffect(pose.scale)
+                    .rotationEffect(.degrees(pose.angle), anchor: tap.anchor)
+                    .offset(x: pose.x, y: pose.y)
+            } keyframes: { _ in
+                KeyframeTrack(\.angle) { tap.angleKeys }
+                KeyframeTrack(\.x) { tap.xKeys }
+                KeyframeTrack(\.y) { tap.yKeys }
+                KeyframeTrack(\.scale) { tap.scaleKeys }
+            }
+        }
+    }
+
+    @ViewBuilder private var hovered: some View {
         let image = IconImage(name)
         let motion = IconMotion(symbol: name)
-        if WMotion.reduceMotion || motion.isStill {
+        if motion.isStill {
             image
         } else {
             image.keyframeAnimator(initialValue: IconPose(), trigger: nudge) { content, pose in
@@ -124,8 +169,13 @@ struct IconPose {
 private enum IconMotion {
     case still, tip, slide(dx: CGFloat, dy: CGFloat), tilt, turn(Double), grow
 
-    init(symbol: String) {
+    /// `click`: the motion for a click, the same as hover's except that the media controls move
+    /// too (back and forward the way they skip, play and pause a small pop).
+    init(symbol: String, click: Bool = false) {
         let s = symbol
+        if click, s.hasPrefix("backward") { self = .slide(dx: -2, dy: 0); return }
+        if click, s.hasPrefix("forward") { self = .slide(dx: 2, dy: 0); return }
+        if click, s.hasPrefix("play") || s.hasPrefix("pause") { self = .grow; return }
         if s.hasPrefix("play") || s.hasPrefix("pause") || s.hasPrefix("forward") || s.hasPrefix("backward") || s.hasPrefix("chevron.left") {
             self = .still
         }

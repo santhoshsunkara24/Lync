@@ -283,6 +283,11 @@ final class AppModel: ObservableObject {
     @Published var hideNotificationText: Bool {
         didSet { UserDefaults.standard.set(hideNotificationText, forKey: "hideNotificationText") }
     }
+    /// Shows a new code's digits in the notch or menu-bar card. Off by default: that card is on show
+    /// to anyone looking at the screen (or a screen share), so it shows dots unless the user opts in.
+    @Published var showCodeOnArrival: Bool {
+        didSet { UserDefaults.standard.set(showCodeOnArrival, forKey: "showCodeOnArrival") }
+    }
     @Published private(set) var mutedApps: [String: String] {
         didSet { UserDefaults.standard.set(mutedApps, forKey: "mutedApps") }
     }
@@ -329,6 +334,7 @@ final class AppModel: ObservableObject {
         copyTextAutomatically = UserDefaults.standard.object(forKey: "copyText") as? Bool ?? true
         showNotifications = UserDefaults.standard.object(forKey: "showNotifications") as? Bool ?? true
         hideNotificationText = UserDefaults.standard.bool(forKey: "hideNotificationText")
+        showCodeOnArrival = UserDefaults.standard.bool(forKey: "showCodeOnArrival")
         mutedApps = UserDefaults.standard.dictionary(forKey: "mutedApps") as? [String: String] ?? [:]
         onboardingStep = UserDefaults.standard.bool(forKey: "onboardingHotkeySeen") || !server.paired.all.isEmpty ? .scan : .hotkey
         pairedPhones = server.paired.all
@@ -367,11 +373,12 @@ final class AppModel: ObservableObject {
     }
     var notchHeight: CGFloat { NSScreen.screens.first { $0.safeAreaInsets.top > 0 }?.safeAreaInsets.top ?? 0 }
 
-    /// The newest code that hasn't expired, for the panel's big code card.
+    /// The newest code from the last minute, for the panel's big code card: the same minute it's on
+    /// the clipboard, so the card and "on your clipboard" go together. Older codes stay in Recent.
     var latestCode: (code: String, sender: String, item: ActivityItem)? {
         for item in activity {
             if case .otp(let code, let sender, let expiresAt) = item.payload, expiresAt > Date(),
-               Date().timeIntervalSince(item.date) < 5 * 60 {
+               Date().timeIntervalSince(item.date) < Self.clipboardClearDelay {
                 return (code, sender, item)
             }
         }
@@ -486,7 +493,8 @@ final class AppModel: ObservableObject {
     /// A second, smaller note under `connectionProblem`: Bluetooth can't back up Wi‑Fi, or the
     /// firewall may be what keeps the phone on Bluetooth.
     var connectionNote: Problem? {
-        guard connectedPhone == nil, isPaired else { return nil }
+        guard isPaired else { return nil }
+        if connectedPhone != nil { return bluetoothRadio == .off ? .bluetoothOffQuiet : nil }
         if bluetoothPhone != nil { return waitedLong && macOnline && listening && firewallBlocks ? .firewallMaybe : nil }
         switch bluetoothRadio {
         case .off: return .bluetoothOff
@@ -708,6 +716,10 @@ final class AppModel: ObservableObject {
                                                   expiresAt: Date().addingTimeInterval(Self.otpLifetime)))
             insert(item)
             copyOTP(code)
+            // The card goes after its minute even with the panel open: redraw once it's up.
+            DispatchQueue.main.asyncAfter(deadline: .now() + Self.clipboardClearDelay + 0.2) { [weak self] in
+                self?.objectWillChange.send()
+            }
             // It's already on the clipboard, so the card is a glance, but long enough to read once
             // the digits have rolled in; the pointer on it keeps it. (VoiceOver users get longer.)
             show(.otp(code: code, sender: sender), for: 2.5)
@@ -1349,6 +1361,11 @@ final class AppModel: ObservableObject {
         hideLive()
     }
 
+    /// One call off the list, on this Mac only (the phone's call log is untouched).
+    func removeCall(_ id: String) {
+        callLog.removeAll { $0.id == id && !$0.outcome.isLive }
+    }
+
     func remove(_ item: ActivityItem) {
         activity.removeAll { $0.id == item.id }
     }
@@ -1368,8 +1385,9 @@ final class AppModel: ObservableObject {
     /// `stopped`, e.g. someone silenced it); without that report the Mac assumes 30 s.
     /// Only says it's ringing once the request really went out.
     func ringPhone() {
-        guard connectedPhone != nil else {
-            report(.notConnected(bluetooth: bluetoothPhone != nil, wifiTitle: "Ringing needs Wi‑Fi"))
+        // Over Wi-Fi or, off it, over Bluetooth.
+        guard connectedPhone != nil || bluetoothPhone != nil else {
+            report(.notConnected(bluetooth: false, wifiTitle: "Ringing needs Wi‑Fi"))
             return
         }
         let start = !ringing

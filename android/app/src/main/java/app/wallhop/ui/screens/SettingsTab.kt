@@ -84,6 +84,8 @@ class SettingsActions(
     val addTile: () -> Unit,
     /** Opens the settings page a problem's button points to (Bluetooth, notifications, battery). */
     val runFix: (app.wallhop.core.Fix) -> Unit = {},
+    /** Links Lync to the Mac as its companion app, so Android 17 lets every code through. */
+    val linkCompanion: (onLinked: () -> Unit) -> Unit = {},
 )
 
 /** Permissions and preferences as an inset grouped list (DESIGN.md §6.6). */
@@ -111,12 +113,21 @@ fun SettingsTab(
                 SectionHeader("On your Mac")
                 InsetSection(dividerInset = IconRowTextInset) {
                     row {
+                        // Android 17: until Lync is linked to the Mac, some codes wait three hours.
+                        // Said on the Codes row itself, with the fix beside its switch.
+                        var linked by remember { mutableStateOf(app.wallhop.core.Companion.linked(context)) }
+                        androidx.lifecycle.compose.LifecycleResumeEffect(Unit) {
+                            linked = app.wallhop.core.Companion.linked(context)
+                            onPauseOrDispose {}
+                        }
+                        val late = setup.sms && app.wallhop.core.Companion.needed && !linked
                         ListRow(
                             title = "Codes",
-                            subtitle = "Only the code, never the message",
+                            subtitle = if (late) "Some codes arrive 3 hours late until you link your Mac" else "Only the code, never the message",
                             leading = { IconTile(WIcons.Code, colors.green) },
                             checked = setup.sms,
                             onCheckedChange = toggle(Features.Key.Codes, actions.allowSms),
+                            trailing = if (late) ({ app.wallhop.ui.components.TextAction("Link Mac", { actions.linkCompanion { linked = app.wallhop.core.Companion.linked(context) } }, bold = true) }) else null,
                         )
                     }
                     row {
@@ -138,7 +149,7 @@ fun SettingsTab(
                         )
                     }
                 }
-                Spacer(Modifier.height(Space.l))
+                Spacer(Modifier.height(SectionGap))
             }
         }
         item(key = "notifications") {
@@ -194,7 +205,7 @@ fun SettingsTab(
                         )
                     }
                 }
-                Spacer(Modifier.height(Space.l))
+                Spacer(Modifier.height(SectionGap))
             }
         }
         item(key = "connected") {
@@ -242,17 +253,8 @@ fun SettingsTab(
                             )
                         }
                     }
-                    row {
-                        ListRow(
-                            title = "Send clipboard tile",
-                            subtitle = "One tap in Quick Settings sends your clipboard",
-                            leading = { IconTile(WIcons.Clipboard, colors.indigo) },
-                            chevron = true,
-                            onClick = actions.addTile,
-                        )
-                    }
                 }
-                Spacer(Modifier.height(Space.l))
+                Spacer(Modifier.height(SectionGap))
             }
         }
         app.wallhop.glyph.Glyphs.hardware?.let { hardware ->
@@ -281,7 +283,7 @@ fun SettingsTab(
                             )
                         }
                     }
-                    Spacer(Modifier.height(Space.l))
+                    Spacer(Modifier.height(SectionGap))
                 }
             }
         }
@@ -322,7 +324,7 @@ fun SettingsTab(
         if (BuildConfig.STRESS_HOOKS) {
             item(key = "developer") {
                 Column {
-                    Spacer(Modifier.height(Space.l))
+                    Spacer(Modifier.height(SectionGap))
                     SectionHeader("Developer")
                     InsetSection(dividerInset = IconRowTextInset) {
                         row {
@@ -406,7 +408,7 @@ fun AppsScreen(
                         )
                     }
                 }
-                Spacer(Modifier.height(Space.l))
+                Spacer(Modifier.height(SectionGap))
             }
         }
         if (!hasNotificationAccess) {
@@ -421,12 +423,12 @@ fun AppsScreen(
                         )
                     }
                 }
-                Spacer(Modifier.height(Space.l))
+                Spacer(Modifier.height(SectionGap))
             }
         }
         item(key = "search") {
             SearchField(query, { query = it }, placeholder = "Search apps")
-            Spacer(Modifier.height(Space.l))
+            Spacer(Modifier.height(SectionGap))
         }
         val all = apps
         if (all == null) {
@@ -455,7 +457,7 @@ fun AppsScreen(
                         onCheckedChange = { mirrored.setEnabled(app.packageName, it) },
                     )
                 }
-                item(key = "gap-$header") { Spacer(Modifier.height(Space.l)) }
+                item(key = "gap-$header") { Spacer(Modifier.height(SectionGap)) }
             }
         }
     }
@@ -540,7 +542,7 @@ private fun GlyphSection(hardware: app.wallhop.glyph.Glyphs.Hardware) {
         row {
             ListRow(
                 title = "While files send",
-                subtitle = if (matrix) "The link flies with a trail behind it, then lands when they're there" else "A slow pulse, then two blinks when they're there",
+                subtitle = if (matrix) "The link flies with a trail behind it, then lands when they're there" else "A strip of lights fills as they go, then two blinks when they're there",
                 leading = { IconTile(WIcons.File, colors.green) },
                 checked = transfer,
                 onCheckedChange = { on -> transfer = on; Features.set(context, Features.Key.GlyphTransfer, on) },
@@ -560,5 +562,5 @@ private fun GlyphSection(hardware: app.wallhop.glyph.Glyphs.Hardware) {
             )
         }
     }
-    Spacer(Modifier.height(Space.l))
+    Spacer(Modifier.height(SectionGap))
 }

@@ -267,10 +267,10 @@ fun ListRow(
                     else -> Modifier
                 },
             )
-            .defaultMinSize(minHeight = if (subtitle != null) 64.dp else 56.dp)
-            .padding(horizontal = Space.m, vertical = Space.s),
+            .defaultMinSize(minHeight = if (subtitle != null) 72.dp else 60.dp)
+            .padding(horizontal = Space.m, vertical = Space.m),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(Space.s),
+        horizontalArrangement = Arrangement.spacedBy(Space.m),
     ) {
         leading?.invoke()
         // Trailing things sit centred on the title's line, not the whole block, so a switch or
@@ -340,7 +340,7 @@ val SectionRadius = 24.dp
 val IconTileSize = 40.dp
 
 /** Where a row's text starts when it leads with an [IconTile]: dividers start here too. */
-val IconRowTextInset = Space.m + IconTileSize + Space.s
+val IconRowTextInset = Space.m + IconTileSize + Space.m
 
 /**
  * Round icon: the glyph in its colour, lightened, on a soft wash of the same colour. Colour

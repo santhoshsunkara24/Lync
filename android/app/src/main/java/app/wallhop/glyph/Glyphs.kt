@@ -114,21 +114,22 @@ object Glyphs {
     }
 
     /**
-     * The link for Liftoff, smaller than the logo so its exhaust has room: traced from the app
-     * icon's own path at 9 x 9 for the 13 x 13 Matrix (the 13-pixel link on the 25 x 25 one).
+     * The link for Liftoff, smaller than the logo so its exhaust has room: [link13] with each arm
+     * two pixels shorter, so it's the same drawing (two-pixel strokes, the same curves) at 9 x 9
+     * for the 13 x 13 Matrix (the 13-pixel link itself on the 25 x 25 one).
      * Each hook's short end lines up with the other hook's long arm with a pixel of air between,
      * exactly as in the icon: that gap is what makes the two read as interlocked.
      */
     internal val miniLink = listOf(
-        "......BB.",
-        ".....B..B",
-        "........B",
-        "...A...B.",
-        "..A...B..",
-        ".A...B...",
-        "A........",
-        "A..A.....",
-        ".AA......",
+        ".....BB..",
+        "....BBBB.",
+        ".......BB",
+        "..AA...BB",
+        ".AA...BB.",
+        "AA...BB..",
+        "AA.......",
+        ".AAAA....",
+        "..AA.....",
     )
 
     /**

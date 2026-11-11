@@ -267,6 +267,7 @@ private fun ShareSheet(
                     .draggable(
                         rememberDraggableState { delta -> drag.drag(delta) },
                         Orientation.Vertical,
+                        startDragImmediately = drag.isSettling,
                         onDragStarted = { drag.grab() },
                         onDragStopped = { velocity -> drag.release(velocity, { close() }) },
                     )

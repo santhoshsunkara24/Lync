@@ -35,6 +35,10 @@ import app.wallhop.ui.design.themeSeeds
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.transformLatest
+import app.wallhop.link.TransferPhase
+import app.wallhop.link.TransferState
 import kotlinx.coroutines.launch
 
 /**
@@ -66,16 +70,34 @@ class MacWidget : AppWidgetProvider() {
             val ids = manager.getAppWidgetIds(ComponentName(app, MacWidget::class.java))
             if (ids.isEmpty()) return
             val look = Look(app, link.state.value, link.macInfo.value, paired = link.pairedMac != null)
+            val send = sending
+            // While a send is shown only its words and percentage change: those go as a partial
+            // update, so the Liftoff's frames aren't sent to the home screen again each time.
+            val key = send?.let { it.copy(percent = 0) }
+            val partial = send != null && key == shownSend && send.phase == TransferPhase.Sending
+            shownSend = key
             for (id in ids) {
-                val views = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                    RemoteViews(mapOf(SizeF(110f, 110f) to look.views(R.layout.widget_mac_small), SizeF(250f, 110f) to look.views(R.layout.widget_mac)))
-                } else {
-                    val width = manager.getAppWidgetOptions(id).getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH, 250)
-                    look.views(if (width < 250) R.layout.widget_mac_small else R.layout.widget_mac)
+                fun pickBy(small: Int, wide: Int, build: (Int) -> RemoteViews) =
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                        RemoteViews(mapOf(SizeF(110f, 110f) to build(small), SizeF(250f, 110f) to build(wide)))
+                    } else {
+                        val width = manager.getAppWidgetOptions(id).getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH, 250)
+                        build(if (width < 250) small else wide)
+                    }
+                when {
+                    send == null -> manager.updateAppWidget(id, pickBy(R.layout.widget_mac_small, R.layout.widget_mac) { look.views(it) })
+                    partial -> runCatching {
+                        manager.partiallyUpdateAppWidget(id, pickBy(R.layout.widget_send_small, R.layout.widget_send) { look.sendWords(it, send) })
+                    }.onFailure { manager.updateAppWidget(id, pickBy(R.layout.widget_send_small, R.layout.widget_send) { look.sendViews(it, send) }) }
+                    else -> manager.updateAppWidget(id, pickBy(R.layout.widget_send_small, R.layout.widget_send) { look.sendViews(it, send) })
                 }
-                manager.updateAppWidget(id, views)
             }
         }
+
+        /** The send the widget shows, or null for its usual face. Set by [follow]. */
+        @Volatile private var sending: WidgetSend? = null
+        /** What the last full update showed, less the percentage (see refresh). */
+        @Volatile private var shownSend: WidgetSend? = null
 
         /** Keeps the widgets up to date while the app runs: the link coming and going, the Mac's battery. */
         fun follow(context: Context, link: LinkManager, scope: CoroutineScope) {
@@ -84,7 +106,54 @@ class MacWidget : AppWidgetProvider() {
                     .distinctUntilChanged()
                     .collect { refresh(context, link) }
             }
+            // Files or photos going across (from the widget, the share sheet or the app): the
+            // widget shows the same Liftoff as the sending screen, then "On your Mac" for a moment.
+            scope.launch {
+                @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+                link.transfer
+                    .map { t -> t?.takeIf { it.items.isNotEmpty() }?.let(WidgetSend::of) }
+                    .distinctUntilChanged()
+                    .transformLatest { send ->
+                        emit(send)
+                        if (send?.phase == TransferPhase.Done) { kotlinx.coroutines.delay(4_000); emit(null) }
+                    }
+                    .distinctUntilChanged()
+                    .collect { send ->
+                        sending = send
+                        refresh(context, link)
+                    }
+            }
         }
+    }
+}
+
+/** A send as the widget shows it; the percentage in steps of 5, so it doesn't redraw for every chunk. */
+private data class WidgetSend(val id: String, val phase: TransferPhase, val title: String, val percent: Int, val total: Long) {
+    companion object {
+        fun of(t: TransferState) = WidgetSend(t.id, t.phase, LinkManager.summary(t.items), (t.progress * 20).toInt() * 5, t.totalBytes)
+    }
+}
+
+/** The widget's Liftoff, drawn once per colour and kept (30 frames of the send loop, and the stills). */
+private object WidgetFrames {
+    const val COUNT = 30
+    /** Square, in px: sharp at the widget's size, light enough for the home screen to hold. */
+    const val SIDE = 240
+    private var colors: app.wallhop.ui.design.LinkColors? = null
+    private var loop: List<Bitmap> = emptyList()
+    private var landed: Bitmap? = null
+    private var failed: Bitmap? = null
+
+    @Synchronized fun loop(c: app.wallhop.ui.design.LinkColors): List<Bitmap> { prepare(c); return loop }
+    @Synchronized fun landed(c: app.wallhop.ui.design.LinkColors): Bitmap { prepare(c); return landed!! }
+    @Synchronized fun failed(c: app.wallhop.ui.design.LinkColors): Bitmap { prepare(c); return failed!! }
+
+    private fun prepare(c: app.wallhop.ui.design.LinkColors) {
+        if (c == colors && loop.isNotEmpty()) return
+        colors = c
+        loop = app.wallhop.ui.components.LiftoffFrames.sending(SIDE, c, COUNT)
+        landed = app.wallhop.ui.components.LiftoffFrames.still(SIDE, c, failed = false)
+        failed = app.wallhop.ui.components.LiftoffFrames.still(SIDE, c, failed = true)
     }
 }
 
@@ -179,6 +248,66 @@ private class Look(private val context: Context, state: LinkState, info: MacInfo
             append(shown.name ?: "Lync")
             append(if (shown.connected) ", connected" else ", not connected")
             if (battery != null) append(", battery $battery%" + if (shown.charging) ", charging" else "")
+        })
+    }
+
+    private val linkColors = app.wallhop.ui.design.LinkColors.from(home)
+
+    /** The widget while a send is shown: Lync's Liftoff (a loop while sending), and its words. */
+    fun sendViews(layout: Int, send: WidgetSend) = RemoteViews(context.packageName, layout).apply {
+        setInt(R.id.widget_card, "setColorFilter", home.top.toArgb())
+        setOnClickPendingIntent(R.id.widget_open, PendingIntent.getActivity(
+            context, 0, Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        ))
+        removeAllViews(R.id.widget_liftoff)
+        val frames = when (send.phase) {
+            TransferPhase.Sending -> WidgetFrames.loop(linkColors)
+            TransferPhase.Done -> listOf(WidgetFrames.landed(linkColors))
+            TransferPhase.Failed -> listOf(WidgetFrames.failed(linkColors))
+            TransferPhase.Waiting -> listOf(WidgetFrames.landed(linkColors))
+        }
+        for (frame in frames) {
+            addView(R.id.widget_liftoff, RemoteViews(context.packageName, R.layout.widget_frame).apply {
+                setImageViewBitmap(R.id.widget_frame, frame)
+            })
+        }
+        applySendWords(this, layout, send)
+    }
+
+    /** Only the words and percentage, for the partial updates while it sends. */
+    fun sendWords(layout: Int, send: WidgetSend) = RemoteViews(context.packageName, layout).apply { applySendWords(this, layout, send) }
+
+    private fun applySendWords(views: RemoteViews, layout: Int, send: WidgetSend) = with(views) {
+        val wide = layout == R.layout.widget_send
+        val bright = Contrast.WHITE
+        val soft = Contrast.blend(Contrast.WHITE, 0.78f, home.top.toArgb())
+        val status = when (send.phase) {
+            TransferPhase.Sending -> "${send.percent}%"
+            TransferPhase.Waiting -> if (wide) "Waits for your Mac" else "Waiting"
+            TransferPhase.Done -> "On your Mac"
+            TransferPhase.Failed -> "Didn’t send"
+        }
+        if (wide) {
+            val overline = when (send.phase) {
+                TransferPhase.Sending -> "Sending to your Mac"
+                TransferPhase.Waiting -> "Waiting for your Mac"
+                TransferPhase.Done -> "Sent"
+                TransferPhase.Failed -> "Didn’t send"
+            }
+            setImageViewBitmap(R.id.widget_send_overline, text(overline, R.font.figtree, 12f, soft, 600, maxWidthDp = 150f))
+            setImageViewBitmap(R.id.widget_send_title, text(send.title, R.font.figtree, 19f, bright, 600, maxWidthDp = 150f))
+            val detail = if (send.phase == TransferPhase.Sending) "${send.percent}% of ${app.wallhop.ui.components.formatBytes(send.total)}" else status
+            setImageViewBitmap(R.id.widget_send_status, text(detail, R.font.figtree, 13f, soft, 500, maxWidthDp = 150f))
+        } else {
+            setImageViewBitmap(R.id.widget_send_title, text(send.title, R.font.figtree, 14f, bright, 600, maxWidthDp = 90f))
+            setImageViewBitmap(R.id.widget_send_status, text(status, R.font.galindo, 18f, bright))
+        }
+        setContentDescription(R.id.widget_open, "${send.title}: " + when (send.phase) {
+            TransferPhase.Sending -> "sending to your Mac, ${send.percent}%"
+            TransferPhase.Waiting -> "waiting for your Mac"
+            TransferPhase.Done -> "on your Mac"
+            TransferPhase.Failed -> "didn't send"
         })
     }
 

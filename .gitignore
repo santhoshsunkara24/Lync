@@ -30,3 +30,13 @@ _trash/
 # Nothing Glyph SDK: its licence forbids redistribution. See android/app/libs/README.md
 android/app/libs/*.aar
 share/
+
+# Launch film (Remotion)
+brand/film/node_modules/
+brand/film/out/
+# Reference videos and third-party sound files: not ours to publish
+brand/film/*.mp4
+brand/film/sounds/
+brand/film/public/sfx/
+brand/film/public/sfx-real/
+brand/film/public/short/

@@ -43,7 +43,7 @@ written permission. Lync is free, but if you ever charge for it, ask Nothing fir
 **App name:** Lync
 
 **Short description (80 max):**
-Codes, calls, texts and files from your Android phone, in your Mac's notch.
+Codes, calls, texts and files from your Android phone, right on your Mac.
 
 **Full description:**
 
@@ -52,14 +52,14 @@ Codes, calls, texts and files from your Android phone, in your Mac's notch.
 > **One-time codes, already copied.** When a login code arrives by SMS or in an app, it's on your
 > Mac's clipboard before you pick up your phone. Paste it and you're in.
 >
-> **Calls on your Mac.** See who's calling in the notch and answer or decline without reaching for
+> **Calls on your Mac.** See who's calling in the notch or menu bar and answer or decline without reaching for
 > your phone.
 >
 > **Texts and notifications.** Read and reply to messages from your Mac, and choose which apps'
 > notifications show up there.
 >
 > **Send anything.** Share files, photos and links from your phone straight to your Mac, or drop them
-> on the notch to send them back.
+> on the notch or the menu bar icon to send them back.
 >
 > **Ring your phone.** Lost it in the couch? Ring it from your Mac, even on silent.
 >

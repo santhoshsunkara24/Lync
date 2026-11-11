@@ -71,16 +71,14 @@ import app.wallhop.ui.design.WIcons
 import app.wallhop.ui.design.pressScale
 import app.wallhop.ui.design.tappable
 
-private val Ink = Color(0xFFF1FBF6)
-private val Soft = Color(0xFF86A99A)
-private val Mint = Color(0xFF5FD9A0)
-
 /**
  * Sending to the Mac: its own screen over Home while photos or files go across. The link lifts off
  * in the middle; under it the percentage with the total size, what's being sent (a thumbnail and its
  * name), and where it's going. Hide (⌄) keeps it sending in the background; Cancel stops it.
  * When it lands it says "On your Mac" and closes by itself. If it fails it stays, saying why, with
  * Try again (or Choose again); while it waits, it says why the Mac isn't there, with its button.
+ * Its colours are the wallpaper's ([LinkColors]); Done and the problem's button are the app's pale
+ * main pill, so they never turn red or orange and read as an error.
  */
 @Composable
 fun SendingScreen(
@@ -94,6 +92,10 @@ fun SendingScreen(
     onFix: (app.wallhop.core.Fix) -> Unit = {},
 ) {
     val context = LocalContext.current
+    val home = app.wallhop.ui.design.Wallhop.home
+    val link = remember(home) { app.wallhop.ui.design.LinkColors.from(home) }
+    val Ink = link.ink
+    val Soft = link.soft
     val done = transfer.phase == TransferPhase.Done
     val waiting = transfer.phase == TransferPhase.Waiting
     val failed = transfer.phase == TransferPhase.Failed
@@ -117,8 +119,8 @@ fun SendingScreen(
     Box(
         Modifier
             .fillMaxSize()
-            .background(Brush.verticalGradient(listOf(Color(0xFF07100C), Color(0xFF050807))))
-            .background(Brush.radialGradient(listOf(Mint.copy(alpha = 0.14f), Color(0xFF13875A).copy(alpha = 0.05f), Color.Transparent), radius = 1100f))
+            .background(Brush.verticalGradient(listOf(link.backgroundTop, link.backgroundBottom)))
+            .background(Brush.radialGradient(listOf(link.glow.copy(alpha = 0.14f), link.deepGlow.copy(alpha = 0.05f), Color.Transparent), radius = 1100f))
             .semantics { paneTitle = "Sending to $macName" },
     ) {
         Column(
@@ -140,12 +142,12 @@ fun SendingScreen(
                         Modifier.size(40.dp).clip(RoundedCornerShape(50)).background(Color.White.copy(alpha = 0.07f))
                             .border(1.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(50)),
                         contentAlignment = Alignment.Center,
-                    ) { Icon(WIcons.ChevronDown, null, tint = Color(0xFFD7EAE2), modifier = Modifier.size(16.dp)) }
+                    ) { Icon(WIcons.ChevronDown, null, tint = link.onDark, modifier = Modifier.size(16.dp)) }
                 }
             }
             Spacer(Modifier.weight(1f))
             Liftoff(
-                sending = !waiting && !failed && !cancelling, done = done, failed = failed, cancelled = cancelling,
+                sending = !waiting && !failed && !cancelling, done = done, failed = failed, cancelled = cancelling, colors = link,
                 modifier = Modifier.widthIn(max = 300.dp).fillMaxWidth().aspectRatio(1f),
             )
             // The number, or what happened.
@@ -172,7 +174,7 @@ fun SendingScreen(
                             color = Ink,
                             modifier = Modifier.alignByBaseline(),
                         )
-                        Text("%", style = Type.title2.copy(fontSize = 24.sp), color = Color(0xFF8FBFAA), modifier = Modifier.alignByBaseline())
+                        Text("%", style = Type.title2.copy(fontSize = 24.sp), color = link.percent, modifier = Modifier.alignByBaseline())
                         Text(
                             Formatter.formatShortFileSize(context, transfer.totalBytes),
                             style = Type.title3.copy(fontWeight = FontWeight.Medium, fontFeatureSettings = "tnum"), color = Soft,
@@ -200,8 +202,8 @@ fun SendingScreen(
                 }
             }
             Row(Modifier.padding(top = Space.s), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Space.xs)) {
-                Icon(WIcons.Laptop, null, tint = Mint, modifier = Modifier.size(20.dp))
-                Text("to $macName", style = Type.subheadline.copy(fontWeight = FontWeight.SemiBold), color = Color(0xFFE6F4EE), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Icon(WIcons.Laptop, null, tint = link.glow, modifier = Modifier.size(20.dp))
+                Text("to $macName", style = Type.subheadline.copy(fontWeight = FontWeight.SemiBold), color = link.onDark, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
             // Why it failed, or why it's waiting: a few words, then what to do.
             if (problem != null) {
@@ -225,19 +227,19 @@ fun SendingScreen(
                         .height(56.dp)
                         .pressScale(fixSource)
                         .clip(RoundedCornerShape(50))
-                        .background(Mint)
+                        .background(home.pale)
                         .tappable(fixSource, onClick = { onFix(fix) }),
                     contentAlignment = Alignment.Center,
                 ) {
-                    Text(fix.label, style = Type.headline, color = Color(0xFF062015))
+                    Text(fix.label, style = Type.headline, color = home.onPale)
                 }
                 Spacer(Modifier.height(Space.xs))
             }
             val source = remember { MutableInteractionSource() }
-            // Cancel turns into Done as the files land: the pill fills with mint and the word
+            // Cancel turns into Done as the files land: the pill fills pale and the word
             // cross-fades, instead of both changing in one frame.
-            val fill by animateColorAsState(if (done) Mint else Color.White.copy(alpha = 0.08f), tween(Durations.Enter, easing = Easings.Out), label = "pillFill")
-            val edge by animateColorAsState(if (done) Mint.copy(alpha = 0f) else Color.White.copy(alpha = 0.08f), tween(Durations.Enter, easing = Easings.Out), label = "pillEdge")
+            val fill by animateColorAsState(if (done) home.pale else Color.White.copy(alpha = 0.08f), tween(Durations.Enter, easing = Easings.Out), label = "pillFill")
+            val edge by animateColorAsState(if (done) home.pale.copy(alpha = 0f) else Color.White.copy(alpha = 0.08f), tween(Durations.Enter, easing = Easings.Out), label = "pillEdge")
             Box(
                 Modifier
                     .fillMaxWidth()
@@ -260,7 +262,7 @@ fun SendingScreen(
                     transitionSpec = { fadeIn(tween(Durations.Enter, easing = Easings.Out)) togetherWith fadeOut(tween(Durations.Quick, easing = Easings.Out)) },
                     label = "pillLabel",
                 ) { landed ->
-                    Text(if (landed) "Done" else if (failed) "Close" else "Cancel", style = Type.headline, color = if (landed) Color(0xFF062015) else Color(0xFFE6F4EE))
+                    Text(if (landed) "Done" else if (failed) "Close" else "Cancel", style = Type.headline, color = if (landed) home.onPale else link.onDark)
                 }
             }
             Spacer(Modifier.height(Space.xs))

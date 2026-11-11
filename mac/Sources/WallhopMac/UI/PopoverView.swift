@@ -264,6 +264,8 @@ private struct HomePage: View {
     @State private var glow: CGFloat = 0
     /// Which list shows under the cards: Recent or Notifications.
     @State private var list = HomeList.recent
+    /// The list being cleared: its rows sweep out one after another before they go.
+    @State private var clearing: HomeList?
 
     private var listTransition: AnyTransition {
         WMotion.transition(.asymmetric(insertion: .move(edge: .top).combined(with: .opacity),
@@ -276,7 +278,7 @@ private struct HomePage: View {
             VStack(alignment: .leading, spacing: 0) {
                 header.revealSection(0)
                 if let phone = model.connectedPhone ?? model.pairedPhones.first {
-                    PhoneCard(model: model, name: phone.name, glow: glow).padding(.top, WSpace.m).revealSection(0)
+                    PhoneCard(model: model, phone: phone, glow: glow).padding(.top, WSpace.l).revealSection(0)
                 }
                 if model.offerLoginItem {
                     LoginOfferCard(model: model).padding(.top, WSpace.m).revealSection(1)
@@ -297,7 +299,7 @@ private struct HomePage: View {
                 }
                 Group {
                     if let code = model.latestCode {
-                        LatestCodeCard(model: model, code: code).padding(.top, WSpace.m)
+                        LatestCodeCard(model: model, code: code).padding(.top, WSpace.l)
                             .transition(WMotion.transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .top))))
                     }
                     if let playing = model.nowPlaying {
@@ -308,23 +310,23 @@ private struct HomePage: View {
                 .revealSection(2)
                 // Recent and Notifications share one spot: two tabs side by side, one list at a time.
                 Group {
-                    ListTabs(model: model, selection: $list).padding(.top, WSpace.l)
+                    ListTabs(model: model, selection: $list).padding(.top, WSpace.xl)
                     // The list's own header: further from the tabs than from the list it belongs to.
-                    ListClear(model: model, selection: list)
+                    ListClear(model: model, selection: list, clearing: clearing != nil, clear: clear)
                         .padding(.top, WSpace.m).padding(.horizontal, RowMetrics.horizontal)
                     Group {
                         if list == .recent {
-                            RecentList(model: model)
+                            RecentList(model: model, clearing: clearing == .recent)
                         } else {
                             notificationList
                         }
                     }
-                    .padding(.top, WSpace.xs)
+                    .padding(.top, WSpace.s)
                     .transition(.opacity)
                 }
                 .revealSection(3)
             }
-            .padding(WSpace.m)
+            .padding(.horizontal, WSpace.gutter).padding(.top, WSpace.m).padding(.bottom, WSpace.l)
             .onChange(of: model.connectedPhone?.id) { old, new in
                 guard new != nil, old == nil, model.panelOpen, !WMotion.reduceMotion else { return }
                 withAnimation(.easeOut(duration: 0.25)) { glow = 1 }
@@ -340,11 +342,26 @@ private struct HomePage: View {
             .animation(WMotion.animation(WMotion.smooth), value: model.offerLoginItem)
             .animation(WMotion.animation(WMotion.quick), value: list)
         }
-        .frame(maxHeight: 600)
+        // Snapshots show the whole page, not the first 600 points of a scrolling one.
+        .frame(maxHeight: PanelSnapshots.active ? 2000 : 600)
         .fixedSize(horizontal: false, vertical: true)
         // A clicked notification card: scroll to that notification once the panel is open.
         .onAppear { scroll(proxy) }
         .onChange(of: model.scrollTarget) { _, _ in scroll(proxy) }
+        }
+    }
+
+    /// Clear and Clear all: the rows sweep out to the right, top first, a beat apart; then they
+    /// go and the list closes up around what's left (or its empty state fades in).
+    private func clear(_ action: @escaping () -> Void) {
+        guard clearing == nil else { return }
+        let rows = list == .recent ? RecentList.items(model).count : NotificationEntry.all(model).filter(\.clears).count
+        guard !WMotion.reduceMotion, rows > 0 else { action(); return }
+        clearing = list
+        DispatchQueue.main.asyncAfter(deadline: .now() + ClearSweep.duration(rows: rows)) {
+            action()
+            // The rows are gone (or going, already hidden) before the sweep lets go of them.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { clearing = nil }
         }
     }
 
@@ -361,9 +378,10 @@ private struct HomePage: View {
                         if index > 0 { Divider().overlay(Color.white.opacity(0.08)).padding(.leading, RowMetrics.textInset) }
                         switch entry {
                         case .notification(let notification): NotificationRow(model: model, notification: notification)
-                        case .call(let call): CallRow(call: call)
+                        case .call(let call): CallRow(model: model, call: call)
                         }
                     }
+                    .modifier(ClearSweep(active: clearing == .notifications && entry.clears, index: index))
                     .id(entry.id)
                     .transition(listTransition)
                 }
@@ -388,10 +406,11 @@ private struct HomePage: View {
             VStack(alignment: .leading, spacing: WSpace.xxs) {
                 Text("Your phone").font(.whTitle(24))
                 HStack(spacing: WSpace.xs) {
-                    LinkCatchView(connected: model.connectedPhone != nil, animate: model.panelOpen, shaded: false, haptic: false)
+                    // Over Bluetooth the phone is still linked: the same calm line as Connected.
+                    LinkCatchView(connected: model.connectedPhone != nil || model.bluetoothPhone != nil, animate: model.panelOpen, shaded: false, haptic: false)
                         .frame(width: 16, height: 16)
-                    Text(statusLine).font(.wh(13, model.connectionProblem == nil ? .medium : .semibold))
-                        .foregroundStyle(model.connectionProblem == nil ? WTheme.secondary : .white)
+                    Text(statusLine).font(.wh(13, calm ? .medium : .semibold))
+                        .foregroundStyle(calm ? WTheme.secondary : .white)
                         .lineLimit(2).fixedSize(horizontal: false, vertical: true)
                         .contentTransition(.opacity)
                     if looking && model.panelOpen {
@@ -402,7 +421,7 @@ private struct HomePage: View {
                 // Not connected: what to do, and the button that does it.
                 if let problem = model.connectionProblem {
                     if let detail = problem.detail {
-                        Text(detail).font(.wh(12, .medium)).foregroundStyle(WTheme.secondary)
+                        Text(detail).font(.wh(12, .medium)).foregroundStyle(calm ? WTheme.tertiary : WTheme.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                             .padding(.leading, Self.statusInset)
                             .contentTransition(.opacity)
@@ -419,7 +438,8 @@ private struct HomePage: View {
             .animation(WMotion.animation(WMotion.smooth), value: model.connectionProblem?.title)
             .animation(WMotion.animation(WMotion.smooth), value: model.connectionNote?.title)
             Spacer(minLength: WSpace.xs)
-            if model.connectedPhone != nil {
+            // Ring works over Bluetooth too.
+            if model.connectedPhone != nil || model.bluetoothPhone != nil {
                 Button { model.ringPhone() } label: {
                     NudgeImage(model.ringing ? "bell.slash.fill" : "bell.and.waves.left.and.right")
                 }
@@ -436,6 +456,9 @@ private struct HomePage: View {
 
     /// Where the status text starts, past the link and the gap after it; what's under it lines up.
     private static let statusInset: CGFloat = 16 + WSpace.xs
+
+    /// Nothing to fix: connected, or linked over Bluetooth (fewer features, but nothing's wrong).
+    private var calm: Bool { model.connectionProblem == nil || model.bluetoothPhone != nil }
 
     /// Listening, no phone yet and nothing wrong: the only state with a running indicator.
     private var looking: Bool { model.listening && model.connectedPhone == nil && model.bluetoothPhone == nil }
@@ -470,7 +493,24 @@ private struct HomePage: View {
 private struct ConnectionNote: View {
     let problem: Problem
 
+    @EnvironmentObject var theme: ThemeStore
+
     var body: some View {
+        if problem.detail == nil, let title = problem.actionTitle, let action = problem.action {
+            // A heads-up while all else works: one quiet line, its button a link at the end.
+            HStack(alignment: .firstTextBaseline, spacing: WSpace.xs) {
+                NudgeImage(problem.symbol).font(.wh(11, .semibold)).foregroundStyle(WTheme.tertiary)
+                Text(problem.title).font(.wh(12, .medium)).foregroundStyle(WTheme.secondary)
+                Button(title, action: action).buttonStyle(WPlainPress())
+                    .font(.wh(12, .semibold)).foregroundStyle(theme.theme.pale)
+            }
+            .accessibilityElement(children: .contain)
+        } else {
+            full
+        }
+    }
+
+    private var full: some View {
         // The icon sits on the title's baseline.
         HStack(alignment: .firstTextBaseline, spacing: WSpace.xs) {
             NudgeImage(problem.symbol).font(.wh(11, .semibold)).foregroundStyle(WTheme.secondary)
@@ -494,11 +534,13 @@ private struct ConnectionNote: View {
 private struct PhoneCard: View {
     @ObservedObject var model: AppModel
     @EnvironmentObject var theme: ThemeStore
-    let name: String
+    let phone: PairedPhone
     /// 0…1, a single glow on the name when the phone connects.
     var glow: CGFloat
 
+    private var name: String { phone.name }
     private var connected: Bool { model.connectedPhone != nil }
+    private var confirming: Bool { model.confirmingForget == phone.id }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -508,6 +550,84 @@ private struct PhoneCard: View {
             }
             .frame(height: connected ? 196 : 152, alignment: .top)
             .clipped()
+            .overlay(alignment: .topTrailing) { moreMenu.padding(WSpace.s) }
+            Group {
+                if confirming { forgetConfirmation.transition(.swap) } else { details.transition(.swap) }
+            }
+            .background(theme.theme.card)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: WRadius.card, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: WRadius.card, style: .continuous).strokeBorder(WTheme.edge, lineWidth: 1))
+        // Right-click: what you'd do with the phone, without hunting for the buttons.
+        .contextMenu {
+            if connected || model.bluetoothPhone != nil {
+                Button(model.ringing ? "Stop ringing" : "Ring phone") { model.ringPhone() }
+            }
+            if connected {
+                Button("Send clipboard") { model.sendClipboardToPhone() }
+                Button("Send files…") { model.chooseFilesToSend() }
+                Button("Texts") { model.openMessages() }
+                Divider()
+            }
+            Button("Add a phone") { model.panelPage = .addPhone }
+            Button("Settings") { model.panelPage = .settings }
+            Divider()
+            Button("Forget This Phone…") { model.confirmingForget = phone.id }
+        }
+        .accessibilityElement(children: .contain)
+        .animation(WMotion.animation(WMotion.smooth), value: connected)
+        .animation(WMotion.animation(WMotion.smooth), value: confirming)
+    }
+
+    /// The phone's own actions, in the card's corner: forgetting it doesn't need a trip to Settings.
+    private var moreMenu: some View {
+        Menu {
+            if connected || model.bluetoothPhone != nil {
+                Button(model.ringing ? "Stop ringing" : "Ring phone") { model.ringPhone() }
+            }
+            Button("Add a phone") { model.panelPage = .addPhone }
+            Divider()
+            Button("Forget This Phone…", role: .destructive) { model.confirmingForget = phone.id }
+        } label: {
+            Image(systemName: "ellipsis")
+                .font(.system(size: 12, weight: .bold))
+                .foregroundStyle(.white.opacity(0.85))
+                .frame(width: 26, height: 26)
+                .background(Circle().fill(Color.black.opacity(0.28)))
+                .contentShape(Circle())
+        }
+        .menuStyle(.button)
+        .buttonStyle(WPlainPress())
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help("More for \(name)")
+        .accessibilityLabel("More for \(name)")
+    }
+
+    /// Forget asks once, right in the card: the phone has to pair again afterwards.
+    private var forgetConfirmation: some View {
+        VStack(alignment: .leading, spacing: WSpace.xxs) {
+            Text("Forget \(name)?").font(.wh(15, .semibold)).lineLimit(1)
+            Text("You'll need to pair again to use it with this Mac.")
+                .font(.wh(12, .medium)).foregroundStyle(WTheme.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: WSpace.xs) {
+                Spacer()
+                Button("Cancel") { model.confirmingForget = nil }
+                    .buttonStyle(WPill(prominent: false, compact: true))
+                    .keyboardShortcut(.cancelAction)
+                Button("Forget") { model.forget(phone) }
+                    .buttonStyle(WPill(compact: true, destructive: true))
+                    .accessibilityLabel("Forget \(name)")
+            }
+            .padding(.top, WSpace.xs)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(WSpace.m)
+        .accessibilityElement(children: .contain)
+    }
+
+    private var details: some View {
             VStack(alignment: .leading, spacing: WSpace.xxs) {
                 Text("Android phone").font(.wh(12, .medium)).foregroundStyle(WTheme.secondary)
                 Text(name)
@@ -533,24 +653,7 @@ private struct PhoneCard: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, WSpace.m).padding(.top, WSpace.m).padding(.bottom, connected ? WSpace.l : WSpace.m)
-            .background(theme.theme.card)
-        }
-        .clipShape(RoundedRectangle(cornerRadius: WRadius.card, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: WRadius.card, style: .continuous).strokeBorder(WTheme.edge, lineWidth: 1))
-        // Right-click: what you'd do with the phone, without hunting for the buttons.
-        .contextMenu {
-            if connected {
-                Button("Ring phone") { model.ringPhone() }
-                Button("Send clipboard") { model.sendClipboardToPhone() }
-                Button("Send files…") { model.chooseFilesToSend() }
-                Button("Texts") { model.openMessages() }
-                Divider()
-            }
-            Button("Add a phone") { model.panelPage = .addPhone }
-            Button("Settings") { model.panelPage = .settings }
-        }
-        .accessibilityElement(children: .combine)
-        .animation(WMotion.animation(WMotion.smooth), value: connected)
+            .accessibilityElement(children: .combine)
     }
 
     private func detail(now: Date) -> String {
@@ -683,6 +786,10 @@ private struct ListTabs: View {
 private struct ListClear: View {
     @ObservedObject var model: AppModel
     let selection: HomeList
+    /// A clear is under way: the button waits for it.
+    var clearing = false
+    /// Runs the clear with its sweep.
+    var clear: (@escaping () -> Void) -> Void = { $0() }
 
     var body: some View {
         if let action {
@@ -690,7 +797,7 @@ private struct ListClear: View {
                 Text(count).font(.wh(12, .semibold)).foregroundStyle(WTheme.secondary)
                     .contentTransition(.numericText())
                 Spacer()
-                Button(action.0, action: action.1).buttonStyle(WPlainPress()).font(.wh(12, .semibold)).foregroundStyle(WTheme.secondary)
+                Button(action.0) { clear(action.1) }.buttonStyle(WPlainPress()).disabled(clearing).font(.wh(12, .semibold)).foregroundStyle(WTheme.secondary)
                     .help(action.2 ?? action.0)
                     .accessibilityHint(action.2 ?? "")
             }
@@ -725,6 +832,12 @@ private enum NotificationEntry: Identifiable {
     case notification(PhoneNotification)
     case call(CallLogEntry)
 
+    /// Clear all takes it (a call still ringing or under way stays).
+    var clears: Bool {
+        if case .call(let c) = self { return !c.outcome.isLive }
+        return true
+    }
+
     /// Notifications keep their "notif-" id: a clicked notch card scrolls to it.
     var id: String {
         switch self {
@@ -750,7 +863,9 @@ private enum NotificationEntry: Identifiable {
 
 /// A call in the Notifications list: who, how it went, and when.
 private struct CallRow: View {
+    @ObservedObject var model: AppModel
     let call: CallLogEntry
+    @State private var hovering = false
 
     private var look: (symbol: String, tint: Color, text: String) {
         switch call.outcome {
@@ -777,11 +892,19 @@ private struct CallRow: View {
                 Text([look.text, call.sim].compactMap { $0 }.joined(separator: " · "))
                     .font(.wh(12, .medium)).foregroundStyle(call.outcome == .missed ? WTheme.danger : WTheme.secondary).lineLimit(1)
             }
+            // A call still ringing or under way stays until it ends.
+            if !call.outcome.isLive {
+                RowRemove(visible: hovering, help: "Remove") { model.removeCall(call.id) }
+            }
         }
+        .animation(WMotion.reduceMotion ? nil : .easeOut(duration: 0.12), value: hovering)
         .padding(.horizontal, RowMetrics.horizontal).padding(.vertical, RowMetrics.vertical)
         .contentShape(Rectangle())
         .rowHover()
+        .onHover { hovering = $0 }
         .accessibilityElement(children: .combine)
+        .accessibilityActions { if !call.outcome.isLive { Button("Remove") { model.removeCall(call.id) } } }
+        .contextMenu { if !call.outcome.isLive { Button("Remove") { model.removeCall(call.id) } } }
     }
 }
 
@@ -1017,6 +1140,7 @@ private struct NotificationRow: View {
 /// Codes, texts, files and missed calls, newest first.
 private struct RecentList: View {
     @ObservedObject var model: AppModel
+    var clearing = false
 
     /// Activity without the code already shown in the Latest code card.
     static func items(_ model: AppModel) -> [ActivityItem] {
@@ -1035,6 +1159,7 @@ private struct RecentList: View {
                         if index > 0 { Divider().overlay(Color.white.opacity(0.08)).padding(.leading, RowMetrics.textInset) }
                         RecentRow(model: model, item: item)
                     }
+                    .modifier(ClearSweep(active: clearing, index: index))
                     .transition(WMotion.transition(.asymmetric(insertion: .move(edge: .top).combined(with: .opacity),
                                                                removal: .opacity.combined(with: .scale(scale: 0.96)))))
                 }
@@ -1054,9 +1179,16 @@ private struct RecentRow: View {
     @State private var copyTrigger = 0
     /// Bumped when a transfer in this row fails while it's on screen: the icon shakes once.
     @State private var failShakes = 0
+    @State private var hovering = false
 
     private var failed: Bool {
         if case .files(let batch) = item.payload { return batch.finished && batch.files.isEmpty }
+        return false
+    }
+
+    /// Files still coming in: no × until they've arrived.
+    private var receiving: Bool {
+        if case .files(let batch) = item.payload { return !batch.finished }
         return false
     }
 
@@ -1076,11 +1208,16 @@ private struct RecentRow: View {
                 }
             }
             Spacer(minLength: WSpace.xs)
+            // The × comes in before the row's own buttons, into the space the text leaves, so
+            // Copy and Save never move under the pointer.
+            RowRemove(visible: hovering && !receiving, help: "Remove from Recent") { model.remove(item) }
             trailing
         }
+        .animation(WMotion.reduceMotion ? nil : .easeOut(duration: 0.12), value: hovering)
         .padding(.horizontal, RowMetrics.horizontal).padding(.vertical, RowMetrics.vertical)
         .contentShape(Rectangle())
         .rowHover()
+        .onHover { hovering = $0 }
         .onChange(of: failed) { _, now in if now { failShakes += 1 } }
         // Files: double-click opens them, as in Finder. Only rows with files wait to tell a
         // double-click from a click; codes still copy on the first.
@@ -1211,13 +1348,19 @@ private struct RecentRow: View {
         case .files(let batch) where batch.finished && !batch.files.isEmpty && !batch.isExpired:
             HStack(spacing: WSpace.xs) {
                 CopyButton(iconOnly: true, style: WRound(size: 24), label: copyLabel) { model.copyFiles(item.id) }
-                if batch.saved {
-                    Button("Show") { model.revealFiles(item.id) }.buttonStyle(WPill(prominent: false, compact: true))
-                        .help("Show in Finder")
-                } else {
-                    Button("Save") { model.saveFiles(item.id) }.buttonStyle(WPill(compact: true))
-                        .help("Save to Downloads › From Phone")
+                // Saved: Save swaps for Show in place.
+                ZStack(alignment: .trailing) {
+                    if batch.saved {
+                        Button("Show") { model.revealFiles(item.id) }.buttonStyle(WPill(prominent: false, compact: true))
+                            .help("Show in Finder")
+                            .transition(.swap)
+                    } else {
+                        Button("Save") { model.saveFiles(item.id) }.buttonStyle(WPill(compact: true))
+                            .help("Save to Downloads › From Phone")
+                            .transition(.swap)
+                    }
                 }
+                .animation(WMotion.animation(WMotion.quick), value: batch.saved)
             }
         case .files(let batch) where !batch.finished:
             ProgressRing(progress: batch.progress)
@@ -1233,12 +1376,54 @@ private struct RecentRow: View {
     }
 }
 
+/// A row leaving with Clear: it slides a little to the right and fades, a beat after the row
+/// above it, so the list empties top to bottom like a sweep rather than all at once.
+private struct ClearSweep: ViewModifier {
+    let active: Bool
+    let index: Int
+
+    static let fade = 0.2
+    static let stagger = 0.035
+    /// Past the eighth row the rest go together: a long list doesn't make you wait.
+    static let maxStaggered = 7
+
+    /// From the click until the last row has faded.
+    static func duration(rows: Int) -> Double {
+        fade + Double(min(rows - 1, maxStaggered)) * stagger
+    }
+
+    func body(content: Content) -> some View {
+        content
+            .offset(x: active ? 28 : 0)
+            .opacity(active ? 0 : 1)
+            .animation(active ? .easeIn(duration: Self.fade).delay(Double(min(index, Self.maxStaggered)) * Self.stagger) : nil,
+                       value: active)
+    }
+}
+
+/// A row's own remove button: a small ×, before the row's buttons while the pointer is on the row.
+private struct RowRemove: View {
+    let visible: Bool
+    let help: String
+    let action: () -> Void
+
+    var body: some View {
+        if visible {
+            Button(action: action) { NudgeImage("xmark") }
+                .buttonStyle(WRound(size: 22))
+                .help(help)
+                .accessibilityHidden(true) // The row's own Remove action covers VoiceOver.
+                .transition(.opacity)
+        }
+    }
+}
+
 /// Rows in a grouped list (Notifications, Recent): a 32 pt icon, then the text column.
 enum RowMetrics {
     static let icon: CGFloat = 32
     static let iconGap = WSpace.s
     static let horizontal = WSpace.m
-    static let vertical = WSpace.s
+    static let vertical = WSpace.m
     /// Where the text starts, for the dividers between rows.
     static let textInset = horizontal + icon + iconGap
 }
@@ -1561,6 +1746,8 @@ private struct SettingsPage: View {
                 group("Clipboard and alerts") {
                     toggle("Copy received text automatically", $model.copyTextAutomatically)
                     divider
+                    toggle("Show codes when they arrive", $model.showCodeOnArrival)
+                    divider
                     toggle("Show phone notifications", $model.showNotifications)
                     divider
                     toggle("Hide notification and text previews", $model.hideNotificationText)
@@ -1606,24 +1793,25 @@ private struct SettingsPage: View {
                 .font(.wh(12, .semibold)).foregroundStyle(WTheme.secondary)
                 .padding(.top, WSpace.m)
             }
-            .padding(WSpace.m)
+            .padding(.horizontal, WSpace.gutter).padding(.top, WSpace.m).padding(.bottom, WSpace.l)
             // Forget's confirmation opens in place; muted apps come and go.
             .animation(WMotion.animation(WMotion.smooth), value: model.confirmingForget)
             .animation(WMotion.animation(WMotion.smooth), value: model.mutedApps.count)
             .animation(WMotion.animation(WMotion.smooth), value: ListChange(model.pairedPhones, \.id))
         }
-        .frame(maxHeight: 600)
+        .frame(maxHeight: PanelSnapshots.active ? 2000 : 600)
         .fixedSize(horizontal: false, vertical: true)
     }
 
     private func group<Content: View>(_ title: String, @ViewBuilder _ content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: WSpace.xs) {
+        VStack(alignment: .leading, spacing: WSpace.s) {
             Text(title).font(.whTitle(16)).accessibilityAddTraits(.isHeader)
+                .padding(.leading, WSpace.xxs)
             VStack(spacing: 0) { content() }
                 .background(RoundedRectangle(cornerRadius: WRadius.group, style: .continuous).fill(WTheme.surface))
                 .clipShape(RoundedRectangle(cornerRadius: WRadius.group, style: .continuous))
         }
-        .padding(.top, WSpace.l)
+        .padding(.top, WSpace.xl)
     }
 
     private var divider: some View {
@@ -1744,9 +1932,8 @@ struct MaybeScroll<Content: View>: View {
     @ViewBuilder let content: () -> Content
 
     var body: some View {
-        // The system's overlay scroller: it shows only while scrolling, so there's a sign of more
-        // below without a permanent bar.
-        if Self.scrolls { ScrollView(content: content).scrollIndicators(.automatic) } else { content() }
+        // No scroller, not even while scrolling: the panel is short and its cards fade at the edge.
+        if Self.scrolls { ScrollView(content: content).scrollIndicators(.never) } else { content() }
     }
 }
 
@@ -1792,31 +1979,54 @@ struct CopyButton<S: ButtonStyle>: View {
     }
 
     var body: some View {
-        // The only feedback is the icon: it crossfades into a tick (blur, 90 % → 100 %), then
-        // softly back. Nothing else changes, so the button never moves or resizes.
+        // Copied: the label says so ("Copy" → "Copied", in a width that fits both, so the button
+        // never resizes) and the icon turns into a tick. Round icon buttons fill with the accent
+        // and show the tick on it. A light tap on the trackpad confirms it too.
         Button(action: copy) {
             if iconOnly {
-                icon
+                ZStack {
+                    Circle().fill(theme.theme.codeAccent)
+                        .frame(width: 24, height: 24)
+                        .scaleEffect(copied ? 1 : 0.4)
+                        .opacity(copied ? 1 : 0)
+                    icon(tick: theme.theme.codeCard)
+                }
             } else {
-                Label { Text("Copy") } icon: { icon }
+                Label {
+                    ZStack(alignment: .leading) {
+                        Text("Copied").hidden()
+                        Text("Copy").swapState(shown: !copied)
+                        Text("Copied").swapState(shown: copied)
+                    }
+                } icon: { icon(tick: nil) }
             }
         }
         .buttonStyle(style)
+        .animation(WMotion.animation(WMotion.quick), value: copied)
         .help(copied ? "Copied" : label)
         .accessibilityLabel(copied ? "Copied" : label)
         .onChange(of: trigger) { _, _ in copy() }
     }
 
-    private var icon: some View {
+    /// The copy icon, or a tick that pops in a little past full size and settles. `tick`: its
+    /// colour on a filled round button; otherwise it keeps the button's own text colour.
+    private func icon(tick: Color?) -> some View {
         ZStack {
             NudgeImage("doc.on.doc").swapState(shown: !copied)
-            NudgeImage("checkmark").foregroundStyle(theme.theme.codeAccent).swapState(shown: copied)
+            Group {
+                // No colour of its own on a pill: the tick is the pill's text colour.
+                if let tick { NudgeImage("checkmark").foregroundStyle(tick) } else { NudgeImage("checkmark") }
+            }
+                .fontWeight(.bold)
+                .scaleEffect(copied ? 1 : 0.5)
+                .swapState(shown: copied)
+                .animation(WMotion.reduceMotion ? nil : .spring(response: 0.3, dampingFraction: 0.55), value: copied)
         }
-        .animation(WMotion.animation(WMotion.quick), value: copied)
     }
 
     private func copy() {
         action()
+        if !copied { NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now) }
         copied = true
         resetToken += 1
         let token = resetToken

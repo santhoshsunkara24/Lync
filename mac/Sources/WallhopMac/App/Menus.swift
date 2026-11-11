@@ -92,8 +92,10 @@ final class Menus: NSObject {
             menu.addItem(entry)
         }
         menu.addItem(item("Texts", #selector(openMessages)))
-        let ring = item(model.ringing ? "Stop ringing" : "Ring phone", #selector(ringPhone), enabled: connected)
-        ring.toolTip = help
+        // Ringing goes over Bluetooth too, so it only needs some link to the phone.
+        let canRing = connected || model.bluetoothPhone != nil
+        let ring = item(model.ringing ? "Stop ringing" : "Ring phone", #selector(ringPhone), enabled: canRing)
+        ring.toolTip = canRing ? nil : help
         menu.addItem(ring)
         menu.addItem(.separator())
         menu.addItem(item("Add a phone…", #selector(addPhone)))

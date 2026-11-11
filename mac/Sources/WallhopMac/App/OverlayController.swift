@@ -29,6 +29,10 @@ final class OverlayController {
     /// Where the fingers would put the card, before the resistance going down.
     private var flingRaw: CGFloat = 0
     private var flingSamples: [(time: TimeInterval, offset: CGFloat)] = []
+    /** Putting the swiped card away, a moment after it starts into the notch. */
+    private var flingHide: DispatchWorkItem?
+    /** Past the line where letting go puts the card away (for the trackpad tick). */
+    private var flingArmed = false
 
     init(model: AppModel, anchorFrame: @escaping () -> NSRect?) {
         self.model = model
@@ -122,10 +126,14 @@ final class OverlayController {
     private func fling(_ event: NSEvent) -> Bool {
         guard let card = model.live, card.isFlingable, !event.momentumPhase.contains(.changed),
               !event.momentumPhase.contains(.began), !event.momentumPhase.contains(.ended) else { return false }
+        // Already on its way into the notch: let it go (SwiftUI only knows where it's heading,
+        // not where it is, so catching it would make it jump).
+        if flingHide != nil { return true }
         let phase = event.phase
         if phase.contains(.began) {
             flingRaw = placementState.fling
             flingSamples.removeAll()
+            flingArmed = false
         }
         if phase.contains(.changed) || phase.contains(.began) {
             // Follows the fingers whichever scroll direction is set.
@@ -133,6 +141,12 @@ final class OverlayController {
             flingRaw += dy
             let shown = flingRaw <= 0 ? flingRaw : 60 * (1 - 1 / (flingRaw * 0.55 / 60 + 1))
             placementState.fling = shown
+            // A soft tick on the trackpad as it crosses the line where letting go puts it away.
+            let armed = shown < -40
+            if armed != flingArmed {
+                flingArmed = armed
+                if armed { NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now) }
+            }
             flingSamples.append((event.timestamp, flingRaw))
             if flingSamples.count > 6 { flingSamples.removeFirst() }
             return true
@@ -149,12 +163,18 @@ final class OverlayController {
                                                    initialVelocity: Double(velocity / min(-1, target - current)))) {
                     placementState.fling = target
                 }
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) { [weak self] in
-                    guard let self, self.model.live == card else { return }
-                    self.model.hideLive()
+                let hide = DispatchWorkItem { [weak self] in
+                    guard let self else { return }
+                    self.flingHide = nil
+                    if self.model.live == card { self.model.hideLive() }
                 }
+                flingHide = hide
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.18, execute: hide)
             } else {
-                withAnimation(.interpolatingSpring(stiffness: 420, damping: 2 * sqrt(420),
+                // The fingers put force into it, so it lands back with a slight overshoot
+                // (damping ratio 0.8; none with Reduce Motion).
+                let ratio: Double = WMotion.reduceMotion ? 1 : 0.8
+                withAnimation(.interpolatingSpring(stiffness: 420, damping: 2 * ratio * sqrt(420),
                                                    initialVelocity: Double(current == 0 ? 0 : -velocity / current))) {
                     placementState.fling = 0
                 }
