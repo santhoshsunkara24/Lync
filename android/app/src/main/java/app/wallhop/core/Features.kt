@@ -32,5 +32,6 @@ object Features {
 
     fun set(context: Context, key: Key, on: Boolean) {
         prefs(context).edit().putBoolean(key.pref, on).apply()
+        Usage.count("switch_${key.name}_${if (on) "on" else "off"}")
     }
 }

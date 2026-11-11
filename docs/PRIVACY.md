@@ -54,6 +54,11 @@ use Bluetooth.
 - **On your Mac:** the pairing keys, your settings, and recent items (codes, notifications, messages)
   so you can see them in the Mac app. You can clear these in the Mac app.
 
+- **Usage counts, on your phone only:** how many times screens were opened, features used, switches
+  changed and problems shown, as plain numbers. Never codes, messages, names, numbers or files. They stay
+  on the phone unless you tap **Settings › Send feedback**, which opens your own email app with the
+  counts in the message so you can read or change them before sending. Nothing is sent otherwise.
+
 Uninstalling the app removes everything it stored on that device.
 
 ## Children

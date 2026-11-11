@@ -237,6 +237,7 @@ class LinkManager private constructor(private val context: Context) {
     private val ble = BleLink(context, scope, onPath = { path ->
         blePath = path
         _bluetooth.value = path != null
+        if (path != null) app.wallhop.core.Usage.count("link_bluetooth")
         // Codes that waited for the Mac go across now, over Bluetooth.
         if (path != null) pendingCodes.drain(System.currentTimeMillis()).forEach { sendOtp(it.code, it.sender, it.app) }
     }) { message ->
@@ -584,6 +585,7 @@ class LinkManager private constructor(private val context: Context) {
         iconsSent.clear()
         updateBluetooth() // Wi-Fi is back: Bluetooth stands down.
         _state.value = LinkState.Connected(session.macName, session.host)
+        app.wallhop.core.Usage.count("link_wifi")
         _connectedSince.value = System.currentTimeMillis()
         lastBatterySent = -1
         sendStatus()
@@ -1606,6 +1608,13 @@ class LinkManager private constructor(private val context: Context) {
 
     /** Adds an entry at the top; one with the same id (a code that waited for the Mac) moves up, updated. */
     private fun record(entry: ActivityEntry) {
+        app.wallhop.core.Usage.count("did_" + when (entry.kind) {
+            ActivityEntry.Kind.Otp -> "code_to_Mac"
+            ActivityEntry.Kind.TextSent -> "text_or_link_to_Mac"
+            ActivityEntry.Kind.FilesSent -> "files_to_Mac"
+            ActivityEntry.Kind.FromMac -> "from_Mac"
+            ActivityEntry.Kind.Call -> "call"
+        })
         _activity.update { list -> (listOf(entry) + list.filterNot { it.id == entry.id }).take(30) }
     }
 
@@ -1650,7 +1659,7 @@ class LinkManager private constructor(private val context: Context) {
         @Volatile private var instance: LinkManager? = null
 
         fun get(context: Context): LinkManager = instance ?: synchronized(this) {
-            instance ?: LinkManager(context.applicationContext).also { instance = it }
+            instance ?: LinkManager(context.applicationContext).also { instance = it; app.wallhop.core.Usage.init(context) }
         }
 
         fun summary(items: List<TransferItem>): String = app.wallhop.core.Wording.count(items.map { it.mime })

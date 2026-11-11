@@ -188,6 +188,7 @@ class Overlays {
      * [onFix] can do it (the caller decides what Try again or Pair again mean there).
      */
     fun problem(problem: app.wallhop.core.Problem, onFix: ((app.wallhop.core.Fix) -> Unit)? = null) {
+        app.wallhop.core.Usage.problem(problem.title)
         val fix = problem.fix
         toast = ToastSpec(
             problem.title, app.wallhop.ui.design.WIcons.Warning,

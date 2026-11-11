@@ -21,7 +21,7 @@ android {
         (findProperty("lync.devId") as String?)?.let { applicationId = it }
         minSdk = 29
         targetSdk = 36
-        versionCode = 7
+        versionCode = 8
         versionName = "1.0.0"
     }
 

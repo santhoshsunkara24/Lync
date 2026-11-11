@@ -158,6 +158,8 @@ fun WallhopRoot(link: LinkManager, demo: Boolean = false) {
     LaunchedEffect(requestedTab) {
         requestedTab?.let { tab = it; AppNav.tab.value = null }
     }
+    // Counted on the phone only, for a tester's feedback report (core/Usage).
+    LaunchedEffect(tab) { app.wallhop.core.Usage.count("screen_" + listOf("Home", "Activity", "Settings").getOrElse(tab) { "other" }) }
     // Files that just arrived from the Mac while Lync is open: the popup above everything.
     var received by remember { mutableStateOf<app.wallhop.link.ReceivedBatch?>(null) }
     LaunchedEffect(link) { link.received.collect { received = it } }
@@ -1262,8 +1264,8 @@ private fun Tabs(
                     }
                 },
                 onExtra = { id -> if (id == "AppNotifications") currentOnShowApps(true) },
-                onTurnOnRest = { startGuide() },
-                onDone = { showSetupList.value = false },
+                onTurnOnRest = { app.wallhop.core.Usage.count("setup_turn_on_the_rest"); startGuide() },
+                onDone = { app.wallhop.core.Usage.count("setup_done_for_now"); showSetupList.value = false },
             )
         }
         androidx.compose.animation.AnimatedVisibility(

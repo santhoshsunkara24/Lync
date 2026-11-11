@@ -25,6 +25,7 @@ class MainActivity : ComponentActivity() {
         // The foreground service keeps the link alive after the app is closed.
         LinkService.start(this)
         val link = LinkManager.get(this)
+        app.wallhop.core.Usage.init(this)
         // Test builds only (debug and benchmark): `adb shell am start -n app.wallhop/.ui.MainActivity
         // --ez demo true` shows the paired screens with sample data, for design review and screenshots.
         // The preview build (to share for a look) always shows sample data.

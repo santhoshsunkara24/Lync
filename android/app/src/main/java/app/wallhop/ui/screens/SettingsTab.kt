@@ -311,6 +311,31 @@ fun SettingsTab(
                         )
                     }
                     row {
+                        // Opt-in: opens the user's own email app with a counts-only report they
+                        // can read and edit first. Nothing is sent unless they send it.
+                        val overlays = app.wallhop.ui.components.LocalOverlays.current
+                        val context = LocalContext.current
+                        ListRow(
+                            title = "Send feedback",
+                            subtitle = "A bug, an idea, or what confused you",
+                            leading = { IconTile(WIcons.Chats, colors.gray) },
+                            chevron = true,
+                            onClick = {
+                                overlays?.showAlert(app.wallhop.ui.components.AlertSpec(
+                                    title = "Send feedback",
+                                    message = "Your email app opens with a short report attached: which screens and features you used and any problems Lync showed. Only counts. No codes, messages, names or files. You can read and change it before sending.",
+                                    actions = listOf(
+                                        app.wallhop.ui.components.AlertAction("Cancel"),
+                                        app.wallhop.ui.components.AlertAction("Write email", default = true) {
+                                            runCatching { context.startActivity(app.wallhop.core.Usage.feedbackEmail(context)) }
+                                                .onFailure { overlays.toast("No email app on this phone") }
+                                        },
+                                    ),
+                                ))
+                            },
+                        )
+                    }
+                    row {
                         ListRow(
                             title = "Privacy policy",
                             leading = { IconTile(WIcons.Shield, colors.gray) },
