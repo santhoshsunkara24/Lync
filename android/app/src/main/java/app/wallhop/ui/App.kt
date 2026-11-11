@@ -421,7 +421,8 @@ fun WallhopRoot(link: LinkManager, demo: Boolean = false) {
             }
             IncomingBanner(if (screen == 2) incomingNow else null)
             ReceivedPopup(received, onDismiss = { received = null }, bottom = if (screen == 2) 88.dp else Space.m)
-            OverlayHost(overlays, toastBottom = if (screen == 2) 88.dp else Space.m)
+            // Above the tab bar; on the setup list, above "Turn on the rest" and "Done for now" instead.
+            OverlayHost(overlays, toastBottom = if (screen == 2 && setupShowing) 144.dp else if (screen == 2) 88.dp else Space.m)
         },
     )
     }
@@ -539,8 +540,8 @@ private fun Tabs(
         // Say exactly that, rather than looking like the choice was ignored.
         val optimisedOnly = !isBackgroundAllowed(context) &&
             context.getSystemService(android.app.ActivityManager::class.java)?.isBackgroundRestricted == false
-        if (optimisedOnly) overlays.toast("Almost: choose Unrestricted", WIcons.Warning,
-            detail = "Tap the words “Allow background usage”, not the switch, then pick Unrestricted.",
+        if (optimisedOnly) overlays.toast("One more step", WIcons.Warning,
+            detail = "Tap the words “Allow background usage” and pick Unrestricted.",
             action = ToastAction(app.wallhop.core.Fix.BatterySettings.label) { openAppBatterySettings(context) })
         else if (!isBackgroundAllowed(context)) overlays.toast(app.wallhop.core.Problems.BACKGROUND_DECLINED, WIcons.Warning,
             action = ToastAction(app.wallhop.core.Fix.BatterySettings.label) { openAppBatterySettings(context) })

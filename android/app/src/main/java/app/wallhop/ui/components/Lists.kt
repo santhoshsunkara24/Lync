@@ -52,6 +52,7 @@ import app.wallhop.ui.design.AnimatedChangeText
 import app.wallhop.ui.design.Durations
 import app.wallhop.ui.design.Fades
 import app.wallhop.ui.design.Space
+import app.wallhop.ui.design.tappable
 import app.wallhop.ui.design.Springs
 import app.wallhop.ui.design.Haptic
 import app.wallhop.ui.design.rememberHaptics
@@ -197,6 +198,9 @@ fun ListRow(
     onClickLabel: String? = null,
     onLongClick: (() -> Unit)? = null,
     onClick: (() -> Unit)? = null,
+    /** A small tinted link under the subtitle (e.g. "Link Mac"), its own tap target. */
+    link: String? = null,
+    onLink: (() -> Unit)? = null,
 ) {
     val colors = Wallhop.colors
     val source = remember { MutableInteractionSource() }
@@ -292,6 +296,14 @@ fun ListRow(
                 if (subtitle != null) {
                     Text(subtitle, style = Type.footnote, color = colors.labelSecondary, maxLines = subtitleMaxLines,
                         overflow = TextOverflow.Ellipsis)
+                }
+                if (link != null && onLink != null) {
+                    val linkSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+                    Text(
+                        link, style = Type.subheadline.copy(fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold), color = colors.tint,
+                        modifier = Modifier.padding(top = Space.xxs).defaultMinSize(minHeight = 32.dp).tappable(linkSource, onClick = onLink)
+                            .padding(vertical = Space.xxs),
+                    )
                 }
             }
             if (value != null || trailing != null || isSwitch || chevron) {

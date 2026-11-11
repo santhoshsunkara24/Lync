@@ -367,7 +367,9 @@ private fun BoxScope.IntroHero() {
 private fun BoxScope.FilesHero() {
     MacEdge(R.drawable.onb_files, delayMs = 1100)
     // In the middle of the space below the card, a little high: its speed lines stay clear of the title.
-    Liftoff(sending = true, done = false, modifier = Modifier.align(Alignment.Center).offset(y = 24.dp).size(180.dp))
+    // Lync's own green: onboarding is green throughout, before the wallpaper's colours take over.
+    Liftoff(sending = true, done = false, modifier = Modifier.align(Alignment.Center).offset(y = 24.dp).size(180.dp),
+        colors = app.wallhop.ui.design.LinkColors.Brand)
 }
 
 /** The camera finding the code on the Mac (pairing). */

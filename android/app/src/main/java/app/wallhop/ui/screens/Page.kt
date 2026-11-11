@@ -5,6 +5,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -131,7 +132,9 @@ fun Page(
                     if (leading != null) {
                         Spacer(Modifier.height(with(density) { pinnedHeight.toDp() } + Space.m))
                     }
-                    Row(verticalAlignment = Alignment.CenterVertically) {
+                    // Always as tall as a 48dp trailing button, so the content below doesn't
+                    // jump when a button (Activity's Clear all) comes and goes.
+                    Row(Modifier.heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) {
                         Text(title, style = Type.pageTitle, color = colors.label, modifier = Modifier.weight(1f).semantics { heading() })
                         if (leading == null) trailing?.invoke()
                     }

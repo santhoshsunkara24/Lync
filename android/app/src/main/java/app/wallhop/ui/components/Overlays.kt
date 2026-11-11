@@ -655,7 +655,11 @@ private fun BoxScope.ToastLayer(overlays: Overlays, bottom: androidx.compose.ui.
             label = "toast",
         ) { spec ->
         val dragState = androidx.compose.foundation.gestures.rememberDraggableState { delta -> drag.drag(delta) }
-        Row(
+        // Two lines and a button don't fit one row: the words get the full width, the button
+        // goes under them on the right, and the shape is a rounded card rather than a pill.
+        val stacked = spec.action != null && spec.detail != null
+        val shape = if (stacked) androidx.compose.foundation.shape.RoundedCornerShape(24.dp) else capsule()
+        Column(
             Modifier
                 .navigationBarsPadding()
                 .imePadding()
@@ -682,14 +686,21 @@ private fun BoxScope.ToastLayer(overlays: Overlays, bottom: androidx.compose.ui.
                     onDragStopped = { velocity -> drag.release(velocity, { overlays.clearToast(spec.id) }, commitAt = 0.35f) },
                 )
                 // Lifted off the page with a soft shadow, so it never reads as part of what's behind.
-                .shadow(16.dp, capsule(), clip = false, ambientColor = Color.Black.copy(alpha = 0.5f), spotColor = Color.Black.copy(alpha = 0.5f))
-                .clip(capsule())
+                .shadow(16.dp, shape, clip = false, ambientColor = Color.Black.copy(alpha = 0.5f), spotColor = Color.Black.copy(alpha = 0.5f))
+                .clip(shape)
                 .background(Wallhop.home.pale)
                 // TalkBack reads it out without moving focus.
                 .semantics { liveRegion = LiveRegionMode.Polite }
                 // Always room above and below the words, even when they run to two lines.
-                .padding(start = Space.m, end = if (spec.action != null) Space.xs else Space.m, top = if (spec.action != null) Space.xs else Space.s, bottom = if (spec.action != null) Space.xs else Space.s),
-            verticalAlignment = Alignment.CenterVertically,
+                .padding(
+                    start = Space.m,
+                    end = if (stacked) Space.s else if (spec.action != null) Space.xs else Space.m,
+                    top = if (stacked) Space.m else if (spec.action != null) Space.xs else Space.s,
+                    bottom = if (stacked) Space.xs else if (spec.action != null) Space.xs else Space.s,
+                ),
+        ) {
+        Row(
+            verticalAlignment = if (stacked) Alignment.Top else Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(Space.s),
         ) {
             // Pale pill, dark text (like the reference's buttons). Icons keep their colour
@@ -697,62 +708,70 @@ private fun BoxScope.ToastLayer(overlays: Overlays, bottom: androidx.compose.ui.
             if (spec.icon != null) {
                 val tint = (spec.tint ?: colors.red.takeIf { spec.failure })
                     ?.let { androidx.compose.ui.graphics.lerp(it, Wallhop.home.onPale, 0.3f) } ?: Wallhop.home.onPale
-                Icon(spec.icon, null, tint = tint, modifier = Modifier.size(20.dp))
+                Icon(spec.icon, null, tint = tint, modifier = Modifier.size(20.dp).then(if (stacked) Modifier.padding(top = 1.dp) else Modifier))
             }
-            Column(Modifier.weight(1f, fill = false)) {
+            Column(Modifier.weight(1f, fill = false).then(if (stacked) Modifier.padding(end = Space.xs) else Modifier)) {
                 Text(spec.text, style = Type.subheadline.copy(fontWeight = FontWeight.SemiBold), color = Wallhop.home.onPale)
                 if (spec.detail != null) {
                     Text(spec.detail, style = Type.footnote, color = Wallhop.home.onPale.copy(alpha = 0.78f))
                 }
             }
-            spec.action?.let { action ->
-                val source = remember { MutableInteractionSource() }
-                // A solid pill in the toast's ink (the same as the Mac). Its outline empties around it
-                // as the time to press it runs out (a ring inside read as "loading"). The touch area
-                // is 48 dp tall around it.
-                Box(
-                    Modifier
-                        .heightIn(min = 48.dp)
-                        .pressScale(source, 0.96f)
-                        .tappable(source) {
-                            overlays.clearToast(spec.id)
-                            action.onClick()
-                        },
-                    contentAlignment = Alignment.Center,
-                ) {
-                    val pale = Wallhop.home.pale
-                    val counting = current?.id == spec.id
-                    Box(
-                        Modifier.height(36.dp).clip(capsule()).background(Wallhop.home.onPale)
-                            .drawWithContent {
-                                drawContent()
-                                if (!counting) return@drawWithContent
-                                // From the top centre, clockwise: the outline that's left is the time that's left.
-                                val stroke = 2.dp.toPx()
-                                val inset = stroke / 2 + 2.dp.toPx()
-                                val r = size.height / 2 - inset
-                                val outline = androidx.compose.ui.graphics.Path().apply {
-                                    val w = size.width; val h = size.height
-                                    moveTo(w / 2, inset)
-                                    lineTo(w - inset - r, inset)
-                                    arcTo(androidx.compose.ui.geometry.Rect(w - inset - 2 * r, inset, w - inset, h - inset), -90f, 180f, false)
-                                    lineTo(inset + r, h - inset)
-                                    arcTo(androidx.compose.ui.geometry.Rect(inset, inset, inset + 2 * r, h - inset), 90f, 180f, false)
-                                    lineTo(w / 2, inset)
-                                }
-                                val measure = androidx.compose.ui.graphics.PathMeasure().apply { setPath(outline, false) }
-                                val left = androidx.compose.ui.graphics.Path()
-                                measure.getSegment(0f, measure.length * timeLeft, left, true)
-                                drawPath(left, pale.copy(alpha = 0.55f), style = androidx.compose.ui.graphics.drawscope.Stroke(stroke, cap = androidx.compose.ui.graphics.StrokeCap.Round))
-                            }
-                            .padding(horizontal = Space.m),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Text(action.label, style = Type.subheadline.copy(fontWeight = FontWeight.Bold), color = pale)
-                    }
-                }
-            }
+            if (!stacked) spec.action?.let { action -> ToastButton(action, spec, overlays, current, timeLeft) }
         }
+        if (stacked) spec.action?.let { action ->
+            Box(Modifier.align(Alignment.End).padding(top = Space.xxs)) { ToastButton(action, spec, overlays, current, timeLeft) }
+        }
+        }
+        }
+    }
+}
+
+/** The toast's button: a solid pill whose outline empties as the time to press it runs out. */
+@Composable
+private fun ToastButton(action: ToastAction, spec: ToastSpec, overlays: Overlays, current: ToastSpec?, timeLeft: Float) {
+    val source = remember { MutableInteractionSource() }
+    // A solid pill in the toast's ink (the same as the Mac). Its outline empties around it
+    // as the time to press it runs out (a ring inside read as "loading"). The touch area
+    // is 48 dp tall around it.
+    Box(
+        Modifier
+            .heightIn(min = 48.dp)
+            .pressScale(source, 0.96f)
+            .tappable(source) {
+                overlays.clearToast(spec.id)
+                action.onClick()
+            },
+        contentAlignment = Alignment.Center,
+    ) {
+        val pale = Wallhop.home.pale
+        val counting = current?.id == spec.id
+        Box(
+            Modifier.height(36.dp).clip(capsule()).background(Wallhop.home.onPale)
+                .drawWithContent {
+                    drawContent()
+                    if (!counting) return@drawWithContent
+                    // From the top centre, clockwise: the outline that's left is the time that's left.
+                    val stroke = 2.dp.toPx()
+                    val inset = stroke / 2 + 2.dp.toPx()
+                    val r = size.height / 2 - inset
+                    val outline = androidx.compose.ui.graphics.Path().apply {
+                        val w = size.width; val h = size.height
+                        moveTo(w / 2, inset)
+                        lineTo(w - inset - r, inset)
+                        arcTo(androidx.compose.ui.geometry.Rect(w - inset - 2 * r, inset, w - inset, h - inset), -90f, 180f, false)
+                        lineTo(inset + r, h - inset)
+                        arcTo(androidx.compose.ui.geometry.Rect(inset, inset, inset + 2 * r, h - inset), 90f, 180f, false)
+                        lineTo(w / 2, inset)
+                    }
+                    val measure = androidx.compose.ui.graphics.PathMeasure().apply { setPath(outline, false) }
+                    val left = androidx.compose.ui.graphics.Path()
+                    measure.getSegment(0f, measure.length * timeLeft, left, true)
+                    drawPath(left, pale.copy(alpha = 0.55f), style = androidx.compose.ui.graphics.drawscope.Stroke(stroke, cap = androidx.compose.ui.graphics.StrokeCap.Round))
+                }
+                .padding(horizontal = Space.m),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(action.label, style = Type.subheadline.copy(fontWeight = FontWeight.Bold), color = pale)
         }
     }
 }

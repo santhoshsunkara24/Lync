@@ -127,7 +127,8 @@ fun SettingsTab(
                             leading = { IconTile(WIcons.Code, colors.green) },
                             checked = setup.sms,
                             onCheckedChange = toggle(Features.Key.Codes, actions.allowSms),
-                            trailing = if (late) ({ app.wallhop.ui.components.TextAction("Link Mac", { actions.linkCompanion { linked = app.wallhop.core.Companion.linked(context) } }, bold = true) }) else null,
+                            link = if (late) "Link Mac" else null,
+                            onLink = { actions.linkCompanion { linked = app.wallhop.core.Companion.linked(context) } },
                         )
                     }
                     row {
