@@ -553,22 +553,6 @@ private struct PhoneCard: View {
             }
             .frame(height: connected ? 196 : 152, alignment: .top)
             .clipped()
-            // The card's one action, in its top-right corner: forgetting this phone. It asks first.
-            .overlay(alignment: .topTrailing) {
-                if !confirming {
-                    Button("Forget phone") { model.confirmingForget = phone.id }
-                        .buttonStyle(WPlainPress())
-                        // Red, like Forget's own confirm: it unpairs the phone.
-                        .font(.wh(12, .semibold)).foregroundStyle(WTheme.danger)
-                        .padding(.horizontal, WSpace.s).frame(height: 26)
-                        .background(Capsule().fill(Color.black.opacity(0.45)))
-                        .contentShape(Capsule())
-                        .padding(WSpace.s)
-                        .help("Unpair \(name) from this Mac")
-                        .accessibilityLabel("Forget \(name)")
-                        .transition(.opacity)
-                }
-            }
             Group {
                 if confirming { forgetConfirmation.transition(.swap) } else { details.transition(.swap) }
             }
@@ -618,35 +602,43 @@ private struct PhoneCard: View {
         .accessibilityElement(children: .contain)
     }
 
+    /// Under the phone: how it's connected on the left, and the card's one action, Forget, on the
+    /// right (it asks first). One row, with the same space all round.
     private var details: some View {
-            VStack(alignment: .leading, spacing: WSpace.xxs) {
-                Text("Android phone").font(.wh(12, .medium)).foregroundStyle(WTheme.secondary)
+        HStack(spacing: WSpace.s) {
+            Group {
                 if connected {
                     TimelineView(.periodic(from: .now, by: 30)) { context in
-                        Text(detail(now: context.date)).font(.wh(13)).foregroundStyle(WTheme.secondary)
-                            .contentTransition(.numericText())
+                        Text(detail(now: context.date)).contentTransition(.numericText())
                     }
                 } else {
                     Text(model.bluetoothPhone != nil ? "Over Bluetooth" : "Not connected")
-                        .font(.wh(13)).foregroundStyle(WTheme.secondary)
                 }
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, WSpace.m).padding(.top, WSpace.m).padding(.bottom, connected ? WSpace.l : WSpace.m)
-            .accessibilityElement(children: .contain)
+            .font(.wh(13)).foregroundStyle(WTheme.secondary).lineLimit(1)
+            Spacer(minLength: 0)
+            Button("Forget phone") { model.confirmingForget = phone.id }
+                .buttonStyle(WPlainPress())
+                // Red, like Forget's own confirm: it unpairs the phone.
+                .font(.wh(12, .semibold)).foregroundStyle(WTheme.danger)
+                .padding(.horizontal, WSpace.s).frame(height: 28)
+                .background(Capsule().fill(Color.black.opacity(0.3)))
+                .contentShape(Capsule())
+                .help("Unpair \(name) from this Mac")
+                .accessibilityLabel("Forget \(name)")
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, WSpace.m).padding(.vertical, WSpace.s)
+        .accessibilityElement(children: .contain)
     }
 
+    /// The battery, beside Forget. The header already says it's connected (and since when isn't
+    /// worth the room it takes here).
     private func detail(now: Date) -> String {
-        var parts: [String] = []
-        if let battery = model.battery { parts.append("\(battery)% battery" + (model.charging ? ", charging" : "")) }
-        if let since = model.connectedAt {
-            let minutes = Int(now.timeIntervalSince(since) / 60)
-            parts.append(minutes < 1 ? "just connected"
-                         : minutes < 60 ? "connected \(minutes) min ago"
-                         : "connected \(minutes / 60) h ago")
-        }
-        return parts.isEmpty ? "Connected" : parts.joined(separator: " · ")
+        guard let battery = model.battery else { return "Connected" }
+        return "\(battery)% battery" + (model.charging ? ", charging" : "")
     }
+
 }
 
 /// A modern Android phone, drawn: thin dark frame, punch-hole camera, a lock screen in the phone's
