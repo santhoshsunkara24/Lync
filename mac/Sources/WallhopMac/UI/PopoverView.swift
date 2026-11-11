@@ -479,8 +479,10 @@ private struct HomePage: View {
         // Off without Wi‑Fi: the tooltip says why (and over Bluetooth, what does work).
         let help = connected ? nil : Problem.disabledHelp(bluetooth: model.bluetoothPhone != nil)
         return HStack(spacing: WSpace.xs) {
+            // Over Bluetooth the clipboard's text still goes; the button says if something needs Wi‑Fi.
+            let canClip = connected || model.bluetoothPhone != nil
             Button { model.sendClipboardToPhone() } label: { Label { Text("Send clipboard") } icon: { NudgeImage("doc.on.clipboard") } }
-                .buttonStyle(WPill()).disabled(!connected).opacity(connected ? 1 : 0.45)
+                .buttonStyle(WPill()).disabled(!canClip).opacity(canClip ? 1 : 0.45)
                 .help(help ?? "Send what's on the clipboard to your phone")
             Button { model.chooseFilesToSend() } label: { Label { Text("Files") } icon: { NudgeImage("paperplane") } }
                 .buttonStyle(WPill(prominent: false)).disabled(!connected).opacity(connected ? 1 : 0.45)

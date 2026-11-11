@@ -247,6 +247,19 @@ class LinkManager private constructor(private val context: Context) {
                 val path = blePath
                 if (id != null && path != null) scope.launch { runCatching { path.send(ack(id, err)) } }
             }
+            // Text and links from the Mac, off Wi‑Fi: the same as over Wi‑Fi.
+            "text" -> {
+                Notifications.textFromMac(context, message.bodyText, store.get()?.name ?: "your Mac")
+                record(ActivityEntry(UUID.randomUUID().toString(), ActivityEntry.Kind.FromMac, "Text from your Mac", "Copied on this phone"))
+                val id = message.string("id"); val path = blePath
+                if (id != null && path != null) scope.launch { runCatching { path.send(Message.of("ack", "id" to id, "ok" to true)) } }
+            }
+            "open_url" -> message.string("url")?.let { url ->
+                val shown = app.wallhop.extras.LinkFromMac.show(context, url)
+                record(ActivityEntry(UUID.randomUUID().toString(), ActivityEntry.Kind.FromMac, "Link from your Mac", url))
+                val id = message.string("id"); val path = blePath
+                if (id != null && path != null) scope.launch { runCatching { path.send(ack(id, if (shown) null else "notifications_blocked")) } }
+            }
             // Find my phone works off Wi-Fi too.
             "ring" -> if (message.string("action") == "stop") app.wallhop.extras.PhoneFinder.stop(context)
                 else app.wallhop.extras.PhoneFinder.start(context)
@@ -1279,8 +1292,21 @@ class LinkManager private constructor(private val context: Context) {
         return problem
     }
 
-    /** Sends [message] over Wi‑Fi and waits for its ack: null when the Mac took it, else why not. */
+    /**
+     * Sends [message] and waits for its ack: null when the Mac took it, else why not. Over Wi‑Fi;
+     * when only the Bluetooth backup reaches the Mac, small ones (text, links) go that way.
+     */
     private suspend fun request(message: Message): Problem? {
+        val ble = blePath?.takeIf { !it.closed }
+        if (session?.closed != false && ble != null) {
+            if (message.encode().size > BLUETOOTH_MESSAGE_BYTES) return Problems.LONG_TEXT_NEEDS_WIFI
+            val ack = runCatching { ble.request(message, 8_000) }.getOrNull()
+            return when {
+                ack == null -> Problems.MAC_DIDNT_ANSWER
+                !ack.header.optBoolean("ok", true) -> Problems.MAC_REFUSED
+                else -> null
+            }
+        }
         val session = awaitSession(8_000, interactive = true) ?: return reachProblem() ?: Problems.MAC_DIDNT_ANSWER
         val ack = runCatching { session.request(message) }.getOrNull()
         return when {
@@ -1352,8 +1378,14 @@ class LinkManager private constructor(private val context: Context) {
     private suspend fun runTransfer(state: TransferState) {
         val id = state.id
         if (state.text != null) {
-            val session = awaitSession(10 * 60_000)
-            if (session == null) {
+            // Wi‑Fi, or the Bluetooth backup for text short enough to fit its messages.
+            val fits = state.text.toByteArray().size <= BLUETOOTH_MESSAGE_BYTES - 512
+            start()
+            val reached = withTimeoutOrNull(10 * 60_000L) {
+                while (session?.closed != false && !(fits && blePath?.closed == false)) delay(500)
+                true
+            }
+            if (reached == null) {
                 fail(id, giveUpProblem())
                 return
             }
@@ -1612,6 +1644,8 @@ class LinkManager private constructor(private val context: Context) {
         private const val CHUNK_SIZE = 256 * 1024
         /** How long the Wi-Fi link may be down before Bluetooth takes over. */
         private const val BLUETOOTH_GRACE_MS = 5_000L
+        /** A message up to this size (encoded) can go over the Bluetooth link: 16 KB sealed, with room to spare. */
+        private const val BLUETOOTH_MESSAGE_BYTES = 12 * 1024
 
         @Volatile private var instance: LinkManager? = null
 

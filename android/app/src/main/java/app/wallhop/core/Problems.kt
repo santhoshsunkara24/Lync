@@ -125,6 +125,8 @@ object Problems {
     val NOT_PAIRED = Problem("No Mac paired", "Open Lync to pair.", listOf(Fix.OpenLync))
     /** Only Bluetooth reaches the Mac, and this needs Wi‑Fi. */
     val TEXT_NEEDS_WIFI = Problem("Text needs Wi‑Fi", "Join your Mac’s Wi‑Fi.", listOf(Fix.WifiSettings))
+    /** Over Bluetooth only shorter text fits. */
+    val LONG_TEXT_NEEDS_WIFI = Problem("Long text needs Wi‑Fi", "Over Bluetooth, text goes up to about 12,000 characters. Join your Mac’s Wi‑Fi to send this.", listOf(Fix.WifiSettings))
     val FILES_NEED_WIFI = Problem("Files need Wi‑Fi", "Join your Mac’s Wi‑Fi.", listOf(Fix.WifiSettings))
     val MAC_DIDNT_ANSWER = Problem("Mac didn't answer", "Check Lync is open on your Mac.", listOf(Fix.TryAgain))
     /** The Mac answered a text or link with ok false. */

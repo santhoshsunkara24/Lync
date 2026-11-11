@@ -147,11 +147,11 @@ extension Problem {
     }
 
     static let overBluetooth = ProblemText(title: "Connected over Bluetooth",
-                                              detail: "Files and texts need Wi‑Fi.")
+                                              detail: "Files and Texts need Wi‑Fi.")
 
     /// Help on buttons that are off while the phone isn't connected over Wi‑Fi.
     static func disabledHelp(bluetooth: Bool) -> String {
-        bluetooth ? "Over Bluetooth: codes, calls and notifications only. Join the same Wi‑Fi for files and texts."
+        bluetooth ? "Over Bluetooth: codes, calls, notifications, text and links. Join the same Wi‑Fi for files and Texts."
                   : "Open Lync on your phone, on the same Wi‑Fi as this Mac."
     }
 

@@ -722,6 +722,17 @@ final class LinkServer {
             if let notification = Self.notification(from: message) { emit(.notification(notification, icon: nil)) }
         case "notif_removed":
             if let key = message.string("key") { emit(.notificationRemoved(key: key)) }
+        case "text":
+            // Text and clipboard from the phone, off Wi‑Fi: the same as over Wi‑Fi.
+            emit(.text(message.bodyText, from: phone))
+            if let id = message.string("id") { bluetooth.send(Message("ack", ["id": id, "ok": true])) }
+        case "open_url":
+            if let raw = message.string("url"), let url = URL(string: raw),
+               let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https" {
+                DispatchQueue.main.async { NSWorkspace.shared.open(url) }
+                emit(.linkOpened(url))
+                if let id = message.string("id") { bluetooth.send(Message("ack", ["id": id, "ok": true])) }
+            }
         case "companion_beacon":
             beacon.show()
         case "ring":
@@ -754,8 +765,12 @@ final class LinkServer {
 
     /// Sends text to the connected phone. `completion` runs on the main thread.
     func sendText(_ text: String, completion: @escaping (AckResult) -> Void) {
-        sendAcked(Message("text", body: Data(text.utf8)), timeout: 10, completion: completion)
+        sendAcked(Message("text", body: Data(text.utf8)), timeout: 10, overBluetooth: text.utf8.count <= Self.bluetoothTextBytes,
+                  completion: completion)
     }
+
+    /// Text up to this size also goes over the Bluetooth link (its messages stop at 16 KB, sealed).
+    static let bluetoothTextBytes = 12 * 1024
 
     /// Replies through the notification's own quick-reply action on the phone.
     func replyToNotification(key: String, text: String, completion: @escaping (AckResult) -> Void) {
@@ -800,7 +815,7 @@ final class LinkServer {
     /// Offers a link on the phone (it shows as a notification to tap). Phones that don't ack
     /// `open_url` time out: the link was sent, the outcome is unknown.
     func openOnPhone(_ url: URL, completion: @escaping (AckResult) -> Void) {
-        sendAcked(Message("open_url", ["url": url.absoluteString]), timeout: 3, completion: completion)
+        sendAcked(Message("open_url", ["url": url.absoluteString]), timeout: 3, overBluetooth: true, completion: completion)
     }
 
     /// Starts or stops the phone ringing so it can be found. `completion` (main thread): whether it was sent.
@@ -899,9 +914,18 @@ final class LinkServer {
 
     /// Sends a message with a fresh `id` to the active phone and waits for its ack.
     /// `completion` runs on the main thread.
-    private func sendAcked(_ message: Message, timeout: TimeInterval, completion: @escaping (AckResult) -> Void) {
+    private func sendAcked(_ message: Message, timeout: TimeInterval, overBluetooth: Bool = false,
+                           completion: @escaping (AckResult) -> Void) {
         queue.async {
             guard let active = self.active else {
+                // Off Wi‑Fi, small things (text, links) go over the Bluetooth link instead.
+                if overBluetooth, self.bluetoothUp {
+                    self.expectAck(on: self.bluetoothConnectionId, message: message, timeout: timeout,
+                                   send: { message, sent in sent(self.bluetooth.send(message)) }) { result in
+                        DispatchQueue.main.async { completion(result) }
+                    }
+                    return
+                }
                 DispatchQueue.main.async { completion(.disconnected) }
                 return
             }

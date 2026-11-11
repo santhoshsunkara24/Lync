@@ -228,8 +228,8 @@ fun MacTab(
     val problem = when {
         unpaired -> app.wallhop.core.Problems.NO_MAC_YET
         forgotten -> app.wallhop.core.Problems.FORGOTTEN
-        connected -> null
-        bluetooth -> app.wallhop.core.Problems.TEXT_NEEDS_WIFI
+        // Over Bluetooth text and clipboard still go (photos and files wait for Wi‑Fi).
+        connected || bluetooth -> null
         else -> app.wallhop.core.Problems.away((state as? LinkState.Searching)?.reason ?: app.wallhop.core.Away.MacNotAnswering)
     }
     val reason = problem?.title
@@ -283,13 +283,10 @@ fun MacTab(
                                 .semantics(mergeDescendants = true) { heading() },
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            if (connected) {
-                                app.wallhop.ui.components.LinkCatch(true, Modifier.size(HeaderGlyph), shaded = false)
-                                Spacer(Modifier.width(Space.xs))
-                            }
-                            // A long name shrinks to fit one line rather than wrapping or cutting off.
+                            // A steady title: the Mac's name is on its own section below, so the
+                            // page doesn't change its heading every time Wi‑Fi comes and goes.
                             androidx.compose.foundation.text.BasicText(
-                                if (connected) macName else "Home",
+                                "Home",
                                 style = Title.copy(color = Color.White),
                                 maxLines = 1,
                                 // Still too long at the smallest size: it ends in "…", never cut mid-letter.
@@ -308,7 +305,7 @@ fun MacTab(
                         enter = fadeIn(Fades.fadeIn()) + expandVertically(Springs.snappy()),
                         exit = fadeOut(Fades.fadeOut()) + shrinkVertically(Springs.snappy()),
                     ) {
-                        Text("Mac is locked", style = Body, color = Color.White.copy(alpha = 0.78f), modifier = Modifier.padding(start = HeaderGlyph + Space.xs, top = Space.xxs))
+                        Text("Mac is locked", style = Body, color = Color.White.copy(alpha = 0.78f), modifier = Modifier.padding(top = Space.xxs))
                     }
                 }
             }
@@ -377,7 +374,8 @@ fun MacTab(
                 }
             }
             if (!unpaired) item(key = "your-mac") {
-                SectionTitle("Your Mac", null, onClick = actions.macDetails, modifier = Modifier.itemMotion(this, 2).padding(top = SectionGap))
+                // The Mac by its own name ("Santhosh's MacBook Air"), like the Mac shows the phone's.
+                SectionTitle(macName.ifBlank { "Your Mac" }, null, onClick = actions.macDetails, modifier = Modifier.itemMotion(this, 2).padding(top = SectionGap))
             }
             if (!unpaired) item(key = "cards") {
                 // The Mac card fills the width. When there's more (a transfer, the latest item),
@@ -385,7 +383,6 @@ fun MacTab(
                 val others = (if (transfer != null) 1 else 0) + (if (card.latest != null) 1 else 0)
                 val heroWidth = (screen - ScreenGutter * 2 - if (others > 0) 64.dp else 0.dp).coerceAtMost(520.dp)
                 val rowState = androidx.compose.foundation.lazy.rememberLazyListState()
-                val codeFirst = card.latest?.kind == ActivityEntry.Kind.Otp
                 val fadeEdge = with(density) { 40.dp.toPx() }
                 LazyRow(
                     state = rowState,
@@ -412,16 +409,12 @@ fun MacTab(
                             }
                         },
                 ) {
-                    // A fresh code comes first, in full view: it's only here for a minute and it's
-                    // what you came for. Anything else that's latest sits after the Mac.
-                    card.latest?.takeIf { codeFirst }?.let { latest -> item(key = "latest") { Box(Modifier.itemMotion(this, -1)) { LatestCard(latest, home, actions) } } }
                     // A transfer card arriving pushes the others along rather than jumping them.
                     if (transfer != null) item(key = "transfer") { Box(Modifier.itemMotion(this, -1)) { TransferCard(transfer, home, actions, heroWidth) } }
                     item(key = "mac") { Box(Modifier.itemMotion(this, -1)) { MacHero(macName, connected || bluetooth, meta, card, home, actions, heroWidth) } }
-                    card.latest?.takeIf { !codeFirst }?.let { latest -> item(key = "latest") { Box(Modifier.itemMotion(this, -1)) { LatestCard(latest, home, actions) } } }
+                    // The latest thing sent, whatever it is (a code too), sits to the right of the Mac.
+                    card.latest?.let { latest -> item(key = "latest") { Box(Modifier.itemMotion(this, -1)) { LatestCard(latest, home, actions) } } }
                 }
-                // The row keeps its place by key, so bring a new code into view.
-                LaunchedEffect(card.latest?.id, codeFirst) { if (codeFirst) rowState.animateScrollToItem(0) }
             }
             item(key = "send-title") {
                 SectionTitle(
@@ -430,7 +423,7 @@ fun MacTab(
                         unpaired -> "Pair your Mac to send photos, files and text."
                         forgotten -> "Pair again to send to your Mac."
                         connected -> null
-                        bluetooth -> "Photos and files wait for the same Wi‑Fi. Text and clipboard need it to send."
+                        bluetooth -> "Text and clipboard go over Bluetooth. Photos and files wait for the same Wi‑Fi."
                         else -> "Photos and files go across once your Mac is back. Text and clipboard need your Mac now."
                     },
                     onClick = null,
@@ -519,7 +512,7 @@ fun MacTab(
                     .background(Brush.verticalGradient(0f to home.top, solid / (solid + 24.dp) to home.top, 1f to home.top.copy(alpha = 0f))),
             ) {
                 Text(
-                    if (connected) macName else "Home", style = app.wallhop.ui.design.Type.headline, color = Color.White,
+                    "Home", style = app.wallhop.ui.design.Type.headline, color = Color.White,
                     maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                     modifier = Modifier.align(Alignment.TopCenter).padding(top = statusBar + Space.xs)
                         .clickable(interactionSource = null, indication = null, onClickLabel = "Scroll to top") {
@@ -731,8 +724,8 @@ private fun Modifier.itemMotion(scope: androidx.compose.foundation.lazy.LazyItem
     return if (index < 0) placed else placed.staggerIn(index)
 }
 
-/** The cards' height at the default font with a one-line Mac name; they grow from here. */
-private val CardHeight = 280.dp
+/** The cards' least height: the Mac card (picture, padding, one status line). Taller content grows the row. */
+private val CardHeight = 228.dp
 /** The little Mac's stage on the hero card. The Mac is drawn big and the card's details cut it off. */
 private val HeroPictureHeight = 172.dp
 private val SmallCardWidth = 204.dp
@@ -758,7 +751,7 @@ private fun cardRowHeight(name: String, meta: String, heroWidth: Dp, transfer: T
     }
     val inner = heroWidth - HeroPadding * 2
     // Picture, padding and the gap, plus the text (the meta line beside its 20 dp icon).
-    val hero = HeroPictureHeight + HeroPadding * 2 + Space.xs + text(name, HeroName, inner, 1) +
+    val hero = HeroPictureHeight + HeroPadding * 2 +
         maxOf(text(meta, HeroMeta, inner - 20.dp - Space.xs, 2), 20.dp)
     val small = SmallCardWidth - Space.m * 2
     val transferCard = transfer?.let {
@@ -881,8 +874,8 @@ private fun MacHero(
                 .background(androidx.compose.ui.graphics.lerp(home.card, Ink, 0.62f))
                 .padding(HeroPadding),
         ) {
-            Text(name, style = HeroName, color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Row(Modifier.padding(top = Space.xs), verticalAlignment = Alignment.CenterVertically) {
+            // The name is the section's title just above, so the card only says how the Mac is.
+            Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(
                     if (connected) WIcons.Link else WIcons.LinkBreak, null,
                     tint = if (connected) home.codeAccent else Color.White.copy(alpha = 0.6f),

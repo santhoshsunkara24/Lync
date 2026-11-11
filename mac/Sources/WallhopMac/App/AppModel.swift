@@ -1407,14 +1407,18 @@ final class AppModel: ObservableObject {
     }
 
     func sendClipboardToPhone() {
-        guard connectedPhone != nil else {
-            report(.notConnected(bluetooth: bluetoothPhone != nil, wifiTitle: "Clipboard needs Wi‑Fi"))
+        // Over Bluetooth only text and links can go; files and pictures wait for Wi‑Fi.
+        let bluetoothOnly = connectedPhone == nil && bluetoothPhone != nil
+        guard connectedPhone != nil || bluetoothOnly else {
+            report(.notConnected(bluetooth: false, wifiTitle: "Clipboard needs Wi‑Fi"))
             return
         }
+        func needsWifi(_ title: String) { report(.notConnected(bluetooth: true, wifiTitle: title)) }
         let board = Clipboard.general
         // Copied files (Finder) go as files; folders can't be sent.
         let urls = board.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL] ?? []
         if !urls.isEmpty {
+            if bluetoothOnly { return needsWifi("Files need Wi‑Fi") }
             let files = urls.filter { !$0.hasDirectoryPath }
             sendFilesToPhone(files, skippedFolders: urls.count - files.count)
             return
@@ -1425,6 +1429,7 @@ final class AppModel: ObservableObject {
         let imageTypes: Set<NSPasteboard.PasteboardType> = [.png, .tiff, .init("public.jpeg"), .init("public.heic")]
         if let imageIndex = types.firstIndex(where: imageTypes.contains),
            types.firstIndex(of: .string).map({ imageIndex < $0 }) ?? true {
+            if bluetoothOnly { return needsWifi("Pictures need Wi‑Fi") }
             sendClipboardImage()
             return
         }
@@ -1439,6 +1444,9 @@ final class AppModel: ObservableObject {
             return
         }
         // Too long for one message: it goes as a text file instead (PROTOCOL.md, Framing).
+        if bluetoothOnly, text.utf8.count > LinkServer.bluetoothTextBytes {
+            return needsWifi("Long text needs Wi‑Fi")
+        }
         if text.utf8.count > LinkServer.maxTextBytes {
             sendTextAsFile(text)
             return
