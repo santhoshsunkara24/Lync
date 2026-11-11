@@ -182,6 +182,8 @@ fun ListRow(
     subtitle: String? = null,
     /** Longer help text (e.g. maker-specific steps) can show in full. */
     subtitleMaxLines: Int = 3,
+    /** History rows keep their title on one line, ending in … (a long Mac name). */
+    titleMaxLines: Int = 2,
     leading: (@Composable () -> Unit)? = null,
     value: String? = null,
     /** Roll [value] when it changes (numbers like "12 ms" or "4 apps"). */
@@ -289,7 +291,7 @@ fun ListRow(
                         title,
                         style = Type.body.copy(fontWeight = androidx.compose.ui.text.font.FontWeight.Medium),
                         color = titleColor ?: if (destructive) colors.red else colors.label,
-                        maxLines = 2,
+                        maxLines = titleMaxLines,
                         overflow = TextOverflow.Ellipsis,
                     )
                 }

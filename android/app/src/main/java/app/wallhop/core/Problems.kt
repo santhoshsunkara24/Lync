@@ -280,7 +280,7 @@ object Problems {
     fun advertiseFailed(errorCode: Int): Problem = when (errorCode) {
         android.bluetooth.le.AdvertiseCallback.ADVERTISE_FAILED_FEATURE_UNSUPPORTED -> BLUETOOTH_UNSUPPORTED
         android.bluetooth.le.AdvertiseCallback.ADVERTISE_FAILED_TOO_MANY_ADVERTISERS ->
-            Problem("Bluetooth is busy", "Close other apps using Bluetooth, then turn the backup off and on.")
+            Problem("Bluetooth is busy", "Turn Bluetooth off and on on this phone. Lync tries again by itself.")
         else -> Problem("Bluetooth backup didn't start", "Turn Bluetooth off and on, then try again.")
     }
 

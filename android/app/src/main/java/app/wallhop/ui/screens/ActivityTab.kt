@@ -395,6 +395,7 @@ internal fun ActivityRow(entry: ActivityEntry, onLongClick: (androidx.compose.ui
     // A code that just arrived rolls in digit by digit; older ones simply show.
     val fresh = remember(entry.id) { System.currentTimeMillis() - entry.time < 15_000 }
     ListRow(
+        titleMaxLines = 1,
         title = title,
         titleContent = if (entry.kind == ActivityEntry.Kind.Otp && fresh) {
             {

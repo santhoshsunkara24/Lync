@@ -13,9 +13,10 @@ import android.bluetooth.BluetoothGattService
 import android.bluetooth.BluetoothManager
 import android.bluetooth.BluetoothProfile
 import android.bluetooth.BluetoothStatusCodes
-import android.bluetooth.le.AdvertiseCallback
 import android.bluetooth.le.AdvertiseData
-import android.bluetooth.le.AdvertiseSettings
+import android.bluetooth.le.AdvertisingSet
+import android.bluetooth.le.AdvertisingSetCallback
+import android.bluetooth.le.AdvertisingSetParameters
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -79,7 +80,6 @@ class BleLink(
     private var mac: PairedMac? = null
     private var server: BluetoothGattServer? = null
     private var characteristic: BluetoothGattCharacteristic? = null
-    private var advertising = false
     private var advertisedWindow = -1L
     /** When advertising last started (elapsed realtime). */
     private var advertisedAt = 0L
@@ -171,16 +171,32 @@ class BleLink(
             if (adapter?.isEnabled == true) _problem.value = app.wallhop.core.Problems.BLUETOOTH_UNSUPPORTED
             return
         }
-        val identity = identity ?: return
-        val mac = mac ?: return
-        if (advertising || connection?.ready == true) return
+        if (identity == null || mac == null) return
+        if (connection?.ready == true) return
+        ensureRotation()
         val window = BleWire.window(System.currentTimeMillis())
-        val tagKey = BleWire.tagKey(Crypto.dh(identity.privateKey, mac.publicKey), identity.publicKey, mac.publicKey)
-        val settings = AdvertiseSettings.Builder()
-            .setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_BALANCED)
-            .setTxPowerLevel(AdvertiseSettings.ADVERTISE_TX_POWER_MEDIUM)
+        // Already on: a new 15-minute window only changes the tag, in place. Stopping and starting
+        // a set to change it is what left sets behind on some phones (Android didn't stop the old
+        // ones), until the phone ran out and the Mac had only stale tags to find.
+        advertisingSet?.let { set ->
+            if (window != advertisedWindow) {
+                runCatching { set.setScanResponseData(scanResponse(window)) }
+                    .onSuccess { advertisedWindow = window }
+                    .onFailure { stopAdvertising(); startAdvertising() }
+            }
+            return
+        }
+        // One is starting; its callback finishes the job. Unless it never answered: try again.
+        if (setCallback != null) {
+            if (android.os.SystemClock.elapsedRealtime() - advertisedAt < 10_000) return
+            stopAdvertising()
+        }
+        val params = AdvertisingSetParameters.Builder()
+            .setLegacyMode(true)
             .setConnectable(true)
-            .setTimeout(0)
+            .setScannable(true)
+            .setInterval(AdvertisingSetParameters.INTERVAL_MEDIUM)
+            .setTxPowerLevel(AdvertisingSetParameters.TX_POWER_MEDIUM)
             .build()
         // The service UUID says "a Lync phone"; the tag in the scan response says which one, to
         // its own Mac only, and changes every 15 minutes.
@@ -188,25 +204,35 @@ class BleLink(
             .setIncludeDeviceName(false)
             .addServiceUuid(ParcelUuid(BleWire.SERVICE))
             .build()
-        val scanResponse = AdvertiseData.Builder()
+        val cb = newSetCallback()
+        setCallback = cb
+        advertisedWindow = window
+        advertisedAt = android.os.SystemClock.elapsedRealtime()
+        val started = runCatching { advertiser.startAdvertisingSet(params, data, scanResponse(window), null, null, cb) }.isSuccess
+        if (!started) setCallback = null
+        if (BuildConfig.STRESS_HOOKS) Log.d(TAG, "startAdvertisingSet requested=$started")
+    }
+
+    /** The scan response for [window]: this phone's tag, readable by its own Mac only. */
+    private fun scanResponse(window: Long): AdvertiseData {
+        val tagKey = BleWire.tagKey(Crypto.dh(identity!!.privateKey, mac!!.publicKey), identity!!.publicKey, mac!!.publicKey)
+        return AdvertiseData.Builder()
             .setIncludeDeviceName(false)
             .addServiceData(ParcelUuid(BleWire.SERVICE), BleWire.tag(tagKey, window))
             .build()
-        // A fresh callback per start: Android ties a set to its callback, and a start that lands
-        // after we've already asked it to stop (restarts are quick) is caught and stopped there.
-        val cb = newAdvertiseCallback()
-        advertiseCallback = cb
-        advertising = runCatching { advertiser.startAdvertising(settings, data, scanResponse, cb) }.isSuccess
-        advertisedWindow = window
-        advertisedAt = android.os.SystemClock.elapsedRealtime()
-        if (BuildConfig.STRESS_HOOKS) Log.d(TAG, "advertising=$advertising")
-        if (rotateJob?.isActive != true) rotateJob = scope.launch {
+    }
+
+    /**
+     * Once a minute while wanted: the tag follows the window, and a set that failed to start (or
+     * that Android stopped) is tried again, rather than giving up until the screen comes on.
+     */
+    private fun ensureRotation() {
+        if (rotateJob?.isActive == true) return
+        rotateJob = scope.launch {
             while (isActive) {
                 delay(60_000)
-                // A new window: advertise the new tag.
-                if (advertising && BleWire.window(System.currentTimeMillis()) != advertisedWindow) {
-                    stopAdvertising()
-                    startAdvertising()
+                synchronized(this@BleLink) {
+                    if (wanted && connection?.ready != true) startAdvertising()
                 }
             }
         }
@@ -233,54 +259,58 @@ class BleLink(
             return
         }
         if (connection?.ready == true) return
-        // No link: advertise afresh. Our own "advertising" flag can't be trusted here: Android can
-        // stop an advertising set on its own (Bluetooth or Wi-Fi changing, the stack restarting)
-        // without telling us, and then the Mac has nothing to find. But not more than every 20 s:
-        // each restart can come with a new private address, and a Mac halfway through connecting
-        // to the old one would lose it.
+        // No link: Android can stop a set on its own (Bluetooth or Wi-Fi changing, the stack
+        // restarting) without telling us, so now and then start it afresh. But not more than every
+        // 20 s: each restart can come with a new private address, and a Mac halfway through
+        // connecting to the old one would lose it. Otherwise just bring the tag up to date.
         val now = android.os.SystemClock.elapsedRealtime()
-        val stale = BleWire.window(System.currentTimeMillis()) != advertisedWindow
-        if (!advertising || stale || now - advertisedAt > RESTART_EVERY_MS) {
-            if (BuildConfig.STRESS_HOOKS) Log.d(TAG, "refresh: advertising afresh (was advertising=$advertising)")
+        if (advertisingSet != null && now - advertisedAt > RESTART_EVERY_MS) {
+            if (BuildConfig.STRESS_HOOKS) Log.d(TAG, "refresh: advertising afresh")
             stopAdvertising()
-            startAdvertising()
         }
+        startAdvertising()
     }
 
     @Synchronized
     private fun stopAdvertising() {
         // Always ask Android, even when we think it already stopped: on some phones a set can
         // stay on after a central connects, and skipping this leaves it advertising a stale tag.
-        advertising = false
-        val cb = advertiseCallback ?: return
-        advertiseCallback = null
-        runCatching { adapter?.bluetoothLeAdvertiser?.stopAdvertising(cb) }
+        val cb = setCallback ?: return
+        setCallback = null
+        advertisingSet = null
+        runCatching { adapter?.bluetoothLeAdvertiser?.stopAdvertisingSet(cb) }
     }
 
-    /** The callback of the advertising set that's meant to be on; null when none is. */
-    private var advertiseCallback: AdvertiseCallback? = null
+    /** The callback of the set that's meant to be on (or starting); null when none is. */
+    private var setCallback: AdvertisingSetCallback? = null
+    /** The set that's on, once Android has started it. */
+    private var advertisingSet: AdvertisingSet? = null
 
-    private fun newAdvertiseCallback(): AdvertiseCallback = object : AdvertiseCallback() {
-        override fun onStartSuccess(settingsInEffect: AdvertiseSettings?) {
+    private fun newSetCallback(): AdvertisingSetCallback = object : AdvertisingSetCallback() {
+        override fun onAdvertisingSetStarted(set: AdvertisingSet?, txPower: Int, status: Int) {
+            if (BuildConfig.STRESS_HOOKS) Log.d(TAG, "set started status=$status")
             synchronized(this@BleLink) {
-                // Started after we moved on (stopped, or restarted with a new tag): without this
-                // it would advertise on, unowned, even after Lync is closed.
-                if (advertiseCallback !== this) {
-                    if (BuildConfig.STRESS_HOOKS) Log.d(TAG, "late advertising set, stopping it")
-                    runCatching { adapter?.bluetoothLeAdvertiser?.stopAdvertising(this) }
+                if (setCallback !== this) {
+                    // Started after we moved on (stopped, or restarted): stop it, or it would
+                    // advertise on, unowned, even after Lync is closed.
+                    runCatching { adapter?.bluetoothLeAdvertiser?.stopAdvertisingSet(this) }
                     return
                 }
-                _problem.value = null
+                if (status == ADVERTISE_SUCCESS && set != null) {
+                    advertisingSet = set
+                    _problem.value = null
+                } else {
+                    // Failed: say why under the switch, and let the next minute try again.
+                    setCallback = null
+                    advertisingSet = null
+                    _problem.value = app.wallhop.core.Problems.advertiseFailed(status)
+                }
             }
         }
 
-        override fun onStartFailure(errorCode: Int) {
-            if (BuildConfig.STRESS_HOOKS) Log.d(TAG, "advertise failed $errorCode")
+        override fun onAdvertisingSetStopped(set: AdvertisingSet?) {
             synchronized(this@BleLink) {
-                if (advertiseCallback !== this) return
-                // Already advertising isn't a failure.
-                if (errorCode != ADVERTISE_FAILED_ALREADY_STARTED) _problem.value = app.wallhop.core.Problems.advertiseFailed(errorCode)
-                advertising = false
+                if (setCallback === this) { setCallback = null; advertisingSet = null }
             }
         }
     }
