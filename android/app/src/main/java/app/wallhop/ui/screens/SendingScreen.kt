@@ -37,6 +37,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -238,6 +239,8 @@ fun SendingScreen(
             val source = remember { MutableInteractionSource() }
             // Cancel turns into Done as the files land: the pill fills pale and the word
             // cross-fades, instead of both changing in one frame.
+            val labelChangedAt = remember { androidx.compose.runtime.mutableLongStateOf(0L) }
+            LaunchedEffect(done, failed) { if (done || failed) labelChangedAt.longValue = android.os.SystemClock.uptimeMillis() }
             val fill by animateColorAsState(if (done) home.pale else Color.White.copy(alpha = 0.08f), tween(Durations.Enter, easing = Easings.Out), label = "pillFill")
             val edge by animateColorAsState(if (done) home.pale.copy(alpha = 0f) else Color.White.copy(alpha = 0.08f), tween(Durations.Enter, easing = Easings.Out), label = "pillEdge")
             Box(
@@ -253,8 +256,13 @@ fun SendingScreen(
                             cornerRadius = CornerRadius((size.height - line) / 2), style = Stroke(line))
                     }
                     .clip(RoundedCornerShape(50))
-                    // A failed send has nothing left to cancel: this closes it.
-                    .tappable(source, onClick = if (done || failed) onHide else ({ cancel() })),
+                    // A failed send has nothing left to cancel: this closes it. For a moment after
+                    // the label changes, taps are ignored: a tap meant for "Done" that lands just
+                    // before it, on "Cancel", would throw away a send that was about to finish.
+                    .tappable(source, onClick = {
+                        if (android.os.SystemClock.uptimeMillis() - labelChangedAt.longValue < LABEL_SETTLE_MS) return@tappable
+                        if (done || failed) onHide() else cancel()
+                    }),
                 contentAlignment = Alignment.Center,
             ) {
                 AnimatedContent(
@@ -287,3 +295,6 @@ private fun itemsDetail(t: TransferState): String {
         else -> first.name.substringAfterLast('.', "").uppercase().ifEmpty { "File" }
     }
 }
+
+/** How long the Cancel / Done button ignores taps after its label changes. */
+private const val LABEL_SETTLE_MS = 600L

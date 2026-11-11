@@ -267,6 +267,12 @@ internal fun showEntryActions(
                 add(AlertAction("Send again") { onSendAgain(entry) })
             }
             linkOf(entry)?.let { url -> add(AlertAction("Open link") { app.wallhop.core.Open.link(context, url) }) }
+            if (entry.kind == ActivityEntry.Kind.Call && entry.number != null) {
+                add(AlertAction("Call back") { callBack(context, entry.number) })
+            }
+            if (entry.kind == ActivityEntry.Kind.TextSent && linkOf(entry) == null) {
+                add(AlertAction("Copy text") { copyText(overlays, context, entry, haptics) })
+            }
             add(AlertAction("Delete", destructive = true) { onDelete(entry.id) })
         }
     if (anchor != null) {
@@ -284,6 +290,8 @@ private fun entryActionIcon(label: String) = when (label) {
     "Open", "Open in Downloads" -> WIcons.File
     "Open link" -> WIcons.Link
     "Send again" -> WIcons.Retry
+    "Call back" -> WIcons.Call
+    "Copy text" -> WIcons.Clipboard
     "Delete" -> WIcons.XCircle
     else -> null
 }
@@ -339,8 +347,31 @@ internal fun tapEntry(
         entry.kind == ActivityEntry.Kind.Otp -> copyEntryCode(overlays, context, entry, haptics)
         entry.kind == ActivityEntry.Kind.FromMac && entry.uris.isNotEmpty() -> openReceived(overlays, context, entry)
         link != null -> app.wallhop.core.Open.link(context, link)
+        // The obvious thing for each, as in the phone's own apps: a missed call dials back (the
+        // dialer opens, nothing is called yet), a text copies. Long press still has Delete.
+        entry.kind == ActivityEntry.Kind.Call && entry.number != null -> callBack(context, entry.number)
+        entry.kind == ActivityEntry.Kind.TextSent -> copyText(overlays, context, entry, haptics)
+        // Nothing to open: a tap that only offered Delete felt broken, so it does nothing.
+        entry.kind == ActivityEntry.Kind.FilesSent && entry.uris.isEmpty() -> Unit
+        entry.kind == ActivityEntry.Kind.Call -> Unit
         else -> onActions(entry)
     }
+}
+
+/** Opens the dialer with the number filled in. */
+private fun callBack(context: android.content.Context, number: String) {
+    runCatching {
+        context.startActivity(android.content.Intent(android.content.Intent.ACTION_DIAL, android.net.Uri.fromParts("tel", number, null))
+            .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK))
+    }
+}
+
+/** Copies a sent text back to this phone's clipboard. */
+private fun copyText(overlays: Overlays, context: android.content.Context, entry: ActivityEntry, haptics: Haptics?) {
+    val clipboard = context.getSystemService(android.content.ClipboardManager::class.java) ?: return
+    clipboard.setPrimaryClip(android.content.ClipData.newPlainText("Text", entry.shownTitle))
+    haptics?.confirm()
+    overlays.toast("Text copied", WIcons.CheckCircle)
 }
 
 /**
@@ -360,7 +391,7 @@ internal fun ActivityRow(entry: ActivityEntry, onLongClick: (androidx.compose.ui
         ActivityEntry.Kind.FromMac -> WIcons.Laptop to colors.gray
         ActivityEntry.Kind.Call -> WIcons.CallMissed to colors.red
     }
-    val title = if (entry.kind == ActivityEntry.Kind.Otp) app.wallhop.core.Wording.spaced(entry.title) else entry.title
+    val title = if (entry.kind == ActivityEntry.Kind.Otp) app.wallhop.core.Wording.spaced(entry.title) else entry.shownTitle
     // A code that just arrived rolls in digit by digit; older ones simply show.
     val fresh = remember(entry.id) { System.currentTimeMillis() - entry.time < 15_000 }
     ListRow(
@@ -373,7 +404,7 @@ internal fun ActivityRow(entry: ActivityEntry, onLongClick: (androidx.compose.ui
                 )
             }
         } else null,
-        subtitle = entry.detail,
+        subtitle = entry.shownDetail,
         leading = { IconTile(icon, color) },
         trailing = {
             Text(

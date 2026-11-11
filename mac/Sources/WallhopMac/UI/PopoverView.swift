@@ -260,7 +260,7 @@ private struct CountdownRing: View {
 private struct HomePage: View {
     @ObservedObject var model: AppModel
     @EnvironmentObject var theme: ThemeStore
-    /// 0…1, a single glow on the phone's name when it connects.
+    /// 0…1, a single glow on the phone's name (the title) when it connects.
     @State private var glow: CGFloat = 0
     /// Which list shows under the cards: Recent or Notifications.
     @State private var list = HomeList.recent
@@ -278,7 +278,7 @@ private struct HomePage: View {
             VStack(alignment: .leading, spacing: 0) {
                 header.revealSection(0)
                 if let phone = model.connectedPhone ?? model.pairedPhones.first {
-                    PhoneCard(model: model, phone: phone, glow: glow).padding(.top, WSpace.l).revealSection(0)
+                    PhoneCard(model: model, phone: phone).padding(.top, WSpace.l).revealSection(0)
                 }
                 if model.offerLoginItem {
                     LoginOfferCard(model: model).padding(.top, WSpace.m).revealSection(1)
@@ -404,7 +404,10 @@ private struct HomePage: View {
     private var header: some View {
         HStack(alignment: .top, spacing: WSpace.xs) {
             VStack(alignment: .leading, spacing: WSpace.xxs) {
-                Text("Your phone").font(.whTitle(24))
+                // The phone's own name ("Pixel 9"), so it's clear which one this is.
+                Text((model.connectedPhone ?? model.pairedPhones.first)?.name ?? "Your phone")
+                    .font(.whTitle(24)).lineLimit(1).minimumScaleFactor(0.6)
+                    .shadow(color: theme.theme.pale.opacity(0.7 * glow), radius: 14)
                 HStack(spacing: WSpace.xs) {
                     // Over Bluetooth the phone is still linked: the same calm line as Connected.
                     LinkCatchView(connected: model.connectedPhone != nil || model.bluetoothPhone != nil, animate: model.panelOpen, shaded: false, haptic: false)
@@ -535,8 +538,6 @@ private struct PhoneCard: View {
     @ObservedObject var model: AppModel
     @EnvironmentObject var theme: ThemeStore
     let phone: PairedPhone
-    /// 0…1, a single glow on the name when the phone connects.
-    var glow: CGFloat
 
     private var name: String { phone.name }
     private var connected: Bool { model.connectedPhone != nil }
@@ -550,7 +551,22 @@ private struct PhoneCard: View {
             }
             .frame(height: connected ? 196 : 152, alignment: .top)
             .clipped()
-            .overlay(alignment: .topTrailing) { moreMenu.padding(WSpace.s) }
+            // The card's one action, in its top-right corner: forgetting this phone. It asks first.
+            .overlay(alignment: .topTrailing) {
+                if !confirming {
+                    Button("Forget phone") { model.confirmingForget = phone.id }
+                        .buttonStyle(WPlainPress())
+                        // Red, like Forget's own confirm: it unpairs the phone.
+                        .font(.wh(12, .semibold)).foregroundStyle(WTheme.danger)
+                        .padding(.horizontal, WSpace.s).frame(height: 26)
+                        .background(Capsule().fill(Color.black.opacity(0.45)))
+                        .contentShape(Capsule())
+                        .padding(WSpace.s)
+                        .help("Unpair \(name) from this Mac")
+                        .accessibilityLabel("Forget \(name)")
+                        .transition(.opacity)
+                }
+            }
             Group {
                 if confirming { forgetConfirmation.transition(.swap) } else { details.transition(.swap) }
             }
@@ -571,37 +587,10 @@ private struct PhoneCard: View {
             }
             Button("Add a phone") { model.panelPage = .addPhone }
             Button("Settings") { model.panelPage = .settings }
-            Divider()
-            Button("Forget This Phone…") { model.confirmingForget = phone.id }
         }
         .accessibilityElement(children: .contain)
         .animation(WMotion.animation(WMotion.smooth), value: connected)
         .animation(WMotion.animation(WMotion.smooth), value: confirming)
-    }
-
-    /// The phone's own actions, in the card's corner: forgetting it doesn't need a trip to Settings.
-    private var moreMenu: some View {
-        Menu {
-            if connected || model.bluetoothPhone != nil {
-                Button(model.ringing ? "Stop ringing" : "Ring phone") { model.ringPhone() }
-            }
-            Button("Add a phone") { model.panelPage = .addPhone }
-            Divider()
-            Button("Forget This Phone…", role: .destructive) { model.confirmingForget = phone.id }
-        } label: {
-            Image(systemName: "ellipsis")
-                .font(.system(size: 12, weight: .bold))
-                .foregroundStyle(.white.opacity(0.85))
-                .frame(width: 26, height: 26)
-                .background(Circle().fill(Color.black.opacity(0.28)))
-                .contentShape(Circle())
-        }
-        .menuStyle(.button)
-        .buttonStyle(WPlainPress())
-        .menuIndicator(.hidden)
-        .fixedSize()
-        .help("More for \(name)")
-        .accessibilityLabel("More for \(name)")
     }
 
     /// Forget asks once, right in the card: the phone has to pair again afterwards.
@@ -630,30 +619,19 @@ private struct PhoneCard: View {
     private var details: some View {
             VStack(alignment: .leading, spacing: WSpace.xxs) {
                 Text("Android phone").font(.wh(12, .medium)).foregroundStyle(WTheme.secondary)
-                Text(name)
-                    .font(.wh(21, .semibold)).lineLimit(1).minimumScaleFactor(0.7)
-                    .shadow(color: theme.theme.pale.opacity(0.7 * glow), radius: 14)
                 if connected {
                     TimelineView(.periodic(from: .now, by: 30)) { context in
                         Text(detail(now: context.date)).font(.wh(13)).foregroundStyle(WTheme.secondary)
                             .contentTransition(.numericText())
                     }
                 } else {
-                    HStack {
-                        Text(model.bluetoothPhone != nil ? "Over Bluetooth" : "Not connected")
-                            .font(.wh(13)).foregroundStyle(WTheme.secondary)
-                        Spacer()
-                        // Pairing again isn't the fix for a phone that's away; another phone can still be added.
-                        Button("Add a phone") { model.panelPage = .addPhone }
-                            .buttonStyle(WPlainPress())
-                            .font(.wh(12, .semibold)).foregroundStyle(theme.theme.pale)
-                            .help("Show a code to pair another phone")
-                    }
+                    Text(model.bluetoothPhone != nil ? "Over Bluetooth" : "Not connected")
+                        .font(.wh(13)).foregroundStyle(WTheme.secondary)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, WSpace.m).padding(.top, WSpace.m).padding(.bottom, connected ? WSpace.l : WSpace.m)
-            .accessibilityElement(children: .combine)
+            .accessibilityElement(children: .contain)
     }
 
     private func detail(now: Date) -> String {
@@ -1115,11 +1093,12 @@ private struct NotificationRow: View {
         .accessibilityElement(children: replying ? .contain : .combine)
         .accessibilityActions {
             if notification.canReply { Button("Reply", action: startReply) }
-            Button("Clear on phone") { model.dismissNotification(notification.key) }
+            Button("Clear") { model.clearNotification(notification.key) }
         }
         .contextMenu {
             if notification.canReply { Button("Reply", action: startReply) }
-            Button("Clear on phone") { model.dismissNotification(notification.key) }
+            // Same as the row's Clear button: here and on the phone, with Undo.
+            Button("Clear") { model.clearNotification(notification.key) }
             Button("Mute \(notification.appName)") { model.mute(notification) }
         }
     }
@@ -1564,6 +1543,12 @@ private struct OnboardingPage: View {
             PairingQR(model: model, bare: true)
                 .padding(.top, WSpace.l)
                 .revealSection(1)
+            // Where to scan from, and the one thing that has to be true: first-timers need it most.
+            Text("Open Lync on your phone and tap Pair with QR code. Use the same Wi‑Fi as this Mac.")
+                .font(.wh(13, .medium)).foregroundStyle(WTheme.secondary)
+                .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
+                .padding(.top, WSpace.m).padding(.horizontal, WSpace.l)
+                .revealSection(1)
             HStack(spacing: WSpace.xs) {
                 WaitingArc(spinning: model.panelOpen)
                 Text("Waiting for your phone")
@@ -1746,7 +1731,7 @@ private struct SettingsPage: View {
                 group("Clipboard and alerts") {
                     toggle("Copy received text automatically", $model.copyTextAutomatically)
                     divider
-                    toggle("Show codes when they arrive", $model.showCodeOnArrival)
+                    toggle("Show code digits on the card", $model.showCodeOnArrival)
                     divider
                     toggle("Show phone notifications", $model.showNotifications)
                     divider
@@ -1931,10 +1916,54 @@ struct MaybeScroll<Content: View>: View {
     static var scrolls: Bool { !PanelSnapshots.active }
     @ViewBuilder let content: () -> Content
 
+    /// How far it's scrolled, how tall the content is, and how tall the window onto it.
+    @State private var offset: CGFloat = 0
+    @State private var contentHeight: CGFloat = 0
+    @State private var viewport: CGFloat = 0
+
+    private var moreAbove: Bool { offset > 2 }
+    private var moreBelow: Bool { contentHeight - offset - viewport > 2 }
+
     var body: some View {
-        // No scroller, not even while scrolling: the panel is short and its cards fade at the edge.
-        if Self.scrolls { ScrollView(content: content).scrollIndicators(.never) } else { content() }
+        // No scroller, not even while scrolling. Instead the edge with more beyond it fades, so
+        // it's plain there's more to see without a bar.
+        if Self.scrolls {
+            ScrollView {
+                content().background(GeometryReader { g in
+                    Color.clear.preference(key: ScrollMetrics.self,
+                                           value: [-g.frame(in: .named("maybeScroll")).minY, g.size.height])
+                })
+            }
+            .scrollIndicators(.never)
+            .coordinateSpace(name: "maybeScroll")
+            .onPreferenceChange(ScrollMetrics.self) { v in
+                guard v.count == 2 else { return }
+                offset = v[0]; contentHeight = v[1]
+            }
+            .background(GeometryReader { g in
+                Color.clear.onAppear { viewport = g.size.height }
+                    .onChange(of: g.size.height) { _, h in viewport = h }
+            })
+            .mask {
+                VStack(spacing: 0) {
+                    LinearGradient(colors: [moreAbove ? .clear : .black, .black], startPoint: .top, endPoint: .bottom)
+                        .frame(height: 24)
+                    Rectangle()
+                    LinearGradient(colors: [.black, moreBelow ? .clear : .black], startPoint: .top, endPoint: .bottom)
+                        .frame(height: 36)
+                }
+            }
+            .animation(WMotion.animation(WMotion.quick), value: moreAbove)
+            .animation(WMotion.animation(WMotion.quick), value: moreBelow)
+        } else {
+            content()
+        }
     }
+}
+
+private struct ScrollMetrics: PreferenceKey {
+    static let defaultValue: [CGFloat] = []
+    static func reduce(value: inout [CGFloat], nextValue: () -> [CGFloat]) { let n = nextValue(); if !n.isEmpty { value = n } }
 }
 
 enum PanelSnapshots {

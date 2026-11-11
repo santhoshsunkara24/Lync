@@ -431,7 +431,7 @@ private fun ProgressRing(progress: Float, modifier: Modifier) {
 private fun notchEvent(entry: ActivityEntry): NotchEvent = when (entry.kind) {
     ActivityEntry.Kind.Otp -> NotchEvent(WIcons.Code, app.wallhop.core.Wording.spaced(entry.title))
     ActivityEntry.Kind.FilesSent -> NotchEvent(WIcons.Image, entry.title)
-    ActivityEntry.Kind.TextSent -> NotchEvent(WIcons.Text, entry.title)
+    ActivityEntry.Kind.TextSent -> NotchEvent(WIcons.Text, entry.shownTitle)
     ActivityEntry.Kind.Call -> NotchEvent(WIcons.Call, entry.title)
     ActivityEntry.Kind.FromMac -> NotchEvent(WIcons.Laptop, entry.title)
 }

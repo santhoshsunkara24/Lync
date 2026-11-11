@@ -114,8 +114,23 @@ data class ActivityEntry(
     val time: Long = System.currentTimeMillis(),
     /** Files this entry is about (content URIs as strings): saved from the Mac, or sent to it. */
     val uris: List<String> = emptyList(),
+    /** A missed call's number, for Call back (the title may be the contact's name). */
+    val number: String? = null,
 ) {
     enum class Kind { Otp, TextSent, FilesSent, FromMac, Call }
+
+    /**
+     * What a row shows. "Ready to paste on your Mac" is left out: everything in the list got
+     * there, so saying so on every row is noise. A sent text shows the text itself.
+     */
+    val shownTitle: String get() =
+        if (kind == Kind.TextSent && title == app.wallhop.core.Wording.READY) detail else title
+    val shownDetail: String? get() = when {
+        kind == Kind.TextSent && title == app.wallhop.core.Wording.READY -> null
+        detail == app.wallhop.core.Wording.READY -> null
+        detail.endsWith(" · ready to paste") -> detail.removeSuffix(" · ready to paste")
+        else -> detail
+    }
 }
 
 /**
@@ -1225,7 +1240,7 @@ class LinkManager private constructor(private val context: Context) {
             }
             if (call.state == "missed") {
                 record(ActivityEntry(UUID.randomUUID().toString(), ActivityEntry.Kind.Call,
-                    "Missed call", call.name ?: call.number ?: "Unknown number"))
+                    "Missed call", call.name ?: call.number ?: "Unknown number", number = call.number?.takeIf { it.isNotBlank() }))
             }
             release(wake)
         }

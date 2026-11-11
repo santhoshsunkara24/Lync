@@ -14,9 +14,9 @@ struct LiveCardView: View {
             case .text(let text):
                 // "Copied" only when it really was; otherwise a Copy button.
                 if model.copyTextAutomatically {
-                    row(icon: "text.bubble.fill", title: "Ready to paste", subtitle: text, trailing: copiedBadge)
+                    row(icon: "text.bubble.fill", title: "Ready to paste", subtitle: preview(text), trailing: copiedBadge)
                 } else {
-                    row(icon: "text.bubble.fill", title: "From your phone", subtitle: text,
+                    row(icon: "text.bubble.fill", title: "From your phone", subtitle: preview(text),
                         trailing: CopyButton(style: WPill(prominent: false, compact: true), label: "Copy text") { Clipboard.copy(text) })
                 }
             case .receiving(let id):
@@ -302,6 +302,9 @@ struct LiveCardView: View {
     static let textInset = Self.tileSize + WSpace.s
     static let tileSize: CGFloat = 32
 
+    /** The text itself, unless previews are hidden (Settings): then nothing, as for notifications. */
+    private func preview(_ text: String) -> String? { model.hideNotificationText ? nil : text }
+
     private func row<Trailing: View>(icon: String, title: String, subtitle: String?, tint: Color = .white, trailing: Trailing) -> some View {
         // With a subtitle the icon sits at the top, beside the title; alone, the two centre on each other.
         HStack(alignment: subtitle == nil ? .center : .top, spacing: WSpace.s) {
@@ -452,7 +455,7 @@ private struct NotificationCard: View {
             }
             .contextMenu {
                 Button("Dismiss") { model.hideLive() }
-                Button("Clear on phone") { model.dismissNotification(notification.key) }
+                Button("Clear") { model.clearNotification(notification.key) }
             }
 
             // Reply and the phone's actions start under the text, not under the icon.

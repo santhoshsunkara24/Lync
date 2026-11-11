@@ -385,6 +385,7 @@ fun MacTab(
                 val others = (if (transfer != null) 1 else 0) + (if (card.latest != null) 1 else 0)
                 val heroWidth = (screen - ScreenGutter * 2 - if (others > 0) 64.dp else 0.dp).coerceAtMost(520.dp)
                 val rowState = androidx.compose.foundation.lazy.rememberLazyListState()
+                val codeFirst = card.latest?.kind == ActivityEntry.Kind.Otp
                 val fadeEdge = with(density) { 40.dp.toPx() }
                 LazyRow(
                     state = rowState,
@@ -411,11 +412,16 @@ fun MacTab(
                             }
                         },
                 ) {
+                    // A fresh code comes first, in full view: it's only here for a minute and it's
+                    // what you came for. Anything else that's latest sits after the Mac.
+                    card.latest?.takeIf { codeFirst }?.let { latest -> item(key = "latest") { Box(Modifier.itemMotion(this, -1)) { LatestCard(latest, home, actions) } } }
                     // A transfer card arriving pushes the others along rather than jumping them.
                     if (transfer != null) item(key = "transfer") { Box(Modifier.itemMotion(this, -1)) { TransferCard(transfer, home, actions, heroWidth) } }
                     item(key = "mac") { Box(Modifier.itemMotion(this, -1)) { MacHero(macName, connected || bluetooth, meta, card, home, actions, heroWidth) } }
-                    card.latest?.let { latest -> item(key = "latest") { Box(Modifier.itemMotion(this, -1)) { LatestCard(latest, home, actions) } } }
+                    card.latest?.takeIf { !codeFirst }?.let { latest -> item(key = "latest") { Box(Modifier.itemMotion(this, -1)) { LatestCard(latest, home, actions) } } }
                 }
+                // The row keeps its place by key, so bring a new code into view.
+                LaunchedEffect(card.latest?.id, codeFirst) { if (codeFirst) rowState.animateScrollToItem(0) }
             }
             item(key = "send-title") {
                 SectionTitle(
@@ -766,8 +772,8 @@ private fun cardRowHeight(name: String, meta: String, heroWidth: Dp, transfer: T
     } ?: 0.dp
     val latestCard = latest?.let {
         val title = if (it.kind == ActivityEntry.Kind.Otp) text(app.wallhop.core.Wording.spaced(it.title), codeStyle(density.fontScale), small)
-            else text(it.title, TransferTitle, small, 3)
-        Space.m * 2 + Space.xs + 48.dp + text(latestLabel(it), Overline, small) + title + text(it.detail, Meta, small, 2)
+            else text(it.shownTitle, TransferTitle, small, 3)
+        Space.m * 2 + Space.xs + 48.dp + text(latestLabel(it), Overline, small) + title + (it.shownDetail?.let { d -> text(d, Meta, small, 2) } ?: 0.dp)
     } ?: 0.dp
     return maxOf(CardHeight, hero, transferCard, latestCard)
 }
@@ -929,10 +935,12 @@ private fun LatestCard(entry: ActivityEntry, home: HomeColors, actions: MacActio
                     }
                 }
             } else {
-                Text(entry.title, style = TransferTitle, color = Color.White, maxLines = 3, overflow = TextOverflow.Ellipsis)
+                Text(entry.shownTitle, style = TransferTitle, color = Color.White, maxLines = 3, overflow = TextOverflow.Ellipsis)
             }
-            Text(entry.detail, style = Meta, color = secondary, maxLines = 2,
-                overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = Space.xs))
+            entry.shownDetail?.let {
+                Text(it, style = Meta, color = secondary, maxLines = 2,
+                    overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = Space.xs))
+            }
             Spacer(Modifier.weight(1f))
             if (isCode) {
                 PillButton(

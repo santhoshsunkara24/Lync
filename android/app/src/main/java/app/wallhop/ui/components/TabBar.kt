@@ -101,10 +101,24 @@ fun PillNavBar(
                     contentAlignment = Alignment.Center,
                 ) {
                     val tint by animateColorAsState(if (active) Wallhop.home.onPale else Wallhop.home.pale.copy(alpha = 0.72f), Springs.snappy(), label = "navTint")
-                    // The icon dips the moment the finger lands, before the tab changes.
-                    Icon(tab.icon, null, tint = tint, modifier = Modifier.size(24.dp).pressScale(source, 0.86f))
-                    if (tab.badge) {
-                        Box(Modifier.offset(x = 12.dp, y = (-10).dp).size(8.dp).clip(capsule()).background(red))
+                    // Icon and name side by side: a laptop, a tray and a gear alone don't say where
+                    // things are. The icon dips the moment the finger lands, before the tab changes.
+                    androidx.compose.foundation.layout.Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(6.dp),
+                        modifier = Modifier.padding(horizontal = Space.xs),
+                    ) {
+                        Box {
+                            Icon(tab.icon, null, tint = tint, modifier = Modifier.size(20.dp).pressScale(source, 0.86f))
+                            if (tab.badge) {
+                                Box(Modifier.align(Alignment.TopEnd).offset(x = 4.dp, y = (-3).dp).size(8.dp).clip(capsule()).background(red))
+                            }
+                        }
+                        androidx.compose.material3.Text(
+                            tab.label, color = tint, maxLines = 1, softWrap = false,
+                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                            style = app.wallhop.ui.design.Type.footnote.copy(fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold),
+                        )
                     }
                 }
             }
