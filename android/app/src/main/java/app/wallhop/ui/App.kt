@@ -1411,7 +1411,7 @@ private fun TransferEffects(link: LinkManager) {
     }
 }
 
-private const val PRIVACY_URL = "https://lync-theta.vercel.app/privacy"
+private const val PRIVACY_URL = "https://lyncapp.vercel.app/privacy"
 
 /** Android said no and won't ask again: the steps to its switch in Settings, naming the permission that's blocked. */
 private fun showBlockedAlert(overlays: Overlays, context: Context, key: Features.Key, blockedPermission: String) {

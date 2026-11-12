@@ -37,7 +37,7 @@
     <key>NSHumanReadableCopyright</key>
     <string>© 2026 Santhosh Sunkara. Free and open source.</string>
     <key>SUFeedURL</key>
-    <string>https://lync-theta.vercel.app/appcast.xml</string>
+    <string>https://lyncapp.vercel.app/appcast.xml</string>
     <key>SUPublicEDKey</key>
     <string>dLT1ZwJN1hmYTvm04VyLPwF42m6TMAuBWQDEduHIxqA=</string>
     <key>SUEnableAutomaticChecks</key>

@@ -113,7 +113,7 @@ enum SystemSettings {
 }
 
 /// The page with Lync for Android, for "Update Lync on your phone".
-let lyncReleasesURL = URL(string: "https://lync-theta.vercel.app")!
+let lyncReleasesURL = URL(string: "https://lyncapp.vercel.app")!
 
 extension Problem {
     // MARK: Not connected

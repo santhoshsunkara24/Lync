@@ -7,7 +7,7 @@ package app.wallhop.core
 object Wording {
     const val READY = "Ready to paste on your Mac"
     const val READY_SHORT = "Ready to paste"
-    const val RELEASES_URL = "https://lync-theta.vercel.app"
+    const val RELEASES_URL = "https://lyncapp.vercel.app"
 
     /** "photo"/"photos", "video"/"videos" or "file"/"files" for these MIME types. */
     fun noun(mimes: List<String>): String {

@@ -17,7 +17,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 REPO="santhoshsunkara24/Lync"
 # The website serves the DMG (scripts/site.sh); GitHub keeps a copy of each release too.
-SITE="https://lync-theta.vercel.app"
+SITE="https://lyncapp.vercel.app"
 APPCAST="../docs/appcast.xml"
 SPARKLE_BIN=".build/artifacts/sparkle/Sparkle/bin"
 

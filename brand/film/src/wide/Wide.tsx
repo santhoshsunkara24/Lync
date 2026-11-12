@@ -6,6 +6,7 @@ import { MacMenuBar, MacWallpaper } from '../components/Desktop';
 import { DragGlow } from '../components/DragGlow';
 import { Icon } from '../components/Icon';
 import { ReceivingCard } from '../components/Liftoff';
+import { CLASP, LINKED, QrLink } from '../components/QrLink';
 import { NotchCard } from '../components/NotchCard';
 import { PhoneHome, PhoneLock } from '../components/PhoneHome';
 import { Pointer, Touch } from '../components/Pointer';
@@ -25,7 +26,7 @@ const W = 1920;
 const H = 1080;
 const BEAT = 60 / 135;
 const b = (n: number) => n * BEAT;
-export const WIDE_SECONDS = b(128);
+export const WIDE_SECONDS = b(140);
 
 /** The top edge of the "screen", the notch's centre, and the scale the notch's cards are drawn at. */
 const LINE = 300;
@@ -47,16 +48,19 @@ const LINK_ICON: [number, number] = [1530, LINE + 31];
 const LOGO = b(12);
 const NOTCH_SCENE = b(18);
 const FEATURES = b(22);
+/** Pairing, before the features: the Mac's QR, the phone scanning it, the code becoming the link. */
+const PAIR = FEATURES;
+const PAIR_BEATS = 12;
 /** Codes is long: a whole checkout on the Mac, the code arriving and pasted. The music repeats a bar to make room. */
 const FEATURE_BEATS = [14, 6, 6, 8, 6, 6, 6, 8, 6, 8, 6];
 const FEATURE_NAMES = ['Codes', 'Calls', 'Replies', 'Files', 'Drop', 'Panel', 'Music', 'Menu bar', 'Android app', 'Your colors', 'Off Wi‑Fi'];
 const FEATURE_ICONS = ['lock', 'phone.fill', 'message', 'photo', 'arrow.up.doc.fill', 'menubar.rectangle', 'music.note', 'menubar.rectangle', 'iphone.gen3', 'photo', 'wifi.slash'];
 const F: number[] = [];
-FEATURE_BEATS.reduce((at, n) => (F.push(b(at)), at + n), 22);
-const PROMISES = b(102);
+FEATURE_BEATS.reduce((at, n) => (F.push(b(at)), at + n), 22 + PAIR_BEATS);
+const PROMISES = b(114);
 const FEND = (i: number) => (i + 1 < F.length ? F[i + 1] : PROMISES);
-const DEVICES = b(110);
-const END = b(116);
+const DEVICES = b(122);
+const END = b(128);
 
 // ---------------------------------------------------------------------------------------------
 // Pieces
@@ -738,6 +742,106 @@ const PanelStory: React.FC<{ t: number }> = ({ t }) => {
   );
 };
 
+/** When the phone catches the code, from the scene's start. */
+const PAIR_SCAN = 1.4;
+
+/**
+ * Pairing: the Mac's panel opens on its QR ("Scan with your phone."), the phone's scanner finds
+ * it, and both screens play the apps' own moment: the code's squares stream into the two hooks,
+ * which clasp and light up. "You're linked." on both.
+ */
+const PairStory: React.FC<{ t: number }> = ({ t }) => {
+  const at = PAIR;
+  const end = F[0];
+  if (t < at - 0.1 || t > end + 0.3) return null;
+  const close = 1 - ramp(sec(t), end - 0.35, end - 0.06);
+  const scan = at + PAIR_SCAN;
+  const u = t - scan;
+  const linked = clamp((u - LINKED) / 0.35);
+  const panel = springAt(sec(t), at + 0.3, 'smooth') * close;
+  const phone = springAt(sec(t), at + 0.55, 'smooth') * close;
+  // The phone, hand-held: drifting a little until the code is caught, then still.
+  const hold = 1 - ramp(sec(t), scan - 0.25, scan);
+  const drift = (a: number, f: number) => Math.sin((t - at) * f + a) * 10 * hold;
+  const caught = ramp(sec(t), scan - 0.12, scan);
+  const toLink = ramp(sec(t), scan + 0.05, scan + 0.4);
+  const title = (text: string, o: number, size: number) => (
+    <div style={{ position: 'absolute', left: 0, right: 0, textAlign: 'center', opacity: o, fontFamily: font.display, fontSize: size, color: color.white }}>{text}</div>
+  );
+  return (
+    <>
+      <NeonWord t={t} at={at + 0.02} out={end - 0.25} word="Pair" icon="qrcode" y={150} size={120} />
+      {/* The Mac's panel, opened on the code. */}
+      {panel > 0.001 && (
+        <div style={{ position: 'absolute', left: PANEL_LEFT, top: LINE, width: PANEL_W, height: PANEL_VISIBLE, transformOrigin: '0 0', transform: `scale(${P})` }}>
+          <div
+            style={{
+              position: 'absolute',
+              inset: 0,
+              transformOrigin: '50% 0%',
+              transform: `perspective(1000px) rotateX(${(1 - Math.min(1, panel)) * 20}deg) scale(${0.5 + 0.5 * panel}, ${0.2 + 0.8 * panel})`,
+              opacity: clamp(panel * 2),
+              borderRadius: '0 0 32px 32px',
+              overflow: 'hidden',
+              background: '#000',
+              boxShadow: '0 20px 50px rgba(0,0,0,0.6)',
+            }}
+          >
+            <div style={{ position: 'absolute', left: 0, right: 0, top: 54, height: 40 }}>
+              {title('Scan with your phone.', 1 - linked, 28)}
+              {title('You’re linked.', linked, 28)}
+            </div>
+            <div style={{ position: 'absolute', left: (PANEL_W - 340) / 2, top: 92 }}>
+              <QrLink t={u} size={340} />
+            </div>
+            <div style={{ position: 'absolute', left: 0, right: 0, top: 418, display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 8, fontFamily: font.body, fontSize: 14, color: 'rgba(255,255,255,0.56)' }}>
+              {linked > 0 ? (
+                <span style={{ opacity: linked, display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span style={{ width: 8, height: 8, borderRadius: 4, background: color.mint }} />
+                  Pixel 9
+                </span>
+              ) : (
+                <span style={{ opacity: 1 - toLink }}>Open Lync on your phone and tap Pair with QR code.</span>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+      {/* The phone: its scanner on the code, then the same moment, then linked. */}
+      {phone > 0.001 && (
+        <div style={{ position: 'absolute', left: PH.left, top: PH.top, transformOrigin: '0 0', transform: `translate(${(1 - phone) * -260 + drift(0, 1.7)}px, ${drift(1.3, 2.3)}px) rotate(${drift(2, 1.1) * 0.15}deg) scale(${PH.s})`, opacity: clamp(phone * 1.5), filter: 'drop-shadow(0 30px 40px rgba(0,0,0,0.55))' }}>
+          <Phone>
+            <div style={{ position: 'absolute', inset: 0, background: 'radial-gradient(70% 50% at 50% 45%, #2b3330, #0d1110 70%)', overflow: 'hidden' }}>
+              {/* Through the camera: the Mac's screen with its code, a little out of square. */}
+              <div style={{ position: 'absolute', left: 206 - 170, top: 430 - 170, opacity: 1 - toLink, transform: `perspective(700px) rotateX(${8 * hold}deg) rotateY(${-10 * hold}deg) scale(${0.82 + 0.06 * caught})`, filter: `blur(${0.8 * hold}px)` }}>
+                <QrLink t={-1} size={340} />
+              </div>
+              {/* The finder: its corners turn mint when it has the code. */}
+              {[0, 1, 2, 3].map((c) => (
+                <div key={c} style={{ position: 'absolute', left: c % 2 ? 206 + 130 - 44 : 206 - 130, top: c < 2 ? 430 - 130 : 430 + 130 - 44, width: 44, height: 44, opacity: 1 - toLink, borderColor: caught > 0.5 ? color.mint : 'rgba(255,255,255,0.9)', borderStyle: 'solid', borderWidth: 0, [c % 2 ? 'borderRightWidth' : 'borderLeftWidth']: 5, [c < 2 ? 'borderTopWidth' : 'borderBottomWidth']: 5, borderRadius: 14 } as React.CSSProperties} />
+              ))}
+              <div style={{ position: 'absolute', left: 30, right: 30, top: 130, textAlign: 'center', fontFamily: font.body, fontSize: 24, fontWeight: 600, color: color.white, opacity: 1 - toLink }}>Scan the code on your Mac</div>
+              {/* Then the moment, on Lync's own dark. */}
+              <div style={{ position: 'absolute', inset: 0, background: color.ink, opacity: toLink }}>
+                <div style={{ position: 'absolute', left: 206 - 170, top: 430 - 170 }}>
+                  <QrLink t={Math.max(0, u)} size={340} />
+                </div>
+                <div style={{ position: 'absolute', left: 0, right: 0, top: 640, height: 40 }}>
+                  {title('Connecting to MacBook Air…', 1 - linked, 24)}
+                  {title('You’re linked.', linked, 30)}
+                </div>
+                <div style={{ position: 'absolute', left: 0, right: 0, top: 690, textAlign: 'center', fontFamily: font.body, fontSize: 18, color: 'rgba(255,255,255,0.56)', opacity: linked }}>MacBook Air</div>
+              </div>
+              {/* The catch: a quick flash on the code. */}
+              <div style={{ position: 'absolute', inset: 0, background: '#fff', opacity: 0.35 * Math.max(0, 1 - Math.abs(t - scan) / 0.12) }} />
+            </div>
+          </Phone>
+        </div>
+      )}
+    </>
+  );
+};
+
 const NotchScene: React.FC<{ t: number }> = ({ t }) => {
   if (t < NOTCH_SCENE - 0.1 || t > PROMISES + 0.3) return null;
   const draw = ramp(sec(t), NOTCH_SCENE + b(0.5), NOTCH_SCENE + b(0.5) + 0.45);
@@ -749,6 +853,7 @@ const NotchScene: React.FC<{ t: number }> = ({ t }) => {
       <ScreenEdge draw={draw} notchIn={notchIn} fade={fade} menuBar={menuBar} />
       <Sweep t={t} at={NOTCH_SCENE} out={FEATURES - 0.25} y={150} size={84} stagger={0.016} lines={[[['Everything from your phone,']]]} />
       <Sweep t={t} at={NOTCH_SCENE + b(1.8)} out={FEATURES - 0.25} y={LINE + 300} size={120} display stagger={0.016} lines={[[['in your '], ['notch.', true]]]} />
+      <PairStory t={t} />
       <PanelStory t={t} />
       {FEATURE_NAMES.map((_, i) => (
         <Feature key={i} t={t} i={i} />
@@ -832,7 +937,7 @@ const EndCard: React.FC<{ t: number }> = ({ t }) => {
           <div style={{ ...pill, background: color.pale, color: color.onPale }}>Get it on Google Play</div>
           <div style={{ ...pill, background: 'rgba(255,255,255,0.13)', color: '#fff' }}>Download for Mac</div>
         </div>
-        <div style={{ fontFamily: font.body, fontSize: 20, fontWeight: 500, color: 'rgba(255,255,255,0.5)', opacity: fade(1.5) }}>lync-theta.vercel.app</div>
+        <div style={{ fontFamily: font.body, fontSize: 20, fontWeight: 500, color: 'rgba(255,255,255,0.5)', opacity: fade(1.5) }}>lyncapp.vercel.app</div>
       </div>
       <Flash t={t} at={END} strength={0.5} />
     </>
@@ -843,7 +948,7 @@ const EndCard: React.FC<{ t: number }> = ({ t }) => {
 // Sound: the same music and effects as the short.
 
 const SOUNDS: [number, string, number][] = [
-  [0, 'wide-music-otp', 1],
+  [0, 'wide-music-pair', 1],
   [0, 'swish', 0.3],
   [b(1.5) - 0.15, 'swish', 0.28],
   [b(4) - 0.15, 'whoosh', 0.42],
@@ -852,7 +957,12 @@ const SOUNDS: [number, string, number][] = [
   [LOGO - 0.02, 'shimmer', 0.55],
   [NOTCH_SCENE - 0.15, 'whoosh', 0.38],
   [NOTCH_SCENE + b(1.5), 'pop', 0.45],
-  ...[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((i): [number, string, number] => [F[i] - 0.15, 'swish', 0.22]),
+  ...[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((i): [number, string, number] => [F[i] - 0.15, 'swish', 0.22]),
+  // Pair: the panel opens on the code, the phone catches it, the hooks clasp and light up
+  [PAIR + 0.3, 'pop', 0.4],
+  [PAIR + PAIR_SCAN, 'tap', 0.45],
+  [PAIR + PAIR_SCAN + CLASP + 0.18, 'connect', 0.5],
+  [PAIR + PAIR_SCAN + CLASP + 0.53, 'shimmer', 0.4],
   // Codes: pay, the code arrives and is copied, pasted, the order goes through
   [F[0] + 0.95, 'click', 0.55],
   [F[0] + 1.4, 'notify', 0.45],
@@ -909,6 +1019,18 @@ const Sounds: React.FC = () => (
   </>
 );
 
+/** The site, top right, the whole way through (the end card says it big, so it steps aside there). */
+const SiteTag: React.FC<{ t: number }> = ({ t }) => {
+  const show = ramp(sec(t), 0.4, 0.9) * (1 - ramp(sec(t), END - 0.4, END));
+  if (show <= 0) return null;
+  return (
+    <div style={{ position: 'absolute', right: 56, top: 44, display: 'flex', alignItems: 'center', gap: 12, opacity: show * 0.85, fontFamily: font.body, fontSize: 26, fontWeight: 600, color: color.white, letterSpacing: '0.01em' }}>
+      <Img src={staticFile('lync-icon.svg')} style={{ width: 34, height: 34 }} />
+      lyncapp.vercel.app
+    </div>
+  );
+};
+
 export const Wide: React.FC<{ bg?: BgKind }> = ({ bg = 'aurora' }) => {
   const t = useCurrentFrame() / 60;
   return (
@@ -921,6 +1043,7 @@ export const Wide: React.FC<{ bg?: BgKind }> = ({ bg = 'aurora' }) => {
       {t > PROMISES - 0.1 && t < DEVICES + 0.3 && <Promises t={t} />}
       <Devices t={t} />
       <EndCard t={t} />
+      <SiteTag t={t} />
     </div>
   );
 };
