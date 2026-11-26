@@ -5,13 +5,13 @@
     <title>Lync for Mac</title>
     <link>https://lyncapp.vercel.app/appcast.xml</link>
     <item>
-      <title>Lync 1.0.0</title>
-      <pubDate>Wed, 11 Nov 2026 17:40:17 +0000</pubDate>
-      <sparkle:version>3</sparkle:version>
-      <sparkle:shortVersionString>1.0.0</sparkle:shortVersionString>
+      <title>Lync 1.0.1</title>
+      <pubDate>Thu, 26 Nov 2026 18:43:40 +0000</pubDate>
+      <sparkle:version>4</sparkle:version>
+      <sparkle:shortVersionString>1.0.1</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-      <link>https://github.com/santhoshsunkara24/Lync/releases/tag/mac-v1.0.0</link>
-      <enclosure url="https://lyncapp.vercel.app/download/Lync-1.0.0.dmg" type="application/octet-stream" sparkle:edSignature="Pu1vwsYK8We6D7PQ4LS5Zlg0n+CTzW7/jXnFxijpk7PJbKy0Wgkh1uxn4KpzfggFlbYao0L7iJg+9Ym8ycJWDw==" length="5782711" />
+      <link>https://github.com/santhoshsunkara24/Lync/releases/tag/mac-v1.0.1</link>
+      <enclosure url="https://lyncapp.vercel.app/download/Lync-1.0.1.dmg" type="application/octet-stream" sparkle:edSignature="rv5dRwJG70C6omBjvICK5/tfXlUKjCOL0/gq8J3TA5BtpDgsBZVxdOpSdlE63v8HW9Z2WXKjgH1MCDjL/Ps0AA==" length="5797930" />
     </item>
   </channel>
 </rss>
